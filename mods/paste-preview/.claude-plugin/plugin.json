@@ -1,0 +1,10 @@
+{
+  "name": "paste-preview",
+  "version": "0.1.0",
+  "description": "Shows pasted text in full in the prompt box and the transcript, and previews pasted images above the prompt and under the sent message.",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "robinalexandre",
+    "url": "https://github.com/robinalexandre/claude-code-kit"
+  }
+}

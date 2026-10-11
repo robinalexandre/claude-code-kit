@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>local.claude.save-to-photos</string>
+	<key>CFBundleName</key>
+	<string>SaveToPhotos</string>
+	<key>CFBundleExecutable</key>
+	<string>SaveToPhotos</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Saves the reels rendered by Claude Code to your Photos library.</string>
+</dict>
+</plist>

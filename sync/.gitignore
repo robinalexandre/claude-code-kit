@@ -1,0 +1,6 @@
+.machine
+.state/
+# Global git ignores often list agent files; this repo keeps them on purpose.
+!repos/**
+!folders/**
+.DS_Store

@@ -1,0 +1,68 @@
+# claude-code-kit
+
+Skills, mods, hooks and a status line for [Claude Code](https://claude.com/claude-code), plus a sync engine that keeps your Claude Code config the same on all your computers.
+
+## Install
+
+```sh
+git clone https://github.com/robinalexandre/claude-code-kit.git
+cd claude-code-kit
+./install.sh            # asks about each part
+./install.sh --list     # lists the parts
+./install.sh --all      # installs every part
+./install.sh statusline file-tools-guard   # installs the named parts
+```
+
+Needs `jq`. Works on macOS and Linux, and on Windows from Git Bash. The installer copies each part into `~/.claude`, adds its hooks to `~/.claude/settings.json` and saves whatever it replaces in `~/.claude/backups/before-kit-<date>/`. Running it again is safe. Start a new Claude Code session afterwards.
+
+The sync engine installs differently: see [sync/README.md](sync/README.md).
+
+## What's inside
+
+### Skills
+
+| Skill | What it does | Needs |
+|---|---|---|
+| [insta360-reel](skills/insta360-reel/SKILL.md) | Builds a vertical Instagram Reel straight from raw Insta360 X-series `.insv` files, no Insta360 Studio: calibrates the camera mount, finds every action with a motion analysis, lets you pick from numbered candidate clips, then renders them with a rider-locked horizon. Tuned on wingfoil sessions. | `ffmpeg`, `python3` |
+| [instagram-reel](skills/instagram-reel/SKILL.md) | Builds a Reel from a folder of phone videos: reviews every clip, proposes numbered candidates, assembles once, checks the result frame by frame. Can save the result to the Photos library with write-only access. | `ffmpeg`; Photos saving needs macOS and Xcode's `swiftc` |
+| [handoff](skills/handoff/SKILL.md) | Writes a handoff note so you can continue the current work on your other computer, and picks it up there. | the [sync engine](sync/README.md) |
+
+### Mods
+
+Mods change Claude Code's own interface. The installer loads them through `CLAUDE_CODE_PLUGIN_DIRS`. Run a mod's tests with `claude plugin test mods/<name>`.
+
+| Mod | What it does |
+|---|---|
+| [paste-preview](mods/paste-preview) | Shows pasted text in full in the prompt box and the transcript, and previews pasted images above the prompt and under the sent message (macOS, Windows). |
+| [recent-prompts](mods/recent-prompts) | Shows your last two messages above the prompt, and a searchable history pane; click one to scroll the transcript to it. |
+| [wave-check](mods/wave-check) | When a reply doesn't start with your marker emoji, asks Claude to check that reply against your `CLAUDE.md` and fix what slipped. |
+
+### Hooks
+
+| Hook | Events | What it does |
+|---|---|---|
+| [file-tools-guard](hooks/file-tools-guard.sh) | PreToolUse (Bash) | Denies shell workarounds for files (`cat`/`head`/`tail` to read, `sed -i`, `sed -n`, heredocs, `cat > file`, `python -c`) so Claude uses its Read, Edit and Write tools. Pipelines are still allowed. |
+| [recent-activity](hooks/recent-activity.sh) | Stop, SessionStart | Keeps a small record of each session under your dev folder (`CLAUDE_DEV_ROOT`, default `~/dev`) and starts every session with a digest of the last 14 days: titles, branches, PRs, last asks. Lets Claude resolve "the bug from yesterday" across repos. |
+| [session-registry](hooks/session-registry.sh) + [claude-resume-here.zsh](hooks/claude-resume-here.zsh) | SessionStart, SessionEnd | Records open sessions. In a new JetBrains or Ghostty terminal tab (zsh), offers to resume the session that was left open in that folder. |
+| [wave-check](hooks/wave-check.sh) | UserPromptSubmit, Stop | Warns when a reply didn't start with your marker emoji, and reminds Claude on the next prompt. |
+| [nocturne-notify](hooks/nocturne-notify.sh) | most events | Sends Claude's state to [Agent Nocturne](https://github.com/taekchef/agent-nocturne) (keyboard-backlight signals) without the ~2 s per tool call its own adapter adds. |
+
+### Status line
+
+[statusline-command.sh](statusline-command.sh): folder, git branch (and worktree), model, context used, effort level and the 5-hour rate limit with its reset time, colour-coded.
+
+### Sync engine
+
+[sync/](sync/README.md): keeps `CLAUDE.md`, skills, mods, hooks, settings, MCP servers (without their secrets), memory and the untracked agent files of your repos the same on every computer, through a private GitHub repo. Secrets are replaced by `__SECRET__` before anything leaves the computer.
+
+## The marker emoji
+
+The wave-check mod and hook rest on one line in `~/.claude/CLAUDE.md`: "Start every message with 🌊" (or any emoji you like). A reply without it is a cheap, visible sign that Claude has started to drift from your instructions, usually deep in a long task. The installer asks for your emoji, stores it as `CLAUDE_REPLY_MARKER` in the `env` of `~/.claude/settings.json` and offers to add the rule to your `CLAUDE.md`. Until the variable is set, both parts stay idle.
+
+## Installing by hand
+
+Copy the part into the same place under `~/.claude` (`skills/<name>`, `mods/<name>`, `hooks/<file>`, `statusline-command.sh`). For a hook or the status line, merge [settings/\<part\>.json](settings) into `~/.claude/settings.json`, replacing `__HOME__` with your home folder. For a mod, add its folder to `CLAUDE_CODE_PLUGIN_DIRS` in the `env` of `settings.json` (`:`-separated, `;` on Windows).
+
+## License
+
+[MIT](LICENSE)

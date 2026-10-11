@@ -1,0 +1,10 @@
+{
+  "name": "recent-prompts",
+  "version": "0.2.0",
+  "description": "Shows your last two messages above the prompt and a searchable history pane; click one to scroll the transcript to it.",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "robinalexandre",
+    "url": "https://github.com/robinalexandre/claude-code-kit"
+  }
+}
