@@ -233,9 +233,10 @@ export const register: Register = on => {
         />
         <Text dimColor>{summary}</Text>
         {rows.map(({ prompt, shown }) => (
-          <Box key={`line-${prompt.id}`} flexDirection="row" justifyContent="space-between">
+          <Box key={`line-${prompt.id}`} flexDirection="row">
+            <Button key={`row-${prompt.id}`} label={JUMP_ICON} plain dimColor onPress={() => void jump($, prompt.id)} />
             <Text>
-              <Text dimColor>{prompt.time ?? '--:--'} </Text>
+              <Text dimColor> {prompt.time ?? '--:--'} </Text>
               {shown.before}
               {shown.match !== '' && (
                 <Text color="yellow" bold>
@@ -244,7 +245,6 @@ export const register: Register = on => {
               )}
               {shown.after}
             </Text>
-            <Button key={`row-${prompt.id}`} label={JUMP_ICON} plain dimColor onPress={() => void jump($, prompt.id)} />
           </Box>
         ))}
       </Box>
