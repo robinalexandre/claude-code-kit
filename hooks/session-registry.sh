@@ -1,8 +1,7 @@
 #!/bin/bash
 # Usage: session-registry.sh start|end   (hook input JSON on stdin)
 set -u
-# Git Bash on Windows: native jq.exe writes CRLF unless -b is passed.
-command -v cygpath >/dev/null 2>&1 && jq() { command jq -b "$@"; }
+. "$(dirname "$0")/lib/jq.sh"
 REGISTRY="$HOME/.claude/session-registry"
 mkdir -p "$REGISTRY"
 

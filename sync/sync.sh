@@ -51,14 +51,14 @@ SECRET_RE='sk-ant-[A-Za-z0-9_-]{20,}|xkeysib-[A-Za-z0-9-]{20,}|gh[pousr]_[A-Za-z
 # redact_keys would replace, so files without a match skip jq.
 BROAD_RE='-----begin [a-z ]*private key|sk-ant-|xkeysib-|gh[pousr]_|github_pat_|akia[0-9a-z]{16}|eyj[a-z0-9_-]{10,}\.|(sk|pk|rk)_(live|test)_|xox[abprs]-|aiza|://[^/[:space:]:@]+:[^@[:space:]/]+@|authorization *:|(bearer|basic|token) +[a-z0-9._~+/=-]{8}|sshpass +-p|(password|passwd|pass|pwd|passphrase|token|secret|api[_-]?key|apikey|access[_-]?key|private[_-]?key|client[_-]?secret|credentials?)"? *[=:]|"[^"]*(key|token|secret|pass|pwd|auth|cred|cookie|session|private)[^"]*" *:'
 export GIT_TERMINAL_PROMPT=0
+. "$SYNC/jq.sh"
 
 case "$(uname -s)" in
   MINGW* | MSYS* | CYGWIN*)
     PATH="/usr/bin:$PATH"
-    # Native jq.exe writes CRLF unless -b is passed.
-    jq() { command jq -b "$@"; }
     HOME_FWD=$(cygpath -m "$HOME")
     native_path() { cygpath -w "$1"; }
+    unix_path() { cygpath -u "$1"; }
     # Claude Code keys ~/.claude.json projects by folder; match its spelling of this one.
     project_key() {
       local m
@@ -70,6 +70,7 @@ case "$(uname -s)" in
   *)
     HOME_FWD=$HOME
     native_path() { printf '%s' "$1"; }
+    unix_path() { printf '%s' "$1"; }
     project_key() { (cd "$1" && pwd -P); }
     ;;
 esac
@@ -86,7 +87,9 @@ EXCLUDES=$(jq -r '.exclude[]?' "$MCONF")
 MCP_EXCLUDE=$(jq -c '.mcpExclude // []' "$MCONF")
 DEV_DIR=$(jq -r '.devDir // "~/dev"' "$MCONF")
 DEV_DIR=${DEV_DIR/#\~/$HOME}
-MEMORY="$CLAUDE/projects/$(native_path "$DEV_DIR" | sed 's/[^A-Za-z0-9]/-/g')/memory"
+# memory_dir DIR: where Claude Code keeps the memory of sessions started in DIR.
+memory_dir() { printf '%s/projects/%s/memory' "$CLAUDE" "$(native_path "$1" | sed 's/[^A-Za-z0-9]/-/g')"; }
+MEMORY=$(memory_dir "$DEV_DIR")
 CHANGED=0
 MCP_FAILED=""
 KEPT=""
@@ -475,19 +478,22 @@ report() {
 root_of() { git -C "$1" rev-list --max-parents=0 HEAD 2> /dev/null | LC_ALL=C sort | head -1; }
 same_root() { [ -n "$2" ] && { [ ! -f "repos/$1/root" ] || [ "$(tr -d '[:space:]' < "repos/$1/root")" = "$2" ]; }; }
 
+# repo_line DIR: "<id> <root> <path>" for the repo checked out at DIR.
+repo_line() {
+  local id root
+  id=$(git -C "$1" remote get-url origin 2> /dev/null |
+    sed -E 's#^[A-Za-z+]+://##; s#^[^@/]*@##; s#:#/#; s#\.git/*$##; s#/+$##' | tr 'A-Z' 'a-z')
+  case "$id" in "" | *..* | /* | *' '*) return 0 ;; esac
+  root=$(root_of "$1")
+  if same_root "$id" "$root"; then printf '%s %s %s\n' "$id" "$root" "$1"; fi
+}
+
 # repos: "<id> <root> <path>" for each main checkout (not worktrees) under the dev folder.
 repos() {
-  local g r id root
+  local g
   [ -d "$DEV_DIR" ] || return 0
   find "$DEV_DIR" -maxdepth 4 \( "${PRUNE[@]}" \) -prune -o -name .git -type d -print 2> /dev/null |
-    while IFS= read -r g; do
-      r=${g%/.git}
-      id=$(git -C "$r" remote get-url origin 2> /dev/null |
-        sed -E 's#^[A-Za-z+]+://##; s#^[^@/]*@##; s#:#/#; s#\.git/*$##; s#/+$##' | tr 'A-Z' 'a-z')
-      case "$id" in "" | *..* | /* | *' '*) continue ;; esac
-      root=$(root_of "$r")
-      same_root "$id" "$root" && printf '%s %s %s\n' "$id" "$root" "$r"
-    done | LC_ALL=C sort | awk '!seen[$1]++'
+    while IFS= read -r g; do repo_line "${g%/.git}"; done | LC_ALL=C sort | awk '!seen[$1]++'
 }
 
 tracked() { git -C "$1" ls-files --error-unmatch -- "$2" > /dev/null 2>&1; }
@@ -712,6 +718,66 @@ apply_folders() {
   done < <(seen_files folders)
 }
 
+# The memory of sessions started in a repo or folder of the dev folder (the dev
+# folder's own is memory/), a flat folder of notes, found through the projects
+# Claude Code lists in ~/.claude.json:
+#   memory-repos/<id>/       a repo's, id as in repos/
+#   memory-folders/<path>/   a folder's that isn't in a repo, path relative to the dev folder
+# Files merge like the repo and folder ones, with seen copies in .state/seen/.
+
+flat_files() { [ -d "$1" ] && (cd "$1" && find . -maxdepth 1 -type f | sed 's#^\./##' | while IFS= read -r f; do agent_junk "$f" || printf '%s\n' "$f"; done); }
+
+# local_memories: "<synced folder>\t<path>" for each folder under the dev folder that has a memory here.
+local_memories() {
+  local p line
+  claude_json | jq -r '(.projects // {}) | keys[]' | while IFS= read -r p; do
+    p=$(unix_path "$p")
+    case "$p" in "$DEV_DIR"/*) ;; *) continue ;; esac
+    [ -d "$(memory_dir "$p")" ] || continue
+    if [ -d "$p/.git" ]; then
+      line=$(repo_line "$p")
+      [ -n "$line" ] && printf 'memory-repos/%s\t%s\n' "${line%% *}" "$p"
+    elif ! in_repo "$p"; then
+      printf 'memory-folders/%s\t%s\n' "${p#"$DEV_DIR"/}" "$p"
+    fi
+  done
+}
+
+capture_memories() {
+  local dst p m f
+  while IFS=$'\t' read -r dst p; do
+    m=$(memory_dir "$p")
+    while IFS= read -r f; do
+      capture_file "$m/$f" "$dst/$f" "$STATE/seen/$dst/$f" || return 1
+    done < <({ flat_files "$m"; flat_files "$STATE/seen/$dst"; } | LC_ALL=C sort -u)
+  done < <(local_memories)
+}
+
+# apply_memory SYNCED DIR: puts the synced memory of DIR in place.
+apply_memory() {
+  local m f seen
+  m=$(memory_dir "$2")
+  while IFS= read -r f; do
+    seen="$STATE/seen/$1/$f"
+    [ -f "$seen" ] && [ -f "$m/$f" ] && cmp -s "$1/$f" "$seen" && continue
+    apply_file "$1/$f" "$m/$f" "$seen" || return 1
+  done < <(flat_files "$1")
+}
+
+apply_memories() {
+  local id root r d
+  while read -r id root r; do
+    [ -d "memory-repos/$id" ] && { apply_memory "memory-repos/$id" "$r" || return 1; }
+  done < <(repos)
+  [ -d memory-folders ] || return 0
+  while IFS= read -r d; do
+    d=${d#memory-folders/}
+    [ -d "$DEV_DIR/$d" ] || continue
+    in_repo "$DEV_DIR/$d" && continue
+    apply_memory "memory-folders/$d" "$DEV_DIR/$d" || return 1
+  done < <(find memory-folders -type f | sed 's#/[^/]*$##' | LC_ALL=C sort -u)
+}
+
 # Repos and folders are scanned at most every SCAN_EVERY_MIN, or at once when
 # something came in or the run was asked for.
 scan_due() {
@@ -727,6 +793,7 @@ capture() {
   if scan_due; then
     capture_repos || return 1
     capture_folders || return 1
+    capture_memories || return 1
   fi
 }
 
@@ -744,6 +811,7 @@ apply_local() {
   if scan_due; then
     apply_repos || return 1
     apply_folders || return 1
+    apply_memories || return 1
     touch "$STATE/scanned"
     SCANNED=1
   fi
@@ -915,6 +983,9 @@ backup() {
   while IFS= read -r f; do
     mkdir -p "$BACKUP/folders/$(dirname "$f")" && cp -p "$DEV_DIR/$f" "$BACKUP/folders/$f"
   done < <(folder_files)
+  while IFS=$'\t' read -r f p; do
+    mkdir -p "$BACKUP/$f" && cp -Rp "$(memory_dir "$p")/." "$BACKUP/$f/"
+  done < <(local_memories)
 }
 
 install() {
@@ -945,6 +1016,7 @@ init() {
   capture_mcp mcp "$STATE/mcp-seen.json" || return 1
   capture_repos || return 1
   capture_folders || return 1
+  capture_memories || return 1
   commit
   say "saved this machine's config in the repo (previous files saved in $BACKUP)"
 }

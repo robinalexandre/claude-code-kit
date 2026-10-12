@@ -5,8 +5,9 @@
 set -u
 MARKER=${CLAUDE_REPLY_MARKER:-}
 [ -n "$MARKER" ] || exit 0
+. "$(dirname "$0")/lib/jq.sh"
 input=$(cat)
-transcript=$(printf '%s' "$input" | jq -r '.transcript_path // empty' | tr -d '\r')
+transcript=$(printf '%s' "$input" | jq -r '.transcript_path // empty')
 if [ -n "$transcript" ] && command -v cygpath >/dev/null 2>&1; then
   transcript=$(cygpath -u "$transcript")
 fi
@@ -14,7 +15,7 @@ fi
 
 verdict=$(grep -a '"type":"assistant"' "$transcript" \
   | jq -r --arg m "$MARKER" 'select(.message.content[]? | .type=="text") | [.message.content[] | select(.type=="text") | .text] | join("") | sub("^\\s+"; "") | if . == "" then "empty" elif startswith($m) then "ok" else "missing" end' 2>/dev/null \
-  | tail -n 1 | tr -d '\r')
+  | tail -n 1)
 [ "$verdict" = "missing" ] || exit 0
 
 case "${1:-}" in

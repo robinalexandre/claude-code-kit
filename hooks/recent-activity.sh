@@ -10,9 +10,9 @@ ROOT="${CLAUDE_DEV_ROOT:-$HOME/dev}"
 RETENTION_DAYS=14
 MAX_ENTRIES=20
 
+. "$(dirname "$0")/lib/jq.sh"
 if command -v cygpath >/dev/null 2>&1; then
-  # Git Bash on Windows: native jq.exe writes CRLF unless -b is passed, and hook input carries C:\ paths.
-  jq() { command jq -b "$@"; }
+  # Git Bash on Windows: hook input carries C:\ paths.
   unix_path() { cygpath -u "$1"; }
 else
   unix_path() { printf '%s' "$1"; }

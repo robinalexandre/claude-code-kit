@@ -13,7 +13,6 @@ SETTINGS="$CLAUDE/settings.json"
 
 case "$(uname -s)" in
   MINGW* | MSYS* | CYGWIN*)
-    jq() { command jq -b "$@"; }
     home=$(cygpath -m "$HOME")
     sep=';'
     ;;
@@ -47,6 +46,7 @@ command -v jq > /dev/null || {
   echo "Install jq first." >&2
   exit 1
 }
+. "$KIT/hooks/lib/jq.sh"
 
 TTY=""
 (: < /dev/tty) 2> /dev/null && TTY=/dev/tty
@@ -102,7 +102,9 @@ fragments=()
 mods=()
 marker_wanted=""
 zsh_resume=""
+hook_lib=""
 for p in $picked; do
+  case "$(field "$p" 2)" in hook | statusline) hook_lib=1 ;; esac
   case "$(field "$p" 2)" in
     skill) put "skills/$p" "skills/$p" ;;
     mod)
@@ -126,6 +128,7 @@ for p in $picked; do
   case "$p" in wave-check | wave-check-hook) marker_wanted=1 ;; esac
   echo "Installed $p"
 done
+if [ -n "$hook_lib" ]; then put hooks/lib hooks/lib; fi
 chmod +x "$CLAUDE"/hooks/*.sh 2> /dev/null || true
 
 # The wave-check parts check replies against an emoji the user picks once.
@@ -143,8 +146,10 @@ if [ -n "$marker_wanted" ] && [ -z "$marker" ]; then
   fi
 fi
 
+# A file rather than <(...): native jq.exe on Windows can't open /proc/self/fd paths.
+cat /dev/null ${fragments[@]+"${fragments[@]}"} > "$SETTINGS.fragments"
 jq --arg h "$home" --arg sep "$sep" --arg marker "$marker" --argjson mods "$(jq -n '$ARGS.positional' --args ${mods[@]+"${mods[@]}"})" \
-  --slurpfile frags <(cat /dev/null ${fragments[@]+"${fragments[@]}"}) '
+  --slurpfile frags "$SETTINGS.fragments" '
   def merge($o):
     if type == "object" and ($o | type) == "object" then
       reduce ($o | keys_unsorted[]) as $k (.; .[$k] = (if has($k) then .[$k] | merge($o[$k]) else $o[$k] end))
@@ -158,6 +163,7 @@ jq --arg h "$home" --arg sep "$sep" --arg marker "$marker" --argjson mods "$(jq 
     else . end
   | if $marker != "" then .env.CLAUDE_REPLY_MARKER = $marker else . end' \
   "$BACKUP/settings.json" > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
+rm -f "$SETTINGS.fragments"
 
 if [ -n "$zsh_resume" ] && ! grep -qs claude-resume-here.zsh "$HOME/.zshrc"; then
   if ask "Source claude-resume-here.zsh from ~/.zshrc, so a new terminal tab offers to resume the session left open there?"; then

@@ -1,8 +1,7 @@
 #!/bin/bash
 # PreToolUse (Bash) hook: deny shell workarounds for reading or writing files.
 set -u
-# Git Bash on Windows: native jq.exe writes CRLF unless -b is passed.
-command -v cygpath >/dev/null 2>&1 && jq() { command jq -b "$@"; }
+. "$(dirname "$0")/lib/jq.sh"
 cmd=$(jq -r '.tool_input.command // empty')
 [ -z "$cmd" ] && exit 0
 

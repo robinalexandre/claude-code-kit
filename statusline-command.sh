@@ -1,11 +1,7 @@
 #!/bin/sh
 # Claude Code status line
 input=$(cat)
-
-# Git Bash on Windows: native jq.exe writes CRLF unless -b is passed, and paths arrive as C:\...
-if command -v cygpath >/dev/null 2>&1; then
-  jq() { command jq -b "$@"; }
-fi
+. "$(dirname "$0")/hooks/lib/jq.sh"
 
 # Current working directory
 cwd=$(echo "$input" | jq -r '.workspace.current_dir // .cwd // empty')

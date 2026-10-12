@@ -11,6 +11,7 @@ Keeps your global Claude Code config the same on every computer through a privat
 | MCP servers added for all projects (`claude mcp add -s user`), without their secrets | `~/.claude.json`, one file per server in `mcp/` |
 | Agent config that no repo's git tracks: `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.mcp.json`, everything in `.claude/` (except `worktrees/`), nested `CLAUDE.md` and `AGENTS.md`, and a project's own MCP servers | each repo in the dev folder, stored in `repos/<host>/<owner>/<name>/`; the dev folder itself and its folders that aren't repos, stored in `folders/` |
 | Memory of the dev folder | `~/.claude/projects/<dev folder>/memory/` |
+| Memory of each repo and folder in the dev folder | `~/.claude/projects/<repo or folder>/memory/`, stored in `memory-repos/<host>/<owner>/<name>/` and `memory-folders/<path>/` |
 | Handoff notes | `~/.claude-sync/handoffs/` |
 
 Not synced: sessions, history, credentials and login, claude.ai connectors and skills (`skills/synced`), repos outside the dev folder, and anything a repo tracks itself (that travels with the repo).
@@ -21,7 +22,9 @@ Not synced: sessions, history, credentials and login, claude.ai connectors and s
 
 **Repos and folders:** a repo is recognized by its `origin` URL and its first commit, so it doesn't matter where each computer cloned it, and a different repo with the same URL gets nothing. A repo cloned later gets its config at the next sync; a folder's files arrive once that folder exists. Worktrees are skipped, and so is a file once the repo itself tracks it. Edits to a tracked file that aren't committed yet don't sync: commit and push them, or write a handoff. Repos and folders are checked at most every 2 minutes, and at every session start. Secrets in these files, JSON or text (tokens, `Bearer …`, `password=…`, passwords in URLs), are replaced by `__SECRET__` the same way. The computer they came from keeps its real values when the file is later updated from another computer; if another computer edited the very line that holds a secret, the file is kept apart (see below) rather than lose it. Only a private key block, or a file over 1 MB, stays on its computer.
 
-When the same non-JSON file (a `CLAUDE.md`, a skill…) differs on two computers the first time they meet, or was edited on both before syncing, neither copy is overwritten: the session-start warning lists it, and it stays out of the sync until you delete one of the two copies (the other one then wins) or make them match.
+A repo's or folder's memory (the one Claude keeps for sessions started there) follows the same rules: it lands in the memory of the same repo, wherever it's cloned, or of the same folder, once Claude Code knows that folder on the computer it comes from (`~/.claude.json` lists every folder a session ran in).
+
+When the same non-JSON file (a `CLAUDE.md`, a memory, a skill…) differs on two computers the first time they meet, or was edited on both before syncing, neither copy is overwritten: the session-start warning lists it, and it stays out of the sync until you delete one of the two copies (the other one then wins) or make them match.
 
 **Merging:** JSON files merge by key and by list item (`json-merge.sh`), so commands approved on two computers at the same time all end up on both. When both changed the same value, the last one to sync wins.
 

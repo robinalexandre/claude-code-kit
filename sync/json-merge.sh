@@ -6,9 +6,7 @@
 # is this machine's change.
 #   json-merge.sh BASE OURS THEIRS    writes the result to OURS
 set -u
-case "$(uname -s)" in
-  MINGW* | MSYS* | CYGWIN*) jq() { command jq -b "$@"; } ;;
-esac
+. "$(dirname "${BASH_SOURCE[0]}")/jq.sh"
 
 base=$1
 [ -s "$base" ] || base=/dev/null
