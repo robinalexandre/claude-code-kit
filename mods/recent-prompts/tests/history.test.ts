@@ -45,7 +45,8 @@ test('the band shows the last two messages and the pane finds one by an accent-f
   await pane.input({ key: 'search', text: 'creme', kind: 'change' })
 
   expect(await pane.find({ text: '1 of 3 match' })).toBeDefined()
-  expect(await pane.find({ key: 'row-second', text: /café crème/ })).toBeDefined()
+  expect(await pane.find({ type: 'Text', text: 'crème' })).toBeDefined()
+  expect(await pane.find({ key: 'row-second' })).toBeDefined()
   expect(await pane.find({ key: 'row-third' })).toBeUndefined()
 })
 
@@ -70,4 +71,32 @@ test('a message typed while a turn runs is listed as typed once its queued row i
   const band = await $.ui.mount({ plugin: 'recent-prompts', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
 
   expect(await band.find({ key: 'prompt-1', text: /^Also keep it on Windows$/ })).toBeDefined()
+})
+
+test('a message absorbed into the running turn is listed as typed once its delivered row is stored', async ($, on) => {
+  mock.clock(on)
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  on('ui.render', () => Fragment({}))
+
+  await say($, 'first', 'Check the sync')
+  await submit($, { text: 'And the code-kit ?', origin: { kind: 'composer' }, turnId: 'turn-1', wait: false })
+  await $.session.append({
+    message: {
+      type: 'attachment',
+      name: 'queued_command',
+      content: [
+        {
+          type: 'text',
+          text: '<system-reminder>\nThe user sent a new message while you were working:\nAnd the code-kit ?\n\nAddress the message above as you continue this turn.\n</system-reminder>',
+        },
+      ],
+    },
+    door: 'delivery',
+    origin: { kind: 'composer' },
+    uuid: 'delivered',
+  })
+
+  const band = await $.ui.mount({ plugin: 'recent-prompts', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
+
+  expect(await band.find({ key: 'prompt-1', text: /^And the code-kit \?$/ })).toBeDefined()
 })

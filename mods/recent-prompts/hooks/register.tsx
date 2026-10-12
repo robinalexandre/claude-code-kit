@@ -10,6 +10,7 @@ const BAND_COUNT = 2
 const KEPT = 1000
 const WAITING_KEPT = 20
 const HISTORY_BUTTON_WIDTH = 12
+const JUMP_ICON = '↗'
 
 const prompts = atom({ plugin: 'recent-prompts', key: 'prompts' } as const, [])
 const query = atom({ plugin: 'recent-prompts', key: 'query' } as const, '')
@@ -112,7 +113,8 @@ export const register: Register = on => {
   on('command.run', { command: COMMAND }, async $ => ({ text: `My messages pane ${await toggleHistory($)}.` }))
 
   // A message typed while a turn runs is stored later, wrapped in the engine's framing, as a queued_command
-  // attachment; its text is kept at Enter so that row can be told apart and listed as typed.
+  // attachment (through the delivery door when absorbed mid-turn); its text is kept at Enter so that row
+  // can be told apart and listed as typed.
   on('prompt.submit', async ($, e, next) => {
     if (e.turnId !== undefined && isPerson(e.origin.kind) && e.text.trim() !== '') {
       await update($, waiting, list => [...list, e.text].slice(-WAITING_KEPT))
@@ -140,23 +142,25 @@ export const register: Register = on => {
     return stored
   }).catch(($, e, next) => next(e))
 
-  on('session.append', { door: 'attachment' }, async ($, e, next) => {
-    const stored = await next(e)
+  for (const door of ['attachment', 'delivery'] as const) {
+    on('session.append', { door }, async ($, e, next) => {
+      const stored = await next(e)
 
-    if (stored.uuid === undefined || stored.message.name !== 'queued_command' || e.agentId !== undefined) {
+      if (stored.uuid === undefined || stored.message.name !== 'queued_command' || e.agentId !== undefined) {
+        return stored
+      }
+
+      const shown = flatten(textOf(stored.message.content))
+      const typed = (await read($, waiting)).find(text => shown.includes(flatten(text)))
+
+      if (typed !== undefined) {
+        await update($, waiting, list => withoutFirst(list, typed))
+        await remember($, stored.uuid, typed)
+      }
+
       return stored
-    }
-
-    const shown = flatten(textOf(stored.message.content))
-    const typed = (await read($, waiting)).find(text => shown.includes(flatten(text)))
-
-    if (typed !== undefined) {
-      await update($, waiting, list => withoutFirst(list, typed))
-      await remember($, stored.uuid, typed)
-    }
-
-    return stored
-  }).catch(($, e, next) => next(e))
+    }).catch(($, e, next) => next(e))
+  }
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const beneath = await next(e)
@@ -206,7 +210,7 @@ export const register: Register = on => {
     const { Box, Button, Input, Text } = $.ui.resolve(e)
     const list = await read($, prompts)
     const search = await read($, query)
-    const width = Math.max(10, e.props.bodyColumns - 6)
+    const width = Math.max(10, e.props.bodyColumns - 8)
     const rows = list.flatMap(prompt => {
       const shown = shownLine(prompt.text, search, width)
 
@@ -229,14 +233,18 @@ export const register: Register = on => {
         />
         <Text dimColor>{summary}</Text>
         {rows.map(({ prompt, shown }) => (
-          <Box key={`line-${prompt.id}`} flexDirection="row">
-            <Text dimColor>{prompt.time ?? '--:--'} </Text>
-            <Button
-              key={`row-${prompt.id}`}
-              label={shown.before + shown.match + shown.after}
-              plain
-              onPress={() => void jump($, prompt.id)}
-            />
+          <Box key={`line-${prompt.id}`} flexDirection="row" justifyContent="space-between">
+            <Text>
+              <Text dimColor>{prompt.time ?? '--:--'} </Text>
+              {shown.before}
+              {shown.match !== '' && (
+                <Text color="yellow" bold>
+                  {shown.match}
+                </Text>
+              )}
+              {shown.after}
+            </Text>
+            <Button key={`row-${prompt.id}`} label={JUMP_ICON} plain dimColor onPress={() => void jump($, prompt.id)} />
           </Box>
         ))}
       </Box>
