@@ -45,7 +45,7 @@ test('the band shows the last two messages and the pane finds one by an accent-f
   await pane.input({ key: 'search', text: 'creme', kind: 'change' })
 
   expect(await pane.find({ text: '1 of 3 match' })).toBeDefined()
-  expect(await pane.find({ type: 'Text', text: 'crème' })).toBeDefined()
+  expect(await pane.find({ key: 'row-second', text: /café crème/ })).toBeDefined()
   expect(await pane.find({ key: 'row-third' })).toBeUndefined()
 })
 
@@ -69,5 +69,5 @@ test('a message typed while a turn runs is listed as typed once its queued row i
 
   const band = await $.ui.mount({ plugin: 'recent-prompts', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
 
-  expect(await band.find({ key: 'prompt-1', text: /^❯ Also keep it on Windows$/ })).toBeDefined()
+  expect(await band.find({ key: 'prompt-1', text: /^Also keep it on Windows$/ })).toBeDefined()
 })

@@ -178,10 +178,16 @@ export const register: Register = on => {
       <Box flexDirection="column">
         {recent.map((prompt, index) => (
           <Box key={`band-${index}`} flexDirection="row" justifyContent="space-between">
-            <Button key={`prompt-${index}`} plain dimColor onPress={() => void jump($, prompt.id)}>
+            <Box flexDirection="row">
               <Text color="cyan">❯ </Text>
-              {truncate(flatten(prompt.text), width)}
-            </Button>
+              <Button
+                key={`prompt-${index}`}
+                label={truncate(flatten(prompt.text), width)}
+                plain
+                dimColor
+                onPress={() => void jump($, prompt.id)}
+              />
+            </Box>
             {index === recent.length - 1 && (
               <Button key="history" label="history" dimColor onPress={() => void toggleHistory($)} />
             )}
@@ -223,16 +229,15 @@ export const register: Register = on => {
         />
         <Text dimColor>{summary}</Text>
         {rows.map(({ prompt, shown }) => (
-          <Button key={`row-${prompt.id}`} plain onPress={() => void jump($, prompt.id)}>
+          <Box key={`line-${prompt.id}`} flexDirection="row">
             <Text dimColor>{prompt.time ?? '--:--'} </Text>
-            {shown.before}
-            {shown.match !== '' && (
-              <Text color="yellow" bold>
-                {shown.match}
-              </Text>
-            )}
-            {shown.after}
-          </Button>
+            <Button
+              key={`row-${prompt.id}`}
+              label={shown.before + shown.match + shown.after}
+              plain
+              onPress={() => void jump($, prompt.id)}
+            />
+          </Box>
         ))}
       </Box>
     )
