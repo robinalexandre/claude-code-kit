@@ -25,6 +25,7 @@ The sync engine installs differently: see [sync/README.md](sync/README.md).
 |---|---|---|
 | [insta360-reel](skills/insta360-reel/SKILL.md) | Builds a vertical Instagram Reel straight from raw Insta360 X-series `.insv` files, no Insta360 Studio: calibrates the camera mount, finds every action with a motion analysis, lets you pick from numbered candidate clips, then renders them with a rider-locked horizon. Tuned on wingfoil sessions. | `ffmpeg`, `python3` |
 | [instagram-reel](skills/instagram-reel/SKILL.md) | Builds a Reel from a folder of phone videos: reviews every clip, proposes numbered candidates, assembles once, checks the result frame by frame. Can save the result to the Photos library with write-only access. | `ffmpeg`; Photos saving needs macOS and Xcode's `swiftc` |
+| [test-evidence](skills/test-evidence/SKILL.md) | Captures proof that a ticket works locally: browser screenshots, a short video of the flow, the network requests and console behind it (through the chrome-devtools MCP), or one app window or screen region, never the whole screen unless asked. Masks tokens and cookies, writes a short test report and, after your yes, attaches it to the Jira issue or as a resolved comment on the Azure DevOps PR. | [chrome-devtools MCP](https://github.com/ChromeDevTools/chrome-devtools-mcp), `jq`, `perl`; video needs `ffmpeg` |
 | [handoff](skills/handoff/SKILL.md) | Writes a handoff note so you can continue the current work on your other computer, and picks it up there. | the [sync engine](sync/README.md) |
 
 ### Mods

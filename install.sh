@@ -24,6 +24,7 @@ esac
 
 PARTS="insta360-reel:skill:Instagram Reels from raw Insta360 footage (ffmpeg, python3)
 instagram-reel:skill:Instagram Reels from a folder of phone clips (ffmpeg; saving to Photos needs macOS)
+test-evidence:skill:Screenshots, video and network proof of a ticket, attached to Jira or the PR (chrome-devtools MCP, jq, perl; video needs ffmpeg)
 handoff:skill:Handoff notes between computers (needs the sync engine in sync/)
 paste-preview:mod:Pasted text shown in full, previews of pasted images (macOS, Windows)
 recent-prompts:mod:Your last two messages above the prompt, and a searchable history
