@@ -5,7 +5,7 @@ description: Proposes and sets up an AI review step on a repo's CI that reviews 
 
 # AI review with proof on CI
 
-The idea: every PR/MR carries its proof (what the test-evidence skill produces: screenshots, a short video, the requests behind it, a test report). An agent on the CI reads the diff and the proof, says whether the change does what it claims, and posts its verdict on the PR/MR. People read the verdict instead of the whole diff.
+The idea: every PR/MR carries its proof (what the test-evidence skill produces: screenshots, a short video, the requests behind it, a test report). An agent on the CI reads the diff, the code around it and the proof, checks the code itself rather than trusting the tests or the screenshots, challenges what doesn't hold, and posts its verdict on the PR/MR. People read the verdict instead of the whole diff.
 
 Templates are in `~/.claude/skills/ci-review/templates/` (`$SK` below). The review instructions live in one file, `review-prompt.md`, that any agent CLI can take, so the same step works with another agent (Codex and others) by swapping the command.
 
@@ -39,4 +39,4 @@ Never write a key into a file, a commit or the chat: the user adds secrets thems
 
 ## 4. What the review must say
 
-The verdict, first line: works / doesn't work / can't tell (proof missing or doesn't match the change). Then, short: what the proof shows, what the diff does that the proof doesn't cover, and the risky spots. A PR without proof gets "can't tell" and a list of what to capture, not a guess.
+The verdict, first line: works / doesn't work / can't tell (proof missing or doesn't match the change). "Works" needs both: the code does what the PR claims, read in context, and the proof shows it. Then, short: what the proof shows, what the code does that the proof and tests don't cover, tests that would still pass with the change reverted, and the risky spots. A PR without proof gets "can't tell" and a list of what to capture, not a guess.
