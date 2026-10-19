@@ -183,12 +183,19 @@ def fill_any($loc):
   (if (.mcpServers | type) == "object" then .mcpServers |= with_entries(.key as $k | .value |= fill($loc | at("mcpServers") | at($k))) else . end)
   | fill_settings($loc);
 def text_redact: split("\n") | map(redact_str) | join("\n");
-# Puts back each line whose redaction matches a line of $loc. Fails rather
-# than drop a line of $loc that holds a secret.
+# Puts back each line whose redaction matches a line of $loc, in order when
+# several lines of $loc redact the same way. Fails rather than drop a line of
+# $loc that holds a secret.
 def text_fill($loc):
   ($loc | split("\n")) as $ll
-  | ([$ll[] | {key: redact_str, value: .} | select(.key != .value)] | from_entries) as $m
-  | (split("\n") | map(if contains("__SECRET__") then ($m[.] // .) else . end)) as $out
+  | (reduce ($ll[] | {key: redact_str, value: .} | select(.key != .value)) as $e ({}; .[$e.key] += [$e.value])) as $m
+  | (reduce (split("\n")[]) as $l ({out: [], used: {}};
+      if ($l | contains("__SECRET__")) and $m[$l] != null then
+        (.used[$l] // 0) as $i
+        | .out += [$m[$l][$i] // $m[$l][-1]]
+        | .used[$l] = $i + 1
+      else .out += [$l] end)
+    | .out) as $out
   | if any($ll[]; redact_str != . and (. as $s | $out | index([$s])) == null) then error("a secret line would be lost")
     else $out | join("\n") end;
 def servers($p): (if $p == "" then .mcpServers else ((.projects // {})[$p] // {}).mcpServers end) // {};
