@@ -4,6 +4,9 @@
     pr_watch.py check [--peek]          what changed on every tracked PR since the last check
                                         (--peek: report without recording it as seen)
     pr_watch.py list                    tracked PRs and their status
+    pr_watch.py status [--live]         the same as JSON, with what each PR waits for
+                                        (--live: fetched now, with the changes; records nothing)
+    pr_watch.py open URL                open a PR in the default browser
     pr_watch.py remove URL              stop tracking a PR
 
 Tracked PRs live in $PR_WATCH_DIR (default ~/.claude-sync/pr-watch), one JSON file per PR, so the
@@ -22,9 +25,12 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import urllib.error
 import urllib.request
+import webbrowser
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -69,26 +75,35 @@ def _http_json(url: str, headers: dict[str, str]) -> object:
         raise WatchError(f"{url.split('?')[0]}: not JSON (signed out?)") from error
 
 
-class AzureDevOps:
-    def __init__(self, match: re.Match[str]) -> None:
-        org = match["org"] or match["org2"]
-        self.base = f"https://dev.azure.com/{org}/{match['project']}/_apis"
-        self.repo, self.id = match["repo"], match["id"]
-        self._headers: dict[str, str] | None = None
-        self._definitions: dict[int, str] = {}
+_ADO_HEADERS: dict[str, str] = {}
+_ADO_LOCK = threading.Lock()
 
-    def headers(self) -> dict[str, str]:
-        if self._headers is None:
+
+def _ado_headers() -> dict[str, str]:
+    """One token for every PR: `az account get-access-token` takes seconds per call."""
+    with _ADO_LOCK:
+        if not _ADO_HEADERS:
             pat = os.environ.get("AZURE_DEVOPS_PAT") or os.environ.get("AZURE_DEVOPS_EXT_PAT")
             if pat:
-                self._headers = {"Authorization": "Basic " + base64.b64encode(f":{pat}".encode()).decode()}
+                _ADO_HEADERS["Authorization"] = "Basic " + base64.b64encode(f":{pat}".encode()).decode()
             else:
                 token = _run("az", "account", "get-access-token", "--resource", ADO_RESOURCE,
                              "--query", "accessToken", "-o", "tsv")
                 if not token:
                     raise WatchError("Azure DevOps: no AZURE_DEVOPS_PAT and `az login` has no token")
-                self._headers = {"Authorization": f"Bearer {token}"}
-        return self._headers
+                _ADO_HEADERS["Authorization"] = f"Bearer {token}"
+        return dict(_ADO_HEADERS)
+
+
+class AzureDevOps:
+    def __init__(self, match: re.Match[str]) -> None:
+        org = match["org"] or match["org2"]
+        self.base = f"https://dev.azure.com/{org}/{match['project']}/_apis"
+        self.repo, self.id = match["repo"], match["id"]
+        self._definitions: dict[int, str] = {}
+
+    def headers(self) -> dict[str, str]:
+        return _ado_headers()
 
     def get(self, path: str) -> dict:
         separator = "&" if "?" in path else "?"
@@ -117,6 +132,7 @@ class AzureDevOps:
         return {
             "title": pr["title"],
             "status": pr["status"],
+            "target": pr.get("targetRefName", "").removeprefix("refs/heads/"),
             "votes": {r["displayName"]: _ado_vote(r["vote"]) for r in pr.get("reviewers", []) if r["vote"]},
             "comments": comments,
             "checks": self.checks(pr["repository"]["project"]["id"]),
@@ -199,8 +215,8 @@ class GitHub:
         votes = {r["user"]["login"]: r["state"].lower().replace("_", " ") for r in reviews  # type: ignore[union-attr]
                  if r["state"] in {"APPROVED", "CHANGES_REQUESTED"}}
         status = "merged" if pr.get("merged_at") else pr["state"]
-        return {"title": pr["title"], "status": status, "votes": votes, "comments": comments,
-                "checks": self.checks(pr["head"]["sha"])}
+        return {"title": pr["title"], "status": status, "target": pr["base"]["ref"], "votes": votes,
+                "comments": comments, "checks": self.checks(pr["head"]["sha"])}
 
     def checks(self, sha: str) -> dict[str, dict]:
         """Check runs (GitHub Actions and apps) and commit statuses on the PR's head commit."""
@@ -324,23 +340,44 @@ def add(url: str, note: str) -> None:
     print(f"tracking {label({'url': url, 'seen': seen})}: {seen['status']}, {ci_summary(seen['checks'])}")
 
 
-def check(peek: bool) -> None:
-    """With `peek`, report without recording: the changes are reported again at the next check.
+def fetch_all(entries: list[tuple[Path, dict]]) -> list[tuple[Path, dict, dict | None, str, str]]:
+    """Every PR's snapshot, fetched in parallel: (path, entry, snapshot or None, me, error).
 
-    Comments by the person checking are left out, looked up once per host.
+    `me` is the person checking, looked up once per host.
     """
-    ignore, bots, report, errors, me = config("ignoreAuthors"), config("bots"), [], [], {}
-    for path, entry in load_entries():
+    me: dict[str, str] = {}
+    lock = threading.Lock()
+
+    def one(item: tuple[Path, dict]) -> tuple[Path, dict, dict | None, str, str]:
+        path, entry = item
         try:
             pr = provider(entry["url"])
             host = type(pr).__name__ + pr.base.split("/")[3]
-            if host not in me:
-                me[host] = pr.me()
-            now = pr.snapshot()
+            with lock:
+                known = me.get(host)
+            if known is None:
+                known = pr.me()
+                with lock:
+                    me[host] = known
+            return path, entry, pr.snapshot(), known, ""
         except WatchError as error:
+            return path, entry, None, "", str(error)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        return list(pool.map(one, entries))
+
+
+def check(peek: bool) -> None:
+    """With `peek`, report without recording: the changes are reported again at the next check.
+
+    Comments by the person checking are left out.
+    """
+    ignore, bots, report, errors = config("ignoreAuthors"), config("bots"), [], []
+    for path, entry, now, me, error in fetch_all(load_entries()):
+        if now is None:
             errors.append(f"{entry['url']}: {error}")
             continue
-        report += changes(entry, now, ignore | {me[host]} - {""}, bots)
+        report += changes(entry, now, ignore | {me} - {""}, bots)
         if peek:
             continue
         if now["status"] in FINAL:
@@ -361,6 +398,68 @@ def list_() -> None:
         note = f" - {entry['note']}" if entry.get("note") else ""
         ci = ci_summary(entry["seen"].get("checks", {}))
         print(f"{entry['seen']['status']}\t{ci}\t{label(entry)}\t{entry['url']}{note}")
+
+
+MAIN_BRANCHES = {"main", "master", "develop", "development", "trunk"}
+
+
+def waiting_for(seen: dict) -> str:
+    """What the PR waits for next, from what was seen."""
+    if seen["status"] in FINAL:
+        return seen["status"]
+    checks = seen.get("checks", {})
+    votes = set(seen["votes"].values())
+    target = seen.get("target", "")
+    ci = ci_summary(checks)
+    if any(c["state"] == "expired" and c["required"] is not False for c in checks.values()):
+        return "CI to be queued again"
+    if ci.startswith("CI failed"):
+        return "a CI fix"
+    if votes & {"rejected", "waiting for author", "changes requested"}:
+        return "changes from us"
+    if ci == "no CI" and target and target not in MAIN_BRANCHES:
+        return f"the PR into {target} to merge first"
+    if ci.startswith("CI running"):
+        return "CI"
+    if not votes & {"approved", "approved with suggestions"}:
+        return "a review"
+    return "the merge"
+
+
+def status(live: bool) -> None:
+    """JSON for a pane or a script; `live` fetches every PR now but records nothing."""
+    entries = load_entries()
+    fetched = fetch_all(entries) if live else [(p, e, None, "", "") for p, e in entries]
+    ignore, bots, prs, errors = config("ignoreAuthors"), config("bots"), [], []
+    for _, entry, now, me, error in fetched:
+        if error:
+            errors.append(f"{entry['url']}: {error}")
+        seen = now or entry["seen"]
+        match = ADO_URL.match(entry["url"]) or GITHUB_URL.match(entry["url"])
+        prefix = f"{label(entry)}: "
+        news = [line.removeprefix(prefix) for line in changes(entry, now, ignore | {me} - {""}, bots)] if now else []
+        prs.append({
+            "url": entry["url"],
+            "repo": match["repo"] if match else "",
+            "number": match["id"] if match else "",
+            "title": seen["title"],
+            "status": seen["status"],
+            "target": seen.get("target", ""),
+            "ci": ci_summary(seen.get("checks", {})),
+            "votes": seen["votes"],
+            "waiting": waiting_for(seen),
+            "note": entry.get("note", ""),
+            "changes": news,
+            "checked": _now() if now else entry.get("checked", ""),
+        })
+    print(json.dumps({"live": live, "prs": prs, "errors": errors}, ensure_ascii=False))
+
+
+def open_(url: str) -> None:
+    if not (ADO_URL.match(url) or GITHUB_URL.match(url)):
+        raise WatchError(f"unsupported PR URL (Azure DevOps or GitHub): {url}")
+    if not webbrowser.open(url):
+        raise WatchError(f"no browser could open {url}")
 
 
 def remove(url: str) -> None:
@@ -385,6 +484,10 @@ def main(argv: list[str]) -> int:
             check(peek="--peek" in args)
         elif command == "list":
             list_()
+        elif command == "status":
+            status(live="--live" in args)
+        elif command == "open" and args:
+            open_(args[0])
         elif command == "remove" and args:
             remove(args[0])
         else:

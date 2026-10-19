@@ -12,6 +12,8 @@ bash $SK/pr-watch.sh add <PR URL> [--note "<what it is, what it waits for>"]
 bash $SK/pr-watch.sh check            # what changed since the last check, then records it
 bash $SK/pr-watch.sh check --peek     # same, without recording (the next check reports it again)
 bash $SK/pr-watch.sh list
+bash $SK/pr-watch.sh status [--live]  # JSON with what each PR waits for (--live: fetched now, records nothing)
+bash $SK/pr-watch.sh open <PR URL>    # in the default browser
 bash $SK/pr-watch.sh remove <PR URL>
 ```
 
@@ -38,6 +40,7 @@ Auth: Azure DevOps uses `AZURE_DEVOPS_PAT` if set, otherwise the `az login` toke
 ## Checking regularly
 
 - **During the work day**: offer a recurring check in the current Claude Code session, with `CronCreate`, `durable: true` so it survives a restart, on weekdays during the user's hours, at an off minute (e.g. `17 8-18 * * 1-5`). Its prompt runs `check` and says what to do with the result (below). Say that the job lives in the project folder where it was created and expires after 7 days; offer to renew it when it does, while PRs are still tracked.
+- **At each session start**: the `session.sh start` hook runs `check` in the background, so the session starts at once; the `session.sh prompt` hook hands what it found to the session with the user's next message (or a one-line "no change"). Report it as below. A check found while no session takes it waits for the next one. It is skipped when one ran less than `PR_WATCH_SESSION_MINUTES` (default 15) ago.
 - **Every morning**, with no session open: the daily sync (daily-sync skill) runs `morning.sh`, which peeks and sends a desktop and phone notification through the reminders skill when something changed.
 - **When the user asks** ("any news on my PRs?"): run `check`.
 
