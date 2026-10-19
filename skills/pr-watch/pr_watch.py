@@ -287,6 +287,9 @@ def changes(entry: dict, now: dict, ignore: set[str], bots: set[str]) -> list[st
     for reviewer, vote in now["votes"].items():
         if before["votes"].get(reviewer) != vote:
             lines.append(f"{name}: {reviewer} voted {vote}")
+    for reviewer, vote in before["votes"].items():
+        if reviewer not in now["votes"]:
+            lines.append(f"{name}: {reviewer}'s vote ({vote}) was reset or dismissed")
     for key, comment in now["comments"].items():
         authors = {comment["author"], comment["author_id"]}
         if key in before["comments"] or authors & ignore:

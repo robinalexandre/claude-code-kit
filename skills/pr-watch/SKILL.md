@@ -49,7 +49,8 @@ Start the message with what changed, PR by PR.
 - **Bot comment** `(bot)`: read it; bring it up only if it points at a real problem, with the fix you propose.
 - **CI failed**: open the failing run (its link), read the failed step's errors (Azure DevOps: the build timeline's issues and logs, `az pipelines runs show` / the REST API; GitHub: `gh run view <id> --log-failed`), say why it failed and propose the fix. Expired: propose to queue it again. A failed optional check: mention it only if its findings matter.
 - **CI green**: say so in one line, with what is left before the merge (votes, other policies).
-- **Vote** (approved, waiting for author, rejected): say it, and what is left before the merge (other reviewers, CI, policies).
+- **Vote** (approved, approved with suggestions, waiting for author, rejected; on GitHub approved or changes requested): say it, and what is left before the merge (other reviewers, CI, policies). A rejection or "waiting for author" comes with the reviewer's comments: read them and propose the changes.
+- **Vote reset or dismissed** (Azure DevOps can reset votes after a push; a GitHub review can be dismissed): say so, and that the reviewer has to approve again.
 - **Merged**: say what it unblocks (a PR stacked on it to retarget, a deploy order, a ticket to move), and update the project notes if the repo keeps a list of open PRs.
 - **Abandoned or closed**: ask whether the work moved elsewhere; if a new PR replaced it, add that one.
 - `No change.`: one short line, nothing else.
