@@ -23,8 +23,6 @@ case "$(uname -s)" in
 esac
 
 PARTS="team:rules:Base rules added to ~/.claude/CLAUDE.md (one team; ask before production, commits, pushes, PRs and decisions that need your context)
-insta360-reel:skill:Instagram Reels from raw Insta360 footage (ffmpeg, python3)
-instagram-reel:skill:Instagram Reels from a folder of phone clips (ffmpeg; saving to Photos needs macOS)
 ci-review:skill:An AI review step on CI that checks each PR/MR against its proof (GitHub Actions, GitLab CI; API key or cloud provider)
 test-evidence:skill:Screenshots, video and network proof of a ticket, attached to Jira or the PR (chrome-devtools MCP, jq, perl; video needs ffmpeg)
 handoff:skill:Handoff notes between computers (needs the sync engine in sync/)
@@ -38,7 +36,9 @@ recent-activity:hook:A digest of your recent sessions across your dev folder, at
 session-registry:hook:Offers to resume the session left open in a terminal tab (zsh, JetBrains or Ghostty)
 wave-check-hook:hook:A warning whenever a reply doesn't start with your marker emoji
 nocturne-notify:hook:Keyboard-backlight signals through Agent Nocturne (github.com/taekchef/agent-nocturne)
-statusline:statusline:A status line with folder, branch, model, context, effort and rate limit"
+statusline:statusline:A status line with folder, branch, model, context, effort and rate limit
+video-montage:skill:Not dev, video montages from a folder of phone clips, Instagram Reel by default (ffmpeg; saving to Photos needs macOS)
+insta360-montage:skill:Not dev, video montages from raw Insta360 footage, Instagram Reel by default (ffmpeg, python3)"
 
 field() { awk -F: -v p="$1" -v f="$2" '$1 == p { print $f }' <<< "$PARTS"; }
 

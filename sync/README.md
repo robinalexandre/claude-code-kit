@@ -83,7 +83,7 @@ On a work computer, sign in to GitHub with a [fine-grained token](https://github
 ```json
 {
   "devDir": "~/dev",
-  "exclude": ["skills/instagram-reel"],
+  "exclude": ["skills/video-montage"],
   "mcpExclude": ["some-server"],
   "settings": { "remoteControlAtStartup": true }
 }

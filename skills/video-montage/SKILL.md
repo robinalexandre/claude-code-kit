@@ -1,9 +1,9 @@
 ---
-name: instagram-reel
-description: Build a vertical Instagram Reel (1080x1920, 30 fps, H.264) from a folder of phone videos with ffmpeg. Claude reviews every clip visually, proposes numbered candidate clips for the user to pick, then assembles the Reel once, verifies it frame by frame and delivers. Use when the user asks for a Reel, a short vertical edit, a highlight video, or a montage from several clips.
+name: video-montage
+description: Edit a short video montage from a folder of phone videos with ffmpeg, proposed by default as a vertical Instagram Reel (1080x1920, 30 fps, H.264). Claude reviews every clip visually, proposes numbered candidate clips for the user to pick, then assembles the montage once, verifies it frame by frame and delivers. Use when the user asks for a Reel, a short vertical edit, a highlight video, or a montage from several clips.
 ---
 
-# Instagram Reel from a folder of clips
+# Video montage from a folder of clips
 
 Everything runs locally with `ffmpeg` / `ffprobe` (Homebrew). No plugin or MCP is needed.
 
@@ -78,7 +78,7 @@ Turn the best moments from step 2 into numbered candidates in
 `# <n> <what> <seconds>s` label. Then render them as one labelled reel:
 
 ```zsh
-LABEL=1 SRC=<folder> zsh ~/.claude/skills/instagram-reel/build.sh $S/candidates.txt $S/candidates.mp4
+LABEL=1 SRC=<folder> zsh ~/.claude/skills/video-montage/build.sh $S/candidates.txt $S/candidates.mp4
 ffmpeg -v error -y -i $S/candidates.mp4 -vf scale=720:1280 -c:v libx264 -crf 24 -c:a aac -b:a 128k -movflags +faststart $S/candidates_preview.mp4
 ```
 
@@ -111,7 +111,7 @@ scratchpad (`clip start duration`, clip name without extension), in the agreed
 order. Then:
 
 ```zsh
-SRC=<folder> zsh ~/.claude/skills/instagram-reel/build.sh <scratch>/brand.txt <folder>/reel_brand.mp4
+SRC=<folder> zsh ~/.claude/skills/video-montage/build.sh <scratch>/brand.txt <folder>/reel_brand.mp4
 ```
 
 It renders each shot as its own normalised segment (crop to fill 1080x1920,
@@ -138,7 +138,7 @@ Only once the user says the **final** reel is good (not the selection, and not
 while asking for another version):
 
 1. **Save it where the brief said.** For the Photos library (macOS):
-   `zsh ~/.claude/skills/instagram-reel/to_photos.sh <reel.mp4>...`. It
+   `zsh ~/.claude/skills/video-montage/to_photos.sh <reel.mp4>...`. It
    saves with "Add Photos Only" access and deletes the local copies once Photos
    confirms. Then tell the user the reels are in Recents: no script can write
    to a shared album, so adding them to one is theirs to do. Never read, list

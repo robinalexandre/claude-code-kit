@@ -1,12 +1,12 @@
 ---
-name: insta360-reel
-description: Build a vertical Instagram Reel (1080x1920, 30 fps, <= 40 s) straight from raw Insta360 .insv recordings with ffmpeg, no Insta360 Studio. Claude calibrates the camera mount, reviews the whole session from the .lrv proxies, finds every action with a motion analysis, lets the user pick from numbered candidate clips, then renders the chosen ones from the full-res .insv with a rider-locked horizon. Use when the user has Insta360 (X-series) footage on the camera or SD card and wants a reel, a highlight, a montage or "the jumps" from a session.
+name: insta360-montage
+description: Edit a video montage straight from raw Insta360 .insv recordings with ffmpeg, no Insta360 Studio, proposed by default as a vertical Instagram Reel (1080x1920, 30 fps, <= 40 s). Claude calibrates the camera mount, reviews the whole session from the .lrv proxies, finds every action with a motion analysis, lets the user pick from numbered candidate clips, then renders the chosen ones from the full-res .insv with a rider-locked horizon. Use when the user has Insta360 (X-series) footage on the camera or SD card and wants a reel, a highlight, a montage or "the jumps" from a session.
 ---
 
-# Instagram Reel from raw Insta360 footage
+# Video montage from raw Insta360 footage
 
 Everything runs locally with `ffmpeg`/`ffprobe` (Homebrew) and `python3` (stdlib only). Scripts live in
-`~/.claude/skills/insta360-reel/scripts/` (`$SK` below). Work in the session scratchpad (`$S`).
+`~/.claude/skills/insta360-montage/scripts/` (`$SK` below). Work in the session scratchpad (`$S`).
 Read the card **read-only**: never write to or delete anything on the camera.
 
 The flow: brief → calibrate the mount → find every action → the user picks clips from a numbered
@@ -200,8 +200,8 @@ to a cut (trim, slow-mo window) edits `shots.txt` and renders again.
 Only once the user says the **final** reel is good (not the selection, and not while asking for
 another version):
 
-1. **Save it where the brief said.** For the Photos library (macOS, needs the `instagram-reel` skill):
-   `zsh ~/.claude/skills/instagram-reel/to_photos.sh <final.mp4> <cover.jpg>`. It saves with "Add
+1. **Save it where the brief said.** For the Photos library (macOS, needs the `video-montage` skill):
+   `zsh ~/.claude/skills/video-montage/to_photos.sh <final.mp4> <cover.jpg>`. It saves with "Add
    Photos Only" access and deletes the local copies once Photos confirms. Then tell the user both are in
    Recents: no script can write to a shared album, so adding them to one is theirs to do.
    Never read, list or export anything from the Photos library; the skill only asks for write access.

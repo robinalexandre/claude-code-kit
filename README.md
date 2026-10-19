@@ -27,8 +27,6 @@ The sync engine installs differently: see [sync/README.md](sync/README.md).
 
 | Skill | What it does | Needs |
 |---|---|---|
-| [insta360-reel](skills/insta360-reel/SKILL.md) | Builds a vertical Instagram Reel straight from raw Insta360 X-series `.insv` files, no Insta360 Studio: calibrates the camera mount, finds every action with a motion analysis, lets you pick from numbered candidate clips, then renders them with a rider-locked horizon. Tuned on wingfoil sessions. | `ffmpeg`, `python3` |
-| [instagram-reel](skills/instagram-reel/SKILL.md) | Builds a Reel from a folder of phone videos: reviews every clip, proposes numbered candidates, assembles once, checks the result frame by frame. Can save the result to the Photos library with write-only access. | `ffmpeg`; Photos saving needs macOS and Xcode's `swiftc` |
 | [test-evidence](skills/test-evidence/SKILL.md) | Captures proof that a ticket works locally: browser screenshots, a short video of the flow, the network requests and console behind it (through the chrome-devtools MCP), or one app window or screen region, never the whole screen unless asked. Masks tokens and cookies, writes a short test report and, after your yes, attaches it to the Jira issue or as a resolved comment on the Azure DevOps PR. | [chrome-devtools MCP](https://github.com/ChromeDevTools/chrome-devtools-mcp), `jq`, `perl`; video needs `ffmpeg` |
 | [ci-review](skills/ci-review/SKILL.md) | Proposes, once per repo, an AI review step on the CI and sets it up with you: an agent reads each PR/MR's diff and its proof (what test-evidence captures) and posts a verdict (works / doesn't / can't tell, with what to capture). Templates for `anthropics/claude-code-action`, the CLI in headless mode (`claude -p`) on GitHub Actions and GitLab CI, and cloud providers; the review prompt is a plain file any agent CLI can take. | an API key or a cloud provider account, set as a CI secret |
 | [handoff](skills/handoff/SKILL.md) | Writes a handoff note so you can continue the current work on your other computer, and picks it up there. | the [sync engine](sync/README.md) |
@@ -78,6 +76,15 @@ The wave-check mod and hook rest on one line in `~/.claude/CLAUDE.md`: "Start ev
 ## Installing by hand
 
 Copy the part into the same place under `~/.claude` (`skills/<name>`, `mods/<name>`, `hooks/<file>`, `statusline-command.sh`). For a hook or the status line, merge [settings/\<part\>.json](settings) into `~/.claude/settings.json`, replacing `__HOME__` with your home folder. For a mod, add its folder to `CLAUDE_CODE_PLUGIN_DIRS` in the `env` of `settings.json` (`:`-separated, `;` on Windows).
+
+## Other things (not dev)
+
+Skills from the same kit for life outside code.
+
+| Skill | What it does | Needs |
+|---|---|---|
+| [video-montage](skills/video-montage/SKILL.md) | Edits a video montage from a folder of phone videos (a vertical Instagram Reel by default): reviews every clip, proposes numbered candidates, assembles once, checks the result frame by frame. Can save the result to the Photos library with write-only access. | `ffmpeg`; Photos saving needs macOS and Xcode's `swiftc` |
+| [insta360-montage](skills/insta360-montage/SKILL.md) | Edits a video montage straight from raw Insta360 X-series `.insv` files, no Insta360 Studio: calibrates the camera mount, finds every action with a motion analysis, lets you pick from numbered candidate clips, then renders them with a rider-locked horizon, as a vertical Instagram Reel by default. Tuned on wingfoil sessions. | `ffmpeg`, `python3` |
 
 ## License
 
