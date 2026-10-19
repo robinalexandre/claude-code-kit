@@ -132,13 +132,17 @@ def unmerge($o; $old):
 def render($h): walk(if type == "string" then split("__HOME__") | join($h) else . end);
 def unrender($h): walk(if type == "string" then split($h) | join("__HOME__") else . end);
 def secret_name: test("key|token|secret|pass|pwd|auth|cred|cookie|session|private"; "i");
+# After a secret-looking name, only a literal value is replaced: never a
+# reference ($VAR, <x>, {{x}}, %x%), a call, or a word without a digit, so code
+# and prose that merely talk about tokens stay intact.
+def literal($chars; $min): "(?![$<{%])(?=\($chars)*[0-9])(?>\($chars){\($min),})(?![(])";
 def redact_str:
   gsub("sk-ant-[A-Za-z0-9_-]{20,}|xkeysib-[A-Za-z0-9-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]+|(sk|pk|rk)_(live|test)_[A-Za-z0-9]{16,}|xox[abprs]-[A-Za-z0-9-]{10,}|AIza[A-Za-z0-9_-]{30,}"; "__SECRET__")
-  | gsub("(?<p>[A-Za-z][A-Za-z0-9+.-]*://[^/\\s:@]+:)[^@\\s/]+@"; "\(.p)__SECRET__@")
-  | gsub("(?<p>(?i:authorization) *: *)[^\"\\\\]+"; "\(.p)__SECRET__")
-  | gsub("(?<p>(Bearer|Basic|Token) +)[A-Za-z0-9._~+/=-]{8,}"; "\(.p)__SECRET__")
-  | gsub("(?<p>sshpass +-p *)[^\\s\"]+"; "\(.p)__SECRET__")
-  | gsub("(?<p>(?i:password|passwd|pass|pwd|passphrase|token|secret|api[_-]?key|apikey|access[_-]?key|private[_-]?key|client[_-]?secret|credentials?)\"? *[=:] *\"?)(?![$<{%])[^\\s&\"`)]+"; "\(.p)__SECRET__");
+  | gsub("(?<p>[A-Za-z][A-Za-z0-9+.-]*://[^/\\s:@]+:)(?![$<{%])[^@\\s/]+@"; "\(.p)__SECRET__@")
+  | gsub("(?<p>(?i:authorization) *: *(?:(?i:bearer|basic|token|digest) +)?)" + literal("[A-Za-z0-9._~+/=-]"; 16); "\(.p)__SECRET__")
+  | gsub("(?<p>(Bearer|Basic|Token) +)" + literal("[A-Za-z0-9._~+/=-]"; 16); "\(.p)__SECRET__")
+  | gsub("(?<p>sshpass +-p *)(?![$\"\\x27])[^\\s\"]+"; "\(.p)__SECRET__")
+  | gsub("(?<p>(?i:password|passwd|pass|pwd|passphrase|token|secret|api[_-]?key|apikey|access[_-]?key|private[_-]?key|client[_-]?secret|credentials?)\"? *[=:] *\"?)" + literal("[^\\s&\"\\x27`(),;<>{}\\[\\]]"; 6); "\(.p)__SECRET__");
 # Values of secret-looking keys, except references like $VAR, <placeholder>, {{x}}.
 def redact_keys:
   walk(if type == "object" then
