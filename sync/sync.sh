@@ -818,6 +818,82 @@ apply() {
   apply_settings
 }
 
+# The commit at which ~/.claude and the memory last matched the repo.
+mark_applied() { git rev-parse HEAD > "$STATE/applied"; }
+
+# local_of REPO_PATH: sets LROOT and LREL to where a claude/ or memory/ file of
+# the repo lives on this machine; fails when it isn't synced here.
+local_of() {
+  case "$1" in
+    claude/*)
+      LROOT=$CLAUDE LREL=${1#claude/}
+      case " $PATHS " in *" ${LREL%%/*} "*) ;; *) return 1 ;; esac
+      ;;
+    memory/*) LROOT=$MEMORY LREL=${1#memory/} ;;
+    *) return 1 ;;
+  esac
+  ! ignored "$LREL"
+}
+
+# holds COMMIT REPO_PATH LOCAL: whether LOCAL is what the repo had at COMMIT
+# (both missing counts).
+holds() {
+  local was="$STATE/was"
+  case "$2" in *.json) was="$STATE/was.json" ;; esac
+  if ! git cat-file -e "$1:$2" 2> /dev/null; then
+    [ ! -e "$3" ]
+    return
+  fi
+  [ -f "$3" ] && view "$3" || return 1
+  git show "$1:$2" > "$was" || return 1
+  if is_json "$was"; then
+    [ "$(jq -S . "$STATE/view")" = "$(jq -S . "$was")" ]
+  else
+    cmp -s "$STATE/view" "$was"
+  fi
+}
+
+# pull_in FROM TO: puts on this machine the claude/ and memory/ files that
+# changed in the repo between commits FROM and TO. Without it, a change that
+# reached the repo some other way than this machine's capture (a rename made
+# straight in the repo, an apply refused earlier) would be undone by the next
+# capture. A file also changed here keeps this machine's version, with a
+# warning; deleted files go to .state/trash.
+pull_in() {
+  local path both="" trash="$STATE/trash/$(date +%Y%m%d-%H%M%S)"
+  [ "$(git rev-parse "$1")" = "$(git rev-parse "$2")" ] && return 0
+  while IFS= read -r path; do
+    [ -n "$path" ] && local_of "$path" || continue
+    holds "$2" "$path" "$LROOT/$LREL" && continue
+    if ! holds "$1" "$path" "$LROOT/$LREL"; then
+      both="$both $path"
+      continue
+    fi
+    if git cat-file -e "$2:$path" 2> /dev/null; then
+      mkdir -p "$(dirname "$STATE/in/$path")" && git show "$2:$path" > "$STATE/in/$path" || return 1
+      write_local "$STATE/in/$path" "$LROOT/$LREL"
+      case $? in 0) ;; 3) both="$both $path" ;; *) return 1 ;; esac
+    else
+      mkdir -p "$(dirname "$trash/$path")" && mv "$LROOT/$LREL" "$trash/$path" && CHANGED=$((CHANGED + 1))
+      (cd "$LROOT" && rmdir -p "$(dirname "$LREL")" 2> /dev/null)
+      say "removed $LROOT/$LREL (copy in $trash)"
+    fi
+  done < <(git -c core.quotepath=off diff --name-only --no-renames "$1" "$2" -- claude memory)
+  rm -rf "$STATE/in"
+  find "$STATE/trash" -mindepth 1 -maxdepth 1 -mtime +30 -exec rm -rf {} + 2> /dev/null
+  [ -z "$both" ] || warn "changed both here and in the repo, this machine's version was kept:$both"
+  return 0
+}
+
+# Brings in what reached the repo since the last run that matched it, before
+# capturing anything.
+catch_up() {
+  local base
+  base=$(cat "$STATE/applied" 2> /dev/null)
+  [ -n "$base" ] && git cat-file -e "$base^{commit}" 2> /dev/null || return 0
+  pull_in "$base" HEAD
+}
+
 # What needs the claude CLI, a repo or a folder on this machine, so it is
 # checked on every run.
 apply_local() {
@@ -891,7 +967,8 @@ remote_sync() {
     fi
     if [ "$(git rev-parse HEAD)" != "$before" ]; then
       MCP_NOW=1 SCAN_NOW=1
-      apply || return 1
+      pull_in "$before" HEAD || return 1
+      apply_settings
       say "applied changes from the other machine(s)"
     fi
   fi
@@ -955,9 +1032,11 @@ sync_once() {
   fi
   [ "${1:-}" = force ] && MCP_NOW=1 SCAN_NOW=1
   git_setup
+  catch_up || return 1
   capture || return 1
   commit || return 1
   remote_sync "${1:-}" || return 1
+  mark_applied
   apply_local || return 1
   if [ "${1:-}" = force ]; then date +%Y-%m-%d > "$STATE/fresh-day"; fi
   if [ "$CHANGED" -eq 0 ] && [ -n "${VERBOSE:-}" ]; then echo "already up to date"; fi
@@ -1038,6 +1117,7 @@ install() {
   git_setup
   MCP_NOW=1 SCAN_NOW=1
   apply 1000000 || return 1
+  mark_applied
   apply_local || return 1
   say "installed the synced config into $CLAUDE (previous files saved in $BACKUP)"
 }

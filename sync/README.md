@@ -38,7 +38,9 @@ Hooks in the shared settings run `sync.sh`:
 
 A change shows up on the other computer in its next session. A session that is already open keeps the `CLAUDE.md` it started with.
 
-Safety checks: secrets are replaced by `__SECRET__` in every synced file and each computer keeps its own values; a file that may hold one but can't be redacted (binary, not UTF-8, a private key) stays on its computer; each commit is checked once more for known token formats; more than 10 files deleted at once stops the sync, and a conflict (the same line of a non-JSON file changed on both sides) stops it too. Every stop shows up as a warning at the next session start, and Claude can fix it.
+A change made straight in the sync repo (a skill renamed in `claude/`, a memory edited in `memory/`) works too: before copying anything from `~/.claude`, each run first puts on the computer what changed in the repo since its last good run, so the change is never undone. Files it removes go to `.state/trash/` for 30 days. If the same file also changed in `~/.claude`, the computer's version wins and the session start warns about it.
+
+Safety checks: secrets are replaced by `__SECRET__` in every synced file and each computer keeps its own values; a file that may hold one but can't be redacted (binary, not UTF-8, a private key) stays on its computer; each commit is checked once more for known token formats; more than 10 files deleted at once in `~/.claude` stops the sync (deletions that come from the repo's history are applied), and a conflict (the same line of a non-JSON file changed on both sides) stops it too. Every stop shows up as a warning at the next session start, and Claude can fix it.
 
 ## Install
 
