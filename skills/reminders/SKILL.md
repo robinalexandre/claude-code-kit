@@ -47,9 +47,12 @@ Enough for a session in a few days, without this conversation, to help.>
 
 - **Desktop**: macOS notification, Windows toast, `notify-send` on Linux.
 - **Phone, first choice: the Claude mobile app.** Always propose this first. It's a recurring Claude Code scheduled task (a cloud routine) that runs every morning in a fresh cloud session, reads the reminders from the sync repo on GitHub and ends with a short summary; its push notification lands in the Claude app. Set it up with the user's yes:
-  - From a cloud session that has the `create_trigger` tool: `create_new_session_on_fire: true`, `notifications: {"push": true}`, a daily cron in the user's time zone (`CRON_TZ=<zone> M H * * *`, default around 09:00). Otherwise the user creates it at claude.ai/code under scheduled tasks.
-  - Its prompt, standalone: attach and clone (read access) the private sync repo (where `reminders/` lives) and the repo that holds this skill (for the format); list what is due in the user's time zone (`on` not after now, `until` not before today; `where` and `machine` only limit coding sessions); end with "no reminders today" alone when nothing is due, otherwise one short line per reminder in the user's language. Read-only: never edit, commit or push.
-  - Fire it once right away to check that the notification arrives.
+  - A session that a scheduled task creates from scratch gets no repo access, and the private sync repo is refused. So first create a dedicated cloud session with the private sync repo attached (`create_session` with its `source_url`, title "Morning reminders"). Its first message sets its job, read-only, and runs it once as a test:
+    - pull the sync repo, and read this skill's `SKILL.md` for the format;
+    - list what is due in the user's time zone: `on` not after now, `until` not before today; `where` and `machine` only limit coding sessions;
+    - if something is due, send one `PushNotification` (one line, under 200 characters, in the user's language), then one line per reminder; otherwise reply "no reminders today" and send no notification.
+  - Then make a daily scheduled task that wakes that session: `create_trigger` with `persistent_session_id`, a cron in the user's time zone (`CRON_TZ=<zone> M H * * *`, default around 09:00), and a short prompt: "run the morning check". Without these tools, the user can do the same at claude.ai/code.
+  - Check that the test notification reached the phone.
 - **Phone, alternative: [ntfy](https://ntfy.sh)**, when the user doesn't want the Claude app or wants the computer itself to push. They install the ntfy app and subscribe to a topic name that is hard to guess (anyone who knows it can read it); you write it on each computer to `~/.claude/reminders.json`: `{"ntfy": "https://ntfy.sh/<topic>"}` (or a self-hosted server URL). That file stays on the computer.
 - Test both with `bash $SK/reminders.sh notify "test"`.
 - If the morning run isn't scheduled on this computer (`bash ~/.claude/skills/daily-sync/schedule.sh status`), offer to turn it on with the daily-sync skill.
