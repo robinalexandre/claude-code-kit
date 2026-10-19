@@ -1,0 +1,23 @@
+# Add to .gitlab-ci.yml. Review with a proof check on every merge request pipeline.
+# Masked CI/CD variables: ANTHROPIC_API_KEY, and GITLAB_REVIEW_TOKEN (project access token, api scope)
+# so the review can post its note. See code.claude.com/docs/en/gitlab-ci-cd (beta).
+ai-review:
+  stage: test
+  image: node:24-bookworm-slim
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq curl git jq > /dev/null
+    - curl -fsSL https://claude.ai/install.sh | bash
+    - export PATH="$HOME/.local/bin:$PATH"
+  script:
+    - |
+      API="$CI_API_V4_URL/projects/$CI_PROJECT_ID/merge_requests/$CI_MERGE_REQUEST_IID"
+      curl -fsS -H "PRIVATE-TOKEN: $GITLAB_REVIEW_TOKEN" "$API" | jq '{title, description}' > mr.json
+      git fetch -q origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+      git diff "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME...HEAD" > mr.diff
+      claude -p --bare --permission-mode dontAsk --max-turns 20 --allowedTools "Read" "Grep" "Glob" \
+        "Merge request: read mr.json (title, description with the proof links) and mr.diff. Reply with the comment text only. $(cat ci/ai-review/review-prompt.md)" \
+        > review.md
+      jq -n --rawfile body review.md '{body: $body}' |
+        curl -fsS -H "PRIVATE-TOKEN: $GITLAB_REVIEW_TOKEN" -H "Content-Type: application/json" --data @- "$API/notes" > /dev/null

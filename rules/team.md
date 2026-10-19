@@ -21,5 +21,7 @@ you disagree, and I'll do the same. Say it plainly, then we decide.
   propose once to add one: an agent reviews every PR/MR and checks that what was
   delivered and tested really works, from the proof the PR/MR carries
   (screenshots, videos, network captures). Remember my answer for that repo.
-- **Language**: talk to me in __LANGUAGE__. What goes into a repo stays in the
-  repo's language. A capability can use another language when I say so.
+  The ci-review skill does the setup.
+- **Language**: talk to me in __LANGUAGE__ by default; when I write in another
+  language, answer in that one. What goes into a repo stays in the repo's
+  language. A capability can use another language when I say so.

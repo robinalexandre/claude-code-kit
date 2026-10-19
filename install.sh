@@ -25,6 +25,7 @@ esac
 PARTS="team:rules:Base rules added to ~/.claude/CLAUDE.md (one team; ask before production, commits, pushes, PRs and decisions that need your context)
 insta360-reel:skill:Instagram Reels from raw Insta360 footage (ffmpeg, python3)
 instagram-reel:skill:Instagram Reels from a folder of phone clips (ffmpeg; saving to Photos needs macOS)
+ci-review:skill:An AI review step on CI that checks each PR/MR against its proof (GitHub Actions, GitLab CI; API key or cloud provider)
 test-evidence:skill:Screenshots, video and network proof of a ticket, attached to Jira or the PR (chrome-devtools MCP, jq, perl; video needs ffmpeg)
 handoff:skill:Handoff notes between computers (needs the sync engine in sync/)
 daily-sync:skill:Syncs before the first session of the day and every morning at a set time (needs the sync engine in sync/)
