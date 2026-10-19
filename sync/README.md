@@ -32,7 +32,7 @@ When the same non-JSON file (a `CLAUDE.md`, a memory, a skill…) differs on two
 
 Hooks in the shared settings run `sync.sh`:
 
-- **Session start:** the first session of the day waits for a full sync (`sync.sh fresh`); the others sync in the background. Then it shows open handoff notes from the other computers.
+- **Session start:** shows open handoff notes from the other computers, then syncs in the background. `sync.sh fresh` lets a skill wait for that sync in the background (the reminders skill does).
 - **Every morning** (with the [daily-sync](../skills/daily-sync/SKILL.md) skill): `sync.sh morning` syncs, then runs each `~/.claude/skills/*/morning.sh` (the [reminders](../skills/reminders/SKILL.md) skill notifies the day's reminders).
 - **After each reply and at session end:** copies local changes into the repo, commits, pulls with a rebase, applies what came from the other computers, pushes. All in the background.
 

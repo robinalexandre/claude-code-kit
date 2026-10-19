@@ -3,7 +3,7 @@
 #   start    SessionStart hook: reports open handoffs and sync errors, then syncs in the background
 #   bg       Stop / SessionEnd hook: syncs in the background
 #   now      syncs right away and says what happened
-#   fresh    syncs and waits for it, unless that already happened today
+#   fresh    syncs and waits for it, unless a sync already succeeded today
 #   morning  the scheduled daily run: syncs, then runs each ~/.claude/skills/*/morning.sh
 #   status   shows this machine's sync state
 #   install  first run on a machine: backs up ~/.claude, then copies the repo's config into it
@@ -920,21 +920,19 @@ run() {
   sync_once "${1:-}"
 }
 
-# The first session of the day waits for the sync, so what other machines left
-# (handoffs, reminders) is there before it starts. Sessions starting together
+# A full sync that callers can wait for (the reminders skill does, in the
+# background), skipped once one has succeeded today. Callers starting together
 # wait for the same run.
 fresh() {
-  local today
-  today=$(date +%Y-%m-%d)
-  lock "${1:-40}" || return 0
-  [ "$(cat "$STATE/fresh-day" 2> /dev/null)" = "$today" ] && return 0
-  sync_once force && echo "$today" > "$STATE/fresh-day"
+  lock "${1:-60}" || return 0
+  [ "$(cat "$STATE/fresh-day" 2> /dev/null)" = "$(date +%Y-%m-%d)" ] && return 0
+  sync_once force
 }
 
 morning() {
   local f
   lock 60 || return 0
-  sync_once force && date +%Y-%m-%d > "$STATE/fresh-day"
+  sync_once force
   rm -rf "$STATE/lock"
   for f in "$CLAUDE"/skills/*/morning.sh; do
     [ -f "$f" ] || continue
@@ -954,6 +952,7 @@ sync_once() {
   commit || return 1
   remote_sync "${1:-}" || return 1
   apply_local || return 1
+  if [ "${1:-}" = force ]; then date +%Y-%m-%d > "$STATE/fresh-day"; fi
   if [ "$CHANGED" -eq 0 ] && [ -n "${VERBOSE:-}" ]; then echo "already up to date"; fi
   return 0
 }
@@ -967,11 +966,7 @@ frontmatter() {
 }
 
 start() {
-  local notes="" err="" f from synced=""
-  if [ "$(cat "$STATE/fresh-day" 2> /dev/null)" != "$(date +%Y-%m-%d)" ]; then
-    bash "$SYNC/sync.sh" fresh 40 > /dev/null 2>&1 < /dev/null
-    synced=1
-  fi
+  local notes="" err="" f from
   for f in handoffs/*.md; do
     [ -f "$f" ] || continue
     from=$(frontmatter "$f" from)
@@ -984,7 +979,7 @@ start() {
   elif [ -f "$STATE/warn" ]; then
     err="warning: $(cat "$STATE/warn")"
   fi
-  [ -n "$synced" ] || spawn force
+  spawn force
   [ -n "$notes$err" ] || return 0
   jq -n --arg notes "$notes" --arg err "$err" '
     (if $notes != "" then "Open handoff notes written on another machine. If the user wants to continue one, use the handoff skill." + $notes else "" end) as $ctx
@@ -1068,7 +1063,7 @@ case "${1:-}" in
     ;;
   run) run "${2:-}" ;;
   now) VERBOSE=1 run force 60 ;;
-  fresh) fresh "${2:-40}" ;;
+  fresh) fresh "${2:-60}" ;;
   morning) morning ;;
   status) status ;;
   install)

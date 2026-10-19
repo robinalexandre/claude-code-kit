@@ -1,13 +1,13 @@
 ---
 name: daily-sync
-description: Sets up and checks the daily run of the Claude Code config sync (~/.claude-sync), so each computer picks up what the others left (reminders, handoffs, config) every morning and before its first session of the day. Use when the user says "sync every morning", "daily sync", "schedule the sync", "change the sync time", "is the morning sync on?", "stop the daily sync", or when another skill (reminders) needs the morning run.
+description: Sets up and checks the daily run of the Claude Code config sync (~/.claude-sync), so each computer picks up what the others left (reminders, handoffs, config) every morning, even with no session open. Use when the user says "sync every morning", "daily sync", "schedule the sync", "change the sync time", "is the morning sync on?", "stop the daily sync", or when another skill (reminders) needs the morning run.
 ---
 
 # Daily sync
 
 The sync engine (`~/.claude-sync/sync.sh`, see `~/.claude-sync/README.md`) does two things each day:
 
-- **First session of the day:** its SessionStart hook waits for a full sync (`sync.sh fresh`, at most about 40 s) before the session starts, so handoff notes and reminders written on another computer are already there. Later sessions that day sync in the background as before.
+- **Every session start:** a full sync runs in the background, so the session starts at once. A skill that needs the result waits for it in the background with `sync.sh fresh` (it returns once a full sync has succeeded today); the reminders skill does that, then notifies what came in and hands it to the session with the user's next message.
 - **Every morning at a set time (default 09:00):** the computer's own scheduler runs `sync.sh morning`, which syncs and then runs each `~/.claude/skills/*/morning.sh`. That's how the reminders skill notifies the user even when no session is open.
 
 The scheduled run needs the sync engine installed on the computer. It doesn't need Claude Code to be open.
