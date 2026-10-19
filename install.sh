@@ -137,7 +137,12 @@ for p in $picked; do
         echo "~/.claude/CLAUDE.md already has \"$heading\"; left as is."
       else
         [ -f "$CLAUDE/CLAUDE.md" ] && cp -p "$CLAUDE/CLAUDE.md" "$BACKUP/CLAUDE.md"
-        cat "$KIT/rules/$p.md" >> "$CLAUDE/CLAUDE.md"
+        language=""
+        if [ -n "$TTY" ]; then
+          read -r -p "Which language should Claude talk to you in (e.g. English, Français, Español)? [English] " language < "$TTY" || language=""
+        fi
+        language=${language:-English}
+        awk -v l="$language" '{ gsub(/__LANGUAGE__/, l) } 1' "$KIT/rules/$p.md" >> "$CLAUDE/CLAUDE.md"
       fi
       ;;
   esac

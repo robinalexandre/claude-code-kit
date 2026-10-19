@@ -21,7 +21,7 @@ The sync engine installs differently: see [sync/README.md](sync/README.md).
 
 ### Base rules
 
-[rules/team.md](rules/team.md) is the base of everything here: Claude and you work as one team that builds, thinks things through and challenges each other. It asks before touching production or shared infrastructure (in two lines, not twenty), before each commit, push and PR, and before decisions that need context only you have, with the options and a recommendation. The installer adds it to `~/.claude/CLAUDE.md` once (part `team`).
+[rules/team.md](rules/team.md) is the base of everything here: Claude and you work as one team that builds, thinks things through and challenges each other. It asks before touching production or shared infrastructure (in two lines, not twenty), before each commit, push and PR, and before decisions that need context only you have, with the options and a recommendation. It proposes a skill, mod or hook when you keep asking for the same thing, and an AI review step with proof (screenshots, videos) on the CI of repos that don't have one. The installer asks which language Claude should talk to you in and adds the rules to `~/.claude/CLAUDE.md` once (part `team`); a capability can use another language when you say so.
 
 ### Skills
 
