@@ -167,9 +167,10 @@ zsh $SK/sheet.sh $S/candidates.mp4 $S/candidates_sheet.jpg     # read it: exclus
 zsh $SK/preview.sh $S/candidates.mp4 $S/candidates_preview.mp4  # < 30 MB, send with SendUserFile
 ```
 
-Send the preview with the list (number, type, duration) and ask which clips to keep. Every answer is a
-new selection, not a new render: reply with the clips kept, the order and the total length, and repeat
-until the user says the selection is good. Render a new candidate reel only when the user asks for
+Send the preview with the list (number, type, duration), say which clips you'd keep and in what order,
+and ask which to keep. Every answer is a new selection, not a new render: reply with the clips kept, the
+order and the total length, and repeat until the user says the selection is good. If a pick goes against
+what works (a weak hook, past 40 s, a shot that shows an exclusion), say so plainly; the user decides. Render a new candidate reel only when the user asks for
 moments that are not in it.
 
 Order that worked: best jump first (hook), 3.5 s flying shots, tacks 5 s, alternate, end on a clean

@@ -9,7 +9,7 @@ Notes live in `~/.claude-sync/handoffs/`, a git repo that syncs the Claude Code 
 
 ## Write a note
 
-1. Check the code first. In each repo involved, run `git status` and `git log @{u}..` to find uncommitted or unpushed work. The other computer can't see it until it is pushed. Tell the user what is unpushed and ask whether to commit and push; never push without their yes.
+1. Check the code first. In each repo involved, run `git status` and `git log @{u}..` to find uncommitted or unpushed work. The other computer can't see it until it is pushed. Tell the user what is unpushed, say what you'd commit and push (and what you'd leave out, such as a half-done experiment), and ask; never push without their yes.
 2. Write `~/.claude-sync/handoffs/<YYYY-MM-DD>-<short-slug>.md`:
 
    ```markdown
@@ -35,7 +35,7 @@ Notes live in `~/.claude-sync/handoffs/`, a git repo that syncs the Claude Code 
 ## Pick up a note
 
 1. Run `bash ~/.claude-sync/sync.sh now` to get the latest notes.
-2. List `~/.claude-sync/handoffs/*.md`. If several are open, ask which one.
+2. List `~/.claude-sync/handoffs/*.md`. If several are open, ask which one, and suggest the likeliest (the one for the current repo, or the newest).
 3. Read it, then get the code in place: clone or fetch the repo and check out the branch. If that would switch branches or touch uncommitted local work, ask first.
-4. Sum up the goal and the next step in a few lines, and continue from there.
+4. Sum up the goal and the next step in a few lines, and continue from there. If something in the note no longer holds (the code or the PR moved on, a next step now looks wrong), say so before carrying on.
 5. Once the user is continuing the work, move the note to `~/.claude-sync/handoffs/done/` so it stops showing up at session start.

@@ -30,7 +30,7 @@ What it creates:
 
 On Windows a console window opens for a few seconds while the task runs; that's expected.
 
-Ask the user before turning it on for the first time on a computer, and tell them which time you used.
+Before turning it on for the first time on a computer, propose it to the user with the time you'd pick and why, and wait for their yes. Then tell them which time you used.
 
 ## Check that it works
 

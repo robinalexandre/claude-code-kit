@@ -9,7 +9,7 @@ Scripts are in `~/.claude/skills/test-evidence/scripts/` (`$SK` below). Run `bas
 
 ## 1. Agree on what to show
 
-Before capturing, write down in a few lines what the reviewer must see: the scenario (steps), the expected result, and which requests prove it (endpoint, status, the field that changed). Use the ticket's acceptance criteria when there is one. Ask the user only if the scenario isn't clear from the ticket or the diff.
+Before capturing, write down in a few lines what the reviewer must see: the scenario (steps), the expected result, and which requests prove it (endpoint, status, the field that changed). Use the ticket's acceptance criteria when there is one. Ask the user only if the scenario isn't clear from the ticket or the diff. If the ticket and the diff don't agree (the diff does less, more or something else), say so before capturing: that's worth settling before a reviewer sees it.
 
 Then pick the evidence that proves it, not everything you can capture. A video earns its place only when the scenario has visible steps (a form, a flow across pages, an error state). When the change happens behind the page (an API call removed, a check moved server-side), the network requests and a changed server field are the proof; add one screenshot of the result at most. The strongest proof of a removed or changed behaviour is often the same capture on the base branch next to the new one: offer it when it's cheap. Run the base branch from a temporary `git worktree` rather than switching the user's checkout, and put the stack back as it was afterwards.
 
@@ -70,7 +70,7 @@ Tested on <branch> at <short commit>, locally (<app URL>), <date>.
 Network: <the request that proves it, its status, the field that changed>. Console: no errors.
 ```
 
-Show the user the folder (list the files, show the report) and wait for their go before uploading anything.
+Show the user the folder (list the files, show the report), say which files you'd attach and where, and wait for their go before uploading anything.
 
 ## 6. Attach it
 

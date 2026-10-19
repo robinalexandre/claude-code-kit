@@ -31,7 +31,7 @@ created: <YYYY-MM-DD HH:MM>
 Enough for a session in a few days, without this conversation, to help.>
 ```
 
-- **Always ask whether the reminder is global or for one repo/folder**, unless the user already said it: "Global (every session, any repo, any computer) or only in <the folder/repo in question>?". Global leaves `where` out. Opening a session in a folder is not a reason to tie the reminder to it. A repo-specific reminder sets `where` to that repo or folder.
+- **Always ask whether the reminder is global or for one repo/folder**, unless the user already said it: "Global (every session, any repo, any computer) or only in <the folder/repo in question>?", and say which you'd pick and why (work on this repo's code fits the repo; a call, a meeting or an errand is global). Global leaves `where` out. Opening a session in a folder is not a reason to tie the reminder to it. A repo-specific reminder sets `where` to that repo or folder.
 - Ask only that and what you can't infer. "Tomorrow" means `on:` the next day; a meeting on a date means `until:` that date. When the user says "this morning" or "now", use today.
 - Every new session gets each due reminder (global ones everywhere, repo-specific ones in their folder) until it's done or past `until`.
 - Never put secrets in it: the file goes to GitHub.

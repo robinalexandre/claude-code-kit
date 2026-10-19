@@ -83,11 +83,13 @@ ffmpeg -v error -y -i $S/candidates.mp4 -vf scale=720:1280 -c:v libx264 -crf 24 
 ```
 
 Check it for excluded moments (step 5 sheet), send the preview with
-SendUserFile plus the list (number, what, duration), and ask which clips to
-keep for each Reel. Every answer is a new selection, not a new render: reply
-with the clips kept, the order and the total length, and repeat until the user
-says the selection is good. Render a new candidate reel only when the user asks
-for moments that are not in it.
+SendUserFile plus the list (number, what, duration), say which clips you'd
+keep for each Reel and in what order, and ask which to keep. Every answer is a
+new selection, not a new render: reply with the clips kept, the order and the
+total length, and repeat until the user says the selection is good. If a pick
+goes against what works (a slow opener on a brand Reel, past the target
+length), say so plainly; the user decides. Render a new candidate reel only
+when the user asks for moments that are not in it.
 
 Editorial rules that worked well:
 
