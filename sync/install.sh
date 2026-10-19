@@ -100,7 +100,7 @@ else
       elif type == "array" and ($o | type) == "array" then . + ($o - .)
       else $o end;
     def run($arg; $t): {hooks: [{type: "command", command: "bash \"\($s)\" \($arg)", timeout: $t}]};
-    merge({hooks: {SessionStart: [run("start"; 10)], Stop: [run("bg"; 5)], SessionEnd: [run("bg"; 5)]}})' \
+    merge({hooks: {SessionStart: [run("start"; 60)], Stop: [run("bg"; 5)], SessionEnd: [run("bg"; 5)]}})' \
     "$settings.before-sync" > "$settings"
   # The next computers recognize a saved config by its CLAUDE.md.
   [ -f "$HOME/.claude/CLAUDE.md" ] || : > "$HOME/.claude/CLAUDE.md"

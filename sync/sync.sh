@@ -3,6 +3,8 @@
 #   start    SessionStart hook: reports open handoffs and sync errors, then syncs in the background
 #   bg       Stop / SessionEnd hook: syncs in the background
 #   now      syncs right away and says what happened
+#   fresh    syncs and waits for it, unless that already happened today
+#   morning  the scheduled daily run: syncs, then runs each ~/.claude/skills/*/morning.sh
 #   status   shows this machine's sync state
 #   install  first run on a machine: backs up ~/.claude, then copies the repo's config into it
 #   init     first run ever: copies this machine's config into an empty repo
@@ -23,9 +25,14 @@ case "${1:-}" in
     spawn
     exit 0
     ;;
+  fresh)
+    [ "$(cat "$STATE/fresh-day" 2> /dev/null)" = "$(date +%Y-%m-%d)" ] && exit 0
+    ;;
+esac
+case "${1:-}" in
   # A pull can rewrite sync.sh while bash is still reading it, so the commands
   # that pull run from a private copy.
-  run | now | install)
+  run | now | install | fresh | morning)
     if [ -z "${SYNC_DIR:-}" ]; then
       mkdir -p "$SYNC/.state"
       find "$SYNC/.state" -maxdepth 1 -name 'run-*.sh' -mmin +60 -exec rm -f {} + 2> /dev/null
@@ -910,6 +917,34 @@ run() {
     say "another sync is running"
     return 0
   }
+  sync_once "${1:-}"
+}
+
+# The first session of the day waits for the sync, so what other machines left
+# (handoffs, reminders) is there before it starts. Sessions starting together
+# wait for the same run.
+fresh() {
+  local today
+  today=$(date +%Y-%m-%d)
+  lock "${1:-40}" || return 0
+  [ "$(cat "$STATE/fresh-day" 2> /dev/null)" = "$today" ] && return 0
+  sync_once force && echo "$today" > "$STATE/fresh-day"
+}
+
+morning() {
+  local f
+  lock 60 || return 0
+  sync_once force && date +%Y-%m-%d > "$STATE/fresh-day"
+  rm -rf "$STATE/lock"
+  for f in "$CLAUDE"/skills/*/morning.sh; do
+    [ -f "$f" ] || continue
+    say "morning: ${f#"$CLAUDE"/}"
+    bash "$f" >> "$STATE/log" 2>&1 < /dev/null
+  done
+  return 0
+}
+
+sync_once() {
   if [ -f "$STATE/log" ] && [ "$(wc -c < "$STATE/log")" -gt 200000 ]; then
     tail -n 300 "$STATE/log" > "$STATE/log.tmp" && mv "$STATE/log.tmp" "$STATE/log"
   fi
@@ -932,7 +967,11 @@ frontmatter() {
 }
 
 start() {
-  local notes="" err="" f from
+  local notes="" err="" f from synced=""
+  if [ "$(cat "$STATE/fresh-day" 2> /dev/null)" != "$(date +%Y-%m-%d)" ]; then
+    bash "$SYNC/sync.sh" fresh 40 > /dev/null 2>&1 < /dev/null
+    synced=1
+  fi
   for f in handoffs/*.md; do
     [ -f "$f" ] || continue
     from=$(frontmatter "$f" from)
@@ -945,7 +984,7 @@ start() {
   elif [ -f "$STATE/warn" ]; then
     err="warning: $(cat "$STATE/warn")"
   fi
-  spawn force
+  [ -n "$synced" ] || spawn force
   [ -n "$notes$err" ] || return 0
   jq -n --arg notes "$notes" --arg err "$err" '
     (if $notes != "" then "Open handoff notes written on another machine. If the user wants to continue one, use the handoff skill." + $notes else "" end) as $ctx
@@ -1029,6 +1068,8 @@ case "${1:-}" in
     ;;
   run) run "${2:-}" ;;
   now) VERBOSE=1 run force 60 ;;
+  fresh) fresh "${2:-40}" ;;
+  morning) morning ;;
   status) status ;;
   install)
     VERBOSE=1
@@ -1039,7 +1080,7 @@ case "${1:-}" in
     lock 60 && init
     ;;
   *)
-    echo "usage: sync.sh start|bg|now|status|install|init" >&2
+    echo "usage: sync.sh start|bg|now|fresh|morning|status|install|init" >&2
     exit 2
     ;;
 esac

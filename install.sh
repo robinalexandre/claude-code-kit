@@ -26,6 +26,8 @@ PARTS="insta360-reel:skill:Instagram Reels from raw Insta360 footage (ffmpeg, py
 instagram-reel:skill:Instagram Reels from a folder of phone clips (ffmpeg; saving to Photos needs macOS)
 test-evidence:skill:Screenshots, video and network proof of a ticket, attached to Jira or the PR (chrome-devtools MCP, jq, perl; video needs ffmpeg)
 handoff:skill:Handoff notes between computers (needs the sync engine in sync/)
+daily-sync:skill:Syncs before the first session of the day and every morning at a set time (needs the sync engine in sync/)
+reminders:skill:Reminders for a later session, notified on the desktop and the phone every morning (needs daily-sync)
 paste-preview:mod:Pasted text shown in full, previews of pasted images (macOS, Windows)
 recent-prompts:mod:Your last two messages above the prompt, and a searchable history
 wave-check:mod:A self-check whenever a reply doesn't start with your marker emoji
@@ -107,7 +109,10 @@ hook_lib=""
 for p in $picked; do
   case "$(field "$p" 2)" in hook | statusline) hook_lib=1 ;; esac
   case "$(field "$p" 2)" in
-    skill) put "skills/$p" "skills/$p" ;;
+    skill)
+      put "skills/$p" "skills/$p"
+      if [ -f "$KIT/settings/$p.json" ]; then fragments+=("$KIT/settings/$p.json"); fi
+      ;;
     mod)
       put "mods/$p" "mods/$p"
       mods+=("$home/.claude/mods/$p")
