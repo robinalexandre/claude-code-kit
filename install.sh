@@ -28,6 +28,7 @@ test-evidence:skill:Screenshots, video and network proof of a ticket, attached t
 handoff:skill:Handoff notes between computers (needs the sync engine in sync/)
 daily-sync:skill:Syncs before the first session of the day and every morning at a set time (needs the sync engine in sync/)
 reminders:skill:Reminders for a later session, notified on the desktop and the phone every morning (needs daily-sync)
+pr-watch:skill:Tracks your PRs until merged: new comments, votes, CI results (Azure DevOps, GitHub; needs Python 3)
 paste-preview:mod:Pasted text shown in full, previews of pasted images (macOS, Windows)
 recent-prompts:mod:Your last two messages above the prompt, and a searchable history
 wave-check:mod:A self-check whenever a reply doesn't start with your marker emoji
