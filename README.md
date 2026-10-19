@@ -62,6 +62,14 @@ Mods change Claude Code's own interface. The installer loads them through `CLAUD
 
 [sync/](sync/README.md): keeps `CLAUDE.md`, skills, mods, hooks, settings, MCP servers (without their secrets), memory and the untracked agent files of your repos the same on every computer, through a private GitHub repo. Secrets are replaced by `__SECRET__` before anything leaves the computer.
 
+## Projects
+
+Built alongside the kit, in their own repos:
+
+| Project | What it is |
+|---|---|
+| [intelligent-home-agent](https://github.com/robinalexandre/intelligent-home-agent) | A self-hosted voice home assistant: morning briefing and evening recap (with the [reminders](skills/reminders/SKILL.md) left in your coding sessions), home control through Home Assistant, weather for your outdoor activities, calendar and mail. Reachable from Siri, Home Assistant Assist (Google Home, Alexa), push notifications or a scheduled task. |
+
 ## The marker emoji
 
 The wave-check mod and hook rest on one line in `~/.claude/CLAUDE.md`: "Start every message with 🌊" (or any emoji you like). A reply without it is a cheap, visible sign that Claude has started to drift from your instructions, usually deep in a long task. The installer asks for your emoji, stores it as `CLAUDE_REPLY_MARKER` in the `env` of `~/.claude/settings.json` and offers to add the rule to your `CLAUDE.md`. Until the variable is set, both parts stay idle.
