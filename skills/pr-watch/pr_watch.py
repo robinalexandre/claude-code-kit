@@ -7,6 +7,8 @@
     pr_watch.py status [--live]         the same as JSON, with what each PR waits for
                                         (--live: fetched now, with the changes; records nothing)
     pr_watch.py open URL                open a PR in the default browser
+    pr_watch.py details URL             JSON: the PR's failed checks with their failed steps and errors
+    pr_watch.py rerun URL CHECK         relaunch a check (Azure DevOps: re-queue; GitHub: rerun failed jobs)
     pr_watch.py remove URL              stop tracking a PR
 
 Tracked PRs live in $PR_WATCH_DIR (default ~/.claude-sync/pr-watch), one JSON file per PR, so the
@@ -37,6 +39,8 @@ from pathlib import Path
 
 WATCH_DIR = Path(os.environ.get("PR_WATCH_DIR", Path.home() / ".claude-sync" / "pr-watch"))
 CONFIG = WATCH_DIR / "config.json"
+DONE_DIR = WATCH_DIR / "done"
+KEEP_DAYS = float(os.environ.get("PR_WATCH_KEEP_DAYS", "7"))
 ADO_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"
 FINAL = {"merged", "completed", "abandoned", "closed"}
 EXCERPT = 400
@@ -60,8 +64,32 @@ def _run(*args: str) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
-def _http_json(url: str, headers: dict[str, str]) -> object:
-    request = urllib.request.Request(url, headers={"Accept": "application/json", **headers})
+def _http_text(url: str, headers: dict[str, str]) -> str:
+    request = urllib.request.Request(url, headers={"Accept": "text/plain", **headers})
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return response.read().decode("utf-8-sig", errors="replace")
+    except (urllib.error.HTTPError, urllib.error.URLError) as error:
+        raise WatchError(f"{url.split('?')[0]}: {error}") from error
+
+
+LOG_STAMP = re.compile(r"^\d{4}-\d\d-\d\dT[\d:.]+Z ")
+LOG_ERROR = re.compile(r"error|failed|exception|denied|not found|fatal", re.IGNORECASE)
+
+
+def log_tail(text: str, count: int = 6) -> list[str]:
+    """The last lines of a log that look like errors, timestamps and pipeline markers left out."""
+    lines = [LOG_STAMP.sub("", line).strip() for line in text.splitlines()]
+    lines = [line for line in lines if line and not line.startswith(("##[section]", "##[command]", "=="))]
+    picked = [line.removeprefix("##[error]") for line in lines if LOG_ERROR.search(line)]
+    return picked[-count:]
+
+
+def _http_json(url: str, headers: dict[str, str], method: str = "GET") -> object:
+    data = b"" if method != "GET" else None
+    extra = {"Content-Type": "application/json"} if data is not None else {}
+    request = urllib.request.Request(url, data=data, method=method,
+                                     headers={"Accept": "application/json", **extra, **headers})
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             body = response.read().decode("utf-8")
@@ -69,6 +97,8 @@ def _http_json(url: str, headers: dict[str, str]) -> object:
         raise WatchError(f"{url.split('?')[0]}: HTTP {error.code}") from error
     except urllib.error.URLError as error:
         raise WatchError(f"{url.split('?')[0]}: {error.reason}") from error
+    if not body.strip():
+        return {}
     try:
         return json.loads(body)
     except json.JSONDecodeError as error:
@@ -133,6 +163,8 @@ class AzureDevOps:
             "title": pr["title"],
             "status": pr["status"],
             "target": pr.get("targetRefName", "").removeprefix("refs/heads/"),
+            "source": pr.get("sourceRefName", "").removeprefix("refs/heads/"),
+            "conflicts": pr.get("mergeStatus") == "conflicts",
             "votes": {r["displayName"]: _ado_vote(r["vote"]) for r in pr.get("reviewers", []) if r["vote"]},
             "comments": comments,
             "checks": self.checks(pr["repository"]["project"]["id"]),
@@ -163,8 +195,38 @@ class AzureDevOps:
                 "state": state,
                 "required": config["isBlocking"],
                 "link": f"{self.base.removesuffix('/_apis')}/_build/results?buildId={build}" if build else None,
+                "build": build,
+                "evaluation": evaluation["evaluationId"],
             }
         return checks
+
+    def errors(self, check: dict) -> list[str]:
+        """The failed steps of the check's build and their error messages."""
+        if not check.get("build"):
+            return []
+        records = self.get(f"build/builds/{check['build']}/timeline").get("records") or []
+        lines = []
+        for record in records:
+            if record.get("result") != "failed" or record.get("type") not in {"Task", "Job", "Checkpoint"}:
+                continue
+            messages = [issue["message"] for issue in record.get("issues") or [] if issue.get("type") == "error"]
+            if record["type"] == "Task" and (record.get("log") or {}).get("url"):
+                try:
+                    tail = log_tail(_http_text(record["log"]["url"], self.headers()))
+                except WatchError:
+                    tail = []
+                messages += [line for line in tail if line not in messages]
+            if record["type"] == "Task" or messages:
+                lines.append(f"{record['name']}: failed")
+            lines += [f"  {message[:EXCERPT]}" for message in messages[:8]]
+        return lines[:24]
+
+    def rerun(self, check: dict) -> None:
+        """Re-queues the build policy, as the PR's Re-queue button does."""
+        if not check.get("evaluation"):
+            raise WatchError("this check has no policy evaluation to re-queue")
+        _http_json(f"{self.base}/policy/evaluations/{check['evaluation']}?api-version=7.1-preview.1",
+                   self.headers(), method="PATCH")
 
     def _definition_name(self, definition_id: int | None) -> str:
         if definition_id is None:
@@ -215,8 +277,9 @@ class GitHub:
         votes = {r["user"]["login"]: r["state"].lower().replace("_", " ") for r in reviews  # type: ignore[union-attr]
                  if r["state"] in {"APPROVED", "CHANGES_REQUESTED"}}
         status = "merged" if pr.get("merged_at") else pr["state"]
-        return {"title": pr["title"], "status": status, "target": pr["base"]["ref"], "votes": votes,
-                "comments": comments, "checks": self.checks(pr["head"]["sha"])}
+        return {"title": pr["title"], "status": status, "target": pr["base"]["ref"], "source": pr["head"]["ref"],
+                "conflicts": pr.get("mergeable_state") == "dirty", "votes": votes, "comments": comments,
+                "checks": self.checks(pr["head"]["sha"])}
 
     def checks(self, sha: str) -> dict[str, dict]:
         """Check runs (GitHub Actions and apps) and commit statuses on the PR's head commit."""
@@ -224,11 +287,43 @@ class GitHub:
         for run in self.get(f"commits/{sha}/check-runs?per_page=100")["check_runs"]:  # type: ignore[index]
             state = run["conclusion"] if run["status"] == "completed" else run["status"]
             checks[run["name"]] = {"state": GITHUB_STATES.get(state, state), "required": None,
-                                   "link": run.get("html_url")}
+                                   "link": run.get("html_url"), "run": run["id"]}
         for status in self.get(f"commits/{sha}/status")["statuses"]:  # type: ignore[index]
             checks[status["context"]] = {"state": GITHUB_STATES.get(status["state"], status["state"]),
                                          "required": None, "link": status.get("target_url")}
         return checks
+
+    def errors(self, check: dict) -> list[str]:
+        """The failed steps of an Actions job, then the check's failure annotations."""
+        lines = []
+        job = ACTIONS_JOB.search(check.get("link") or "")
+        if job:
+            steps = self.get(f"actions/jobs/{job['job']}").get("steps", [])  # type: ignore[union-attr]
+            lines += [f"{step['name']}: failed" for step in steps if step.get("conclusion") == "failure"]
+        if check.get("run"):
+            for annotation in self.get(f"check-runs/{check['run']}/annotations")[:10]:  # type: ignore[index]
+                if annotation.get("annotation_level") == "failure":
+                    where = f"{annotation['path']}: " if annotation.get("path") else ""
+                    lines.append(f"  {where}{(annotation.get('message') or '')[:EXCERPT]}")
+        return lines[:20]
+
+    def rerun(self, check: dict) -> None:
+        """Re-runs the failed jobs of an Actions run, or re-requests another app's check."""
+        job = ACTIONS_JOB.search(check.get("link") or "")
+        if job:
+            _http_json(f"{self.base}/actions/runs/{job['run']}/rerun-failed-jobs", self.post_headers(), method="POST")
+        elif check.get("run"):
+            _http_json(f"{self.base}/check-runs/{check['run']}/rerequest", self.post_headers(), method="POST")
+        else:
+            raise WatchError("a commit status is set by an outside service: rerun it there")
+
+    def post_headers(self) -> dict[str, str]:
+        if not self.headers:
+            raise WatchError("GitHub: rerunning needs GITHUB_TOKEN or `gh auth login`")
+        return {"X-GitHub-Api-Version": "2022-11-28", **self.headers}
+
+
+ACTIONS_JOB = re.compile(r"/actions/runs/(?P<run>\d+)/job/(?P<job>\d+)")
 
 
 GITHUB_STATES = {"success": "passed", "failure": "failed", "error": "failed", "timed_out": "failed",
@@ -261,8 +356,26 @@ def load_entries() -> list[tuple[Path, dict]]:
             for path in sorted(WATCH_DIR.glob("*.json")) if path != CONFIG]
 
 
+def done_entries() -> list[dict]:
+    """PRs merged, abandoned or closed in the last KEEP_DAYS days, newest first."""
+    entries = [json.loads(path.read_text(encoding="utf-8")) for path in DONE_DIR.glob("*.json")]
+    return sorted(entries, key=lambda entry: entry.get("ended", ""), reverse=True)
+
+
+def prune_done() -> None:
+    now = datetime.now(timezone.utc)
+    for path in DONE_DIR.glob("*.json"):
+        ended = json.loads(path.read_text(encoding="utf-8")).get("ended", "")
+        try:
+            age = now - datetime.strptime(ended, "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc)
+        except ValueError:
+            age = None
+        if age is None or age.total_seconds() > KEEP_DAYS * 86400:
+            path.unlink()
+
+
 def save(path: Path, entry: dict) -> None:
-    WATCH_DIR.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(entry, ensure_ascii=False, indent=1) + "\n", encoding="utf-8", newline="\n")
 
 
@@ -300,6 +413,10 @@ def changes(entry: dict, now: dict, ignore: set[str], bots: set[str]) -> list[st
     before, name, lines = entry["seen"], label(entry), []
     if now["status"] != before["status"]:
         lines.append(f"{name}: {before['status']} -> {now['status']}")
+    if now.get("conflicts") and not before.get("conflicts"):
+        lines.append(f"{name}: merge conflicts with {now.get('target') or 'its target branch'}")
+    elif before.get("conflicts") and not now.get("conflicts") and now["status"] not in FINAL:
+        lines.append(f"{name}: merge conflicts resolved")
     for reviewer, vote in now["votes"].items():
         if before["votes"].get(reviewer) != vote:
             lines.append(f"{name}: {reviewer} voted {vote}")
@@ -381,10 +498,13 @@ def check(peek: bool) -> None:
         if peek:
             continue
         if now["status"] in FINAL:
+            save(DONE_DIR / path.name, {**entry, "checked": _now(), "ended": _now(), "seen": now})
             path.unlink()
             report.append(f"{label(entry)}: {now['status']}, no longer tracked")
         else:
             save(path, {**entry, "checked": _now(), "seen": now})
+    if not peek:
+        prune_done()
     print("\n".join(report) if report else "No change.")
     if errors:
         print("Could not check:\n" + "\n".join(errors), file=sys.stderr)
@@ -411,6 +531,8 @@ def waiting_for(seen: dict) -> str:
     votes = set(seen["votes"].values())
     target = seen.get("target", "")
     ci = ci_summary(checks)
+    if seen.get("conflicts"):
+        return "a conflict fix"
     if any(c["state"] == "expired" and c["required"] is not False for c in checks.values()):
         return "CI to be queued again"
     if ci.startswith("CI failed"):
@@ -445,14 +567,91 @@ def status(live: bool) -> None:
             "title": seen["title"],
             "status": seen["status"],
             "target": seen.get("target", ""),
+            "source": seen.get("source", ""),
+            "conflicts": bool(seen.get("conflicts")),
             "ci": ci_summary(seen.get("checks", {})),
+            "checks": sorted(({"name": name, **check} for name, check in seen.get("checks", {}).items()),
+                             key=lambda c: (c["required"] is False, c["name"].lower())),
             "votes": seen["votes"],
             "waiting": waiting_for(seen),
             "note": entry.get("note", ""),
             "changes": news,
             "checked": _now() if now else entry.get("checked", ""),
         })
-    print(json.dumps({"live": live, "prs": prs, "errors": errors}, ensure_ascii=False))
+    recent = []
+    for entry in done_entries():
+        match = ADO_URL.match(entry["url"]) or GITHUB_URL.match(entry["url"])
+        recent.append({
+            "url": entry["url"],
+            "repo": match["repo"] if match else "",
+            "number": match["id"] if match else "",
+            "title": entry["seen"]["title"],
+            "status": entry["seen"]["status"],
+            "target": entry["seen"].get("target", ""),
+            "ended": entry.get("ended", ""),
+        })
+    print(json.dumps({"live": live, "prs": merge_order(prs), "recent": recent, "errors": errors}, ensure_ascii=False))
+
+
+def merge_order(prs: list[dict]) -> list[dict]:
+    """Grouped by repo; in a repo, each PR before the PRs stacked on it (whose target is its branch).
+
+    Sets `after` to the number of the tracked PR a PR is stacked on.
+    """
+    ordered: list[dict] = []
+    by_repo: dict[str, list[dict]] = {}
+    for pr in prs:
+        by_repo.setdefault(pr["repo"], []).append(pr)
+    for repo in sorted(by_repo, key=str.lower):
+        group = by_repo[repo]
+        by_source = {pr["source"]: pr for pr in group if pr["source"]}
+        stacked_on: dict[str, list[dict]] = {}
+        for pr in group:
+            parent = by_source.get(pr["target"])
+            pr["after"] = parent["number"] if parent is not None and parent is not pr else ""
+            if pr["after"] and pr["waiting"].startswith("the PR into "):
+                pr["waiting"] = f"#{pr['after']} to merge first"
+            stacked_on.setdefault(pr["after"], []).append(pr)
+
+        def walk(number: str) -> None:
+            for pr in sorted(stacked_on.get(number, []), key=lambda p: int(p["number"] or 0)):
+                ordered.append(pr)
+                walk(pr["number"])
+
+        walk("")
+        placed = {id(pr) for pr in ordered}
+        ordered += [pr for pr in group if id(pr) not in placed]
+    return ordered
+
+
+FAILED = {"failed", "broken", "expired"}
+
+
+def details(url: str) -> None:
+    """JSON: each failed check of the PR, fetched now, with its failed steps and errors."""
+    pr = provider(normalize(url))
+    checks = pr.snapshot()["checks"]
+    failed = []
+    for name, check in checks.items():
+        if check["state"] not in FAILED:
+            continue
+        try:
+            errors = pr.errors(check) if check["state"] != "expired" else ["expired: queue it again"]
+        except WatchError as error:
+            errors = [f"could not read the errors: {error}"]
+        if not errors:
+            errors = ["no step details kept: see the build log"]
+        failed.append({"name": name, "state": check["state"], "link": check["link"], "errors": errors})
+    print(json.dumps({"url": normalize(url), "checks": failed}, ensure_ascii=False))
+
+
+def rerun(url: str, name: str) -> None:
+    pr = provider(normalize(url))
+    check = pr.snapshot()["checks"].get(name)
+    if check is None:
+        raise WatchError(f"no check named {name!r} on {url}")
+    pr.rerun(check)
+    print(f"relaunched {name}")
 
 
 def open_(url: str) -> None:
@@ -488,6 +687,10 @@ def main(argv: list[str]) -> int:
             status(live="--live" in args)
         elif command == "open" and args:
             open_(args[0])
+        elif command == "details" and args:
+            details(args[0])
+        elif command == "rerun" and len(args) >= 2:
+            rerun(args[0], " ".join(args[1:]))
         elif command == "remove" and args:
             remove(args[0])
         else:

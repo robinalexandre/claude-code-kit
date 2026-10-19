@@ -12,12 +12,14 @@ bash $SK/pr-watch.sh add <PR URL> [--note "<what it is, what it waits for>"]
 bash $SK/pr-watch.sh check            # what changed since the last check, then records it
 bash $SK/pr-watch.sh check --peek     # same, without recording (the next check reports it again)
 bash $SK/pr-watch.sh list
-bash $SK/pr-watch.sh status [--live]  # JSON with what each PR waits for (--live: fetched now, records nothing)
+bash $SK/pr-watch.sh status [--live]  # JSON per repo in merge order, with checks and what each PR waits for (--live: fetched now, records nothing)
 bash $SK/pr-watch.sh open <PR URL>    # in the default browser
+bash $SK/pr-watch.sh details <PR URL> # JSON: each failed check, its failed steps and error lines
+bash $SK/pr-watch.sh rerun <PR URL> <check name>  # relaunch it: only on the user's yes
 bash $SK/pr-watch.sh remove <PR URL>
 ```
 
-`check` prints one line per change (new status, new vote, new comment with an excerpt and its file, a CI check that changed state with its link), or `No change.`. A PR that is merged, completed, abandoned or closed is reported once, then dropped. Comments by the person checking are not reported. `list` shows each PR's status and CI summary.
+`check` prints one line per change (new status, new vote, new comment with an excerpt and its file, a CI check that changed state with its link), or `No change.`. A PR that is merged, completed, abandoned or closed is reported once, then moved to `done/`, where `status` lists it as `recent` for `PR_WATCH_KEEP_DAYS` (default 7) days. Comments by the person checking are not reported. `list` shows each PR's status and CI summary.
 
 **CI**: on Azure DevOps, the PR's build and status policies (what the target branch requires; a PR stacked on another feature branch often has none: `no CI`); on GitHub, the check runs and commit statuses of the head commit. The summary (`CI green`, `CI running`, `CI failed`) follows the required checks; a failed optional one is named apart (`optional failed: …`). An expired build (Azure DevOps, after a push to the target branch) counts as failed: it must be queued again.
 
@@ -50,7 +52,8 @@ Start the message with what changed, PR by PR.
 
 - **New comment**: read the whole thread (and the code it points at), say whether the reviewer is right, and propose the reply or the fix. Never post a reply, push a fix or resolve a thread without the user's yes.
 - **Bot comment** `(bot)`: read it; bring it up only if it points at a real problem, with the fix you propose.
-- **CI failed**: open the failing run (its link), read the failed step's errors (Azure DevOps: the build timeline's issues and logs, `az pipelines runs show` / the REST API; GitHub: `gh run view <id> --log-failed`), say why it failed and propose the fix. Expired: propose to queue it again. A failed optional check: mention it only if its findings matter.
+- **CI failed**: start from `details <PR URL>` (the failed steps and their error lines), open the failing run when it is not enough (Azure DevOps: the build logs through the REST API; GitHub: `gh run view <id> --log-failed`), say why it failed and propose the fix. Expired, or a flaky failure: propose `rerun`, and run it only on the user's yes (it starts a real build). A failed optional check: mention it only if its findings matter.
+- **Merge conflicts** (they block the merge whatever the votes and CI): list the conflicting files (`git fetch`, then `git merge-tree --write-tree --name-only origin/<target> origin/<source>`), and propose to rebase the branch onto its target and resolve them, in a temporary worktree when the branch is not checked out. Push only on the user's yes; a PR stacked on it may need rebasing after.
 - **CI green**: say so in one line, with what is left before the merge (votes, other policies).
 - **Vote** (approved, approved with suggestions, waiting for author, rejected; on GitHub approved or changes requested): say it, and what is left before the merge (other reviewers, CI, policies). A rejection or "waiting for author" comes with the reviewer's comments: read them and propose the changes.
 - **Vote reset or dismissed** (Azure DevOps can reset votes after a push; a GitHub review can be dismissed): say so, and that the reviewer has to approve again.

@@ -1,18 +1,55 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { PrRow, PrSnapshot } from '../types'
+import type { CiCheck, PrRow, PrSnapshot, RecentPr } from '../types'
 
 const PANE = 'tracked-prs'
 const TITLE = 'Tracked PRs'
 const COMMAND = 'prs'
 const LIVE_TIMEOUT_MS = 180_000
 const RELOAD_EVERY_MS = 5 * 60_000
-const NEEDS_US = new Set(['a CI fix', 'changes from us', 'CI to be queued again'])
+const WHILE_RUNNING_EVERY_MS = 60_000
+const NEEDS_US = new Set(['a conflict fix', 'a CI fix', 'changes from us', 'CI to be queued again'])
+const ENDED = new Set(['passed', 'failed', 'broken', 'expired', 'skipped'])
+const CHECK_MARKS: Record<string, { mark: string; color: string }> = {
+  passed: { mark: '✓', color: 'green' },
+  failed: { mark: '✗', color: 'red' },
+  broken: { mark: '✗', color: 'red' },
+  expired: { mark: '⟳', color: 'red' },
+  skipped: { mark: '–', color: 'gray' },
+}
 
 const snapshot = atom({ plugin: 'pr-pane', key: 'snapshot' } as const, null)
 const isRefreshing = atom({ plugin: 'pr-pane', key: 'isRefreshing' } as const, false)
 const problem = atom({ plugin: 'pr-pane', key: 'problem' } as const, '')
+const ciToggled = atom({ plugin: 'pr-pane', key: 'ciToggled' } as const, {})
+const details = atom({ plugin: 'pr-pane', key: 'details' } as const, {})
+const armed = atom({ plugin: 'pr-pane', key: 'armed' } as const, '')
+const isRecentOpen = atom({ plugin: 'pr-pane', key: 'isRecentOpen' } as const, true)
+
+const FAILED = new Set(['failed', 'broken', 'expired'])
+const RECENT_SHOWN = 8
+const AFTER_RERUN_MS = 5_000
+
+const isRunning = (checks: CiCheck[]) => checks.some(check => !ENDED.has(check.state))
+
+const hasRequiredFailure = (checks: CiCheck[]) =>
+  checks.some(check => FAILED.has(check.state) && check.required !== false)
+
+const checkKey =(url: string, name: string) => `${url}|${name}`
+
+const endedText = (ended: string, nowMs: number) => {
+  const at = new Date(ended.replace(/Z$/, ':00Z'))
+
+  if (Number.isNaN(at.getTime())) {
+    return ''
+  }
+
+  const time = clockTime(at.getTime())
+  const isToday = new Date(nowMs).toDateString() === at.toDateString()
+
+  return isToday ? `today ${time}` : `${at.getDate()}/${at.getMonth() + 1} ${time}`
+}
 
 const truncate = (text: string, width: number) =>
   text.length > width ? `${text.slice(0, Math.max(0, width - 1))}…` : text
@@ -26,11 +63,56 @@ const clockTime = (milliseconds: number) => {
 const script = async ($: EngineInterface) => {
   const home = (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE')) ?? '~'
 
-  return `${home.replace(/\\/g, '/')}/.claude/skills/pr-watch/pr-watch.sh`
+  return `${slashed(home)}/.claude/skills/pr-watch/pr-watch.sh`
+}
+
+const runs = async ($: EngineInterface, argv: string[]) => {
+  try {
+    return (await $.process.run(argv, { timeoutMs: 10_000 })).exitCode === 0
+  } catch {
+    return false
+  }
+}
+
+const slashed = (path: string) => path.replace(/\\/g, '/')
+
+// On Windows, Claude Code's own PATH has Git's cmd folder (git) but not bash: Git Bash is found
+// from the variable Claude Code reads for it, then from git's own install folder.
+let bashFound: string | undefined
+
+const bash = async ($: EngineInterface) => {
+  if (bashFound !== undefined) {
+    return bashFound
+  }
+
+  const fromGit = async () => {
+    const execPath = await $.process.run(['git', '--exec-path'], { timeoutMs: 10_000 }).catch(() => undefined)
+    const root = slashed(execPath?.stdout.trim() ?? '').replace(/\/(mingw64|clangarm64|mingw32)\/.*$/, '')
+
+    return execPath?.exitCode === 0 && root !== '' ? `${root}/bin/bash.exe` : ''
+  }
+  const candidates = [
+    async () => slashed((await $.env.get('CLAUDE_CODE_GIT_BASH_PATH')) ?? ''),
+    async () => 'bash',
+    fromGit,
+    async () => `${slashed((await $.env.get('ProgramFiles')) ?? 'C:/Program Files')}/Git/bin/bash.exe`,
+  ]
+
+  for (const candidate of candidates) {
+    const path = await candidate()
+
+    if (path !== '' && (await runs($, [path, '-c', 'exit 0']))) {
+      bashFound = path
+
+      return path
+    }
+  }
+
+  throw new Error('Git Bash not found: set CLAUDE_CODE_GIT_BASH_PATH to bash.exe')
 }
 
 const prWatch = async ($: EngineInterface, args: string[], timeoutMs = 30_000) =>
-  $.process.run(['bash', await script($), ...args], { timeoutMs })
+  $.process.run([await bash($), await script($), ...args], { timeoutMs })
 
 const load = async ($: EngineInterface, isLive: boolean) => {
   if (isLive) {
@@ -59,11 +141,98 @@ const load = async ($: EngineInterface, isLive: boolean) => {
   }
 }
 
+let whileRunning: { cancel: () => void } | undefined
+
+// While a PR's CI runs and the pane is open, it is fetched live again every minute until it ends.
 const refresh = async ($: EngineInterface) => {
-  if (!(await read($, isRefreshing))) {
-    await load($, true)
+  if (await read($, isRefreshing)) {
+    return
+  }
+
+  await load($, true)
+  whileRunning?.cancel()
+  whileRunning = undefined
+  const prs = (await read($, snapshot))?.prs ?? []
+
+  if (prs.some(pr => isRunning(pr.checks ?? []))) {
+    whileRunning = $.clock.after(WHILE_RUNNING_EVERY_MS, () => void refreshIfShown($))
   }
 }
+
+const refreshIfShown = async ($: EngineInterface) => {
+  const panes = await $.ui.panes().catch(() => [{ id: PANE }])
+
+  if (panes.some(pane => pane.id === PANE)) {
+    await refresh($)
+  }
+}
+
+const toggleDetails = async ($: EngineInterface, url: string, name: string) => {
+  const key = checkKey(url, name)
+
+  if ((await read($, details))[key] !== undefined) {
+    await update($, details, shown => Object.fromEntries(Object.entries(shown).filter(([one]) => one !== key)))
+
+    return
+  }
+
+  await update($, details, shown => ({ ...shown, [key]: { isLoading: true, lines: [] } }))
+  const lines = await prWatch($, ['details', url], 120_000)
+    .then(ran => {
+      if (ran.exitCode !== 0) {
+        return [ran.stderr.trim() || `pr-watch exited with ${ran.exitCode}`]
+      }
+
+      const found = (JSON.parse(ran.stdout) as { checks: { name: string; errors: string[] }[] }).checks
+      const check = found.find(one => one.name === name)
+
+      return check?.errors ?? ['it no longer fails']
+    })
+    .catch(error => [`pr-watch did not run: ${String(error)}`])
+  await update($, details, shown => ({ ...shown, [key]: { isLoading: false, lines } }))
+}
+
+const rerunCheck = async ($: EngineInterface, url: string, name: string) => {
+  const key = checkKey(url, name)
+
+  if ((await read($, armed)) !== key) {
+    await update($, armed, () => key)
+
+    return
+  }
+
+  await update($, armed, () => '')
+  const ran = await prWatch($, ['rerun', url, name], 60_000).catch(error => ({
+    exitCode: 1,
+    stdout: '',
+    stderr: String(error),
+  }))
+
+  if (ran.exitCode !== 0) {
+    $.ui.toast(`Could not relaunch ${name}: ${ran.stderr.trim().split('\n')[0]}`)
+
+    return
+  }
+
+  $.ui.toast(`Relaunched ${name}`)
+  $.clock.after(AFTER_RERUN_MS, () => void refresh($))
+}
+
+const askConflictFix = async ($: EngineInterface, pr: PrRow) => {
+  const branch = pr.source ? `\`${pr.source}\`` : 'its branch'
+  const target = pr.target ? `\`${pr.target}\`` : 'its target branch'
+  await $.prompt.submit({
+    asUser: true,
+    text:
+      `${pr.repo} #${pr.number} (${pr.url}) has merge conflicts. Rebase ${branch} onto ${target} and fix the ` +
+      'conflicts: use a temporary worktree if the branch is not checked out, keep what the PR changes, run the ' +
+      "tests, then show me the resolution and ask before pushing. Follow the repo's PR rules.",
+  })
+  $.ui.toast(`Asked Claude to fix the conflicts of #${pr.number}`)
+}
+
+const toggleCi = ($: EngineInterface, url: string, isOpen: boolean) =>
+  update($, ciToggled, toggled => ({ ...toggled, [url]: !isOpen }))
 
 const openPr = async ($: EngineInterface, url: string) => {
   const ran = await prWatch($, ['open', url]).catch(error => ({ exitCode: 1, stderr: String(error) }))
@@ -91,7 +260,18 @@ const waitingColor = (waiting: string) => {
   return 'yellow'
 }
 
-const votesText = (votes: Record<string, string>) =>
+// pr-watch lists the PRs grouped by repo, each in merge order: the groups keep that order.
+const byRepo = (prs: PrRow[]) => {
+  const groups = new Map<string, PrRow[]>()
+
+  for (const pr of prs) {
+    groups.set(pr.repo, [...(groups.get(pr.repo) ?? []), pr])
+  }
+
+  return [...groups.entries()]
+}
+
+const votesText =(votes: Record<string, string>) =>
   Object.entries(votes)
     .map(([reviewer, vote]) => `${reviewer.split(' ')[0]} ${vote}`)
     .join(', ')
@@ -129,13 +309,14 @@ export const register: Register = on => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const beneath = await next(e)
     const prs = (await read($, snapshot))?.prs ?? []
+    const isBroken = (await read($, problem)) !== ''
 
-    if (e.props.hasSurvey || e.props.view.agentId !== undefined || prs.length === 0) {
+    if (e.props.hasSurvey || e.props.view.agentId !== undefined || (prs.length === 0 && !isBroken)) {
       return beneath
     }
 
     const { Box, Button } = $.ui.resolve(e)
-    const needsUs = prs.some(pr => NEEDS_US.has(pr.waiting))
+    const needsUs = isBroken || prs.some(pr => NEEDS_US.has(pr.waiting))
 
     return (
       <Box flexDirection="row" justifyContent="space-between" alignItems="flex-start">
@@ -144,7 +325,7 @@ export const register: Register = on => {
         </Box>
         <Button
           key="prs"
-          label={`PRs ${prs.length}${needsUs ? ' !' : ''}`}
+          label={isBroken ? 'PRs ?' : `PRs ${prs.length}${needsUs ? ' !' : ''}`}
           variant={needsUs ? 'primary' : undefined}
           dimColor={!needsUs}
           onPress={() => void openPane($)}
@@ -164,6 +345,12 @@ export const register: Register = on => {
     const shown = await read($, snapshot)
     const busy = await read($, isRefreshing)
     const trouble = await read($, problem)
+    const toggled = await read($, ciToggled)
+    const allDetails = await read($, details)
+    const armedKey = await read($, armed)
+    const recent: RecentPr[] = (shown?.recent ?? []).slice(0, RECENT_SHOWN)
+    const isRecentShown = await read($, isRecentOpen)
+    const nowMs = await $.clock.now()
     const width = Math.max(20, e.props.bodyColumns - 2)
     const prs = shown?.prs ?? []
     const summary =
@@ -183,32 +370,148 @@ export const register: Register = on => {
             onPress={() => void refresh($)}
           />
         </Box>
-        {trouble !== '' && <Text color="red">{truncate(trouble, width)}</Text>}
+        {trouble !== '' && <Text color="red">{trouble}</Text>}
         {shown?.errors.map(line => (
-          <Text color="red">{truncate(line, width)}</Text>
+          <Text color="red">{line}</Text>
         ))}
         {shown !== null && prs.length === 0 && <Text dimColor>No PR tracked. Ask Claude to watch one.</Text>}
-        {prs.map(pr => (
-          <Box key={`pr-${pr.repo}-${pr.number}`} flexDirection="column" marginTop={1}>
-            <Box flexDirection="row" justifyContent="space-between">
-              <Text bold>
-                <Link href={pr.url} label={truncate(`${pr.repo} #${pr.number}`, width - 8)} />
+        {byRepo(prs).map(([repo, rows]) => {
+          const isStacked = rows.some(pr => (pr.after ?? '') !== '')
+          const inner = width - 2
+
+          return (
+            <Box key={`repo-${repo}`} flexDirection="column" marginTop={1}>
+              <Text>
+                <Text bold>{truncate(repo, width - 20)}</Text>
+                {isStacked && <Text dimColor> · merge top to bottom</Text>}
               </Text>
-              <Button key={`open-${pr.repo}-${pr.number}`} label="open" dimColor onPress={() => void openPr($, pr.url)} />
+              {rows.map((pr, index) => (
+                <Box key={`pr-${repo}-${pr.number}`} flexDirection="column" paddingLeft={2}>
+                  <Box flexDirection="row" justifyContent="space-between">
+                    <Text bold>
+                      {isStacked ? `${index + 1}. ` : ''}
+                      <Link href={pr.url} label={`#${pr.number}`} />
+                      <Text> {truncate(pr.title, inner - pr.number.length - 14)}</Text>
+                    </Text>
+                    <Button key={`open-${repo}-${pr.number}`} label="open" dimColor onPress={() => void openPr($, pr.url)} />
+                  </Box>
+                  <Text>
+                    <Text dimColor>waits for </Text>
+                    <Text color={waitingColor(pr.waiting)}>{pr.waiting}</Text>
+                  </Text>
+                  {pr.conflicts === true && (
+                    <Box flexDirection="row" justifyContent="space-between">
+                      <Text color="red" bold>
+                        ⚠ merge conflicts with {pr.target || 'the target branch'}
+                      </Text>
+                      <Button
+                        key={`fix-${repo}-${pr.number}`}
+                        label="fix with Claude"
+                        variant="primary"
+                        onPress={() => void askConflictFix($, pr)}
+                      />
+                    </Box>
+                  )}
+                  <Text dimColor>
+                    {truncate([pr.status, pr.ci, votesText(pr.votes), pr.note].filter(part => part !== '').join(' · '), inner)}
+                  </Text>
+                  {(pr.checks ?? []).length > 0 && (() => {
+                    const checks = pr.checks ?? []
+                    const isOpen = toggled[pr.url] ?? (isRunning(checks) || hasRequiredFailure(checks))
+                    const passed = checks.filter(check => check.state === 'passed').length
+
+                    return (
+                      <Box flexDirection="column">
+                        <Button
+                          key={`ci-${repo}-${pr.number}`}
+                          label={`${isOpen ? '▾' : '▸'} CI ${passed}/${checks.length}${isRunning(checks) ? ' running' : ''}`}
+                          plain
+                          dimColor
+                          onPress={() => void toggleCi($, pr.url, isOpen)}
+                        />
+                        {isOpen &&
+                          checks.map(check => {
+                            const { mark, color } = CHECK_MARKS[check.state] ?? { mark: '◌', color: 'yellow' }
+                            const name = truncate(check.name, inner - 24)
+                            const key = checkKey(pr.url, check.name)
+                            const shownDetails = allDetails[key]
+                            const id = `${repo}-${pr.number}-${check.name}`
+
+                            return (
+                              <Box key={`check-${id}`} flexDirection="column">
+                                <Text>
+                                  <Text color={color}>  {mark} </Text>
+                                  {check.link === null ? name : <Link href={check.link} label={name} />}
+                                  <Text dimColor>
+                                    {' '}
+                                    {check.state}
+                                    {check.required === false ? ' · optional' : ''}
+                                  </Text>
+                                </Text>
+                                {FAILED.has(check.state) && (
+                                  <Box flexDirection="row" paddingLeft={4}>
+                                    <Button
+                                      key={`details-${id}`}
+                                      label={shownDetails === undefined ? 'details' : 'hide'}
+                                      dimColor
+                                      onPress={() => void toggleDetails($, pr.url, check.name)}
+                                    />
+                                    <Text> </Text>
+                                    <Button
+                                      key={`rerun-${id}`}
+                                      label={armedKey === key ? 'press again to relaunch' : 'rerun'}
+                                      variant={armedKey === key ? 'primary' : undefined}
+                                      dimColor={armedKey !== key}
+                                      onPress={() => void rerunCheck($, pr.url, check.name)}
+                                    />
+                                  </Box>
+                                )}
+                                {shownDetails !== undefined && (
+                                  <Box flexDirection="column" paddingLeft={4}>
+                                    {shownDetails.isLoading && <Text dimColor>Reading the build…</Text>}
+                                    {shownDetails.lines.map(line => (
+                                      <Text color={line.startsWith(' ') ? undefined : 'red'} dimColor={line.startsWith(' ')}>
+                                        {line}
+                                      </Text>
+                                    ))}
+                                  </Box>
+                                )}
+                              </Box>
+                            )
+                          })}
+                      </Box>
+                    )
+                  })()}
+                  {pr.changes.map(change => (
+                    <Text color="cyan">{truncate(`• ${change}`, inner)}</Text>
+                  ))}
+                </Box>
+              ))}
             </Box>
-            <Text>{truncate(pr.title, width)}</Text>
-            <Text>
-              <Text dimColor>waits for </Text>
-              <Text color={waitingColor(pr.waiting)}>{pr.waiting}</Text>
-            </Text>
-            <Text dimColor>
-              {truncate([pr.status, pr.ci, votesText(pr.votes), pr.note].filter(part => part !== '').join(' · '), width)}
-            </Text>
-            {pr.changes.map(change => (
-              <Text color="cyan">{truncate(`• ${change}`, width)}</Text>
-            ))}
+          )
+        })}
+        {recent.length > 0 && (
+          <Box flexDirection="column" marginTop={1}>
+            <Button
+              key="recent"
+              label={`${isRecentShown ? '▾' : '▸'} Recently merged or closed (${recent.length})`}
+              plain
+              onPress={() => void update($, isRecentOpen, isShown => !isShown)}
+            />
+            {isRecentShown &&
+              recent.map(pr => (
+                <Text key={`recent-${pr.repo}-${pr.number}`}>
+                  <Text color={pr.status === 'merged' || pr.status === 'completed' ? 'green' : 'gray'}>  ✓ </Text>
+                  <Link href={pr.url} label={`${pr.repo} #${pr.number}`} />
+                  <Text dimColor>
+                    {' '}
+                    {pr.status} {endedText(pr.ended, nowMs)}
+                  </Text>
+                  <Text> {truncate(pr.title, Math.max(10, width - pr.repo.length - 34))}</Text>
+                </Text>
+              ))}
           </Box>
-        ))}
+        )}
       </Box>
     )
   })
