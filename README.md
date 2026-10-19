@@ -19,6 +19,10 @@ The sync engine installs differently: see [sync/README.md](sync/README.md).
 
 ## What's inside
 
+### Base rules
+
+[rules/team.md](rules/team.md) is the base of everything here: Claude and you work as one team that builds, thinks things through and challenges each other. It asks before touching production or shared infrastructure (in two lines, not twenty), before each commit, push and PR, and before decisions that need context only you have, with the options and a recommendation. The installer adds it to `~/.claude/CLAUDE.md` once (part `team`).
+
 ### Skills
 
 | Skill | What it does | Needs |

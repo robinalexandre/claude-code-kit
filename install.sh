@@ -22,7 +22,8 @@ case "$(uname -s)" in
     ;;
 esac
 
-PARTS="insta360-reel:skill:Instagram Reels from raw Insta360 footage (ffmpeg, python3)
+PARTS="team:rules:Base rules added to ~/.claude/CLAUDE.md (one team; ask before production, commits, pushes, PRs and decisions that need your context)
+insta360-reel:skill:Instagram Reels from raw Insta360 footage (ffmpeg, python3)
 instagram-reel:skill:Instagram Reels from a folder of phone clips (ffmpeg; saving to Photos needs macOS)
 test-evidence:skill:Screenshots, video and network proof of a ticket, attached to Jira or the PR (chrome-devtools MCP, jq, perl; video needs ffmpeg)
 handoff:skill:Handoff notes between computers (needs the sync engine in sync/)
@@ -130,6 +131,15 @@ for p in $picked; do
       esac
       ;;
     statusline) put statusline-command.sh statusline-command.sh && fragments+=("$KIT/settings/statusline.json") ;;
+    rules)
+      heading=$(grep -m1 '^## ' "$KIT/rules/$p.md")
+      if grep -qxF -- "$heading" "$CLAUDE/CLAUDE.md" 2> /dev/null; then
+        echo "~/.claude/CLAUDE.md already has \"$heading\"; left as is."
+      else
+        [ -f "$CLAUDE/CLAUDE.md" ] && cp -p "$CLAUDE/CLAUDE.md" "$BACKUP/CLAUDE.md"
+        cat "$KIT/rules/$p.md" >> "$CLAUDE/CLAUDE.md"
+      fi
+      ;;
   esac
   case "$p" in wave-check | wave-check-hook) marker_wanted=1 ;; esac
   echo "Installed $p"
@@ -147,7 +157,7 @@ if [ -n "$marker_wanted" ] && [ -z "$marker" ]; then
   if [ -z "$marker" ]; then
     echo "No emoji given: wave-check stays idle until you set CLAUDE_REPLY_MARKER in $SETTINGS (env)."
   elif ask "Add \"Start every message with $marker\" to ~/.claude/CLAUDE.md? wave-check relies on that rule."; then
-    [ -f "$CLAUDE/CLAUDE.md" ] && cp -p "$CLAUDE/CLAUDE.md" "$BACKUP/CLAUDE.md"
+    [ -f "$CLAUDE/CLAUDE.md" ] && [ ! -f "$BACKUP/CLAUDE.md" ] && cp -p "$CLAUDE/CLAUDE.md" "$BACKUP/CLAUDE.md"
     printf '\n- **Start every message with %s.** That includes one-line replies, questions back\n  to me, error reports, and the message after a long run of tool calls.\n' "$marker" >> "$CLAUDE/CLAUDE.md"
   fi
 fi
