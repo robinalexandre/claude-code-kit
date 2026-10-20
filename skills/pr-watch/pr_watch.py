@@ -9,12 +9,17 @@
     pr_watch.py open URL                open a PR in the default browser
     pr_watch.py details URL             JSON: the PR's failed checks with their failed steps and errors
     pr_watch.py rerun URL CHECK         relaunch a check (Azure DevOps: re-queue; GitHub: rerun failed jobs)
+    pr_watch.py approve URL             approve a PR (Azure DevOps: vote approved; GitHub: an approving review)
     pr_watch.py remove URL              stop tracking a PR
 
 Tracked PRs live in $PR_WATCH_DIR (default ~/.claude-sync/pr-watch), one JSON file per PR, so the
 config sync carries them to every computer. A merged, abandoned or closed PR is reported once, then
 dropped. Supported: Azure DevOps (az login or AZURE_DEVOPS_PAT) and GitHub (GITHUB_TOKEN, gh, or
 anonymous for public repos).
+
+`check` and `status --live` also look up the open PRs waiting for the user's review (GitHub with a
+token; the Azure DevOps organizations of the tracked PRs and of `azureOrgs` in config.json): a new
+one is reported, and `status` lists them as `reviews` from the last check.
 """
 
 from __future__ import annotations
@@ -29,16 +34,20 @@ import subprocess
 import sys
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 import webbrowser
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
+from typing import Callable
 
 
 WATCH_DIR = Path(os.environ.get("PR_WATCH_DIR", Path.home() / ".claude-sync" / "pr-watch"))
 CONFIG = WATCH_DIR / "config.json"
+REVIEWS = WATCH_DIR / "reviews.json"
 DONE_DIR = WATCH_DIR / "done"
 KEEP_DAYS = float(os.environ.get("PR_WATCH_KEEP_DAYS", "7"))
 ADO_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"
@@ -85,8 +94,11 @@ def log_tail(text: str, count: int = 6) -> list[str]:
     return picked[-count:]
 
 
-def _http_json(url: str, headers: dict[str, str], method: str = "GET") -> object:
-    data = b"" if method != "GET" else None
+def _http_json(url: str, headers: dict[str, str], method: str = "GET", body: object = None) -> object:
+    if body is not None:
+        data: bytes | None = json.dumps(body).encode("utf-8")
+    else:
+        data = b"" if method != "GET" else None
     extra = {"Content-Type": "application/json"} if data is not None else {}
     request = urllib.request.Request(url, data=data, method=method,
                                      headers={"Accept": "application/json", **extra, **headers})
@@ -228,6 +240,11 @@ class AzureDevOps:
         _http_json(f"{self.base}/policy/evaluations/{check['evaluation']}?api-version=7.1-preview.1",
                    self.headers(), method="PATCH")
 
+    def approve(self) -> None:
+        """Votes approved as the person checking (adds them as a reviewer if they are not one)."""
+        _http_json(f"{self.base}/git/repositories/{self.repo}/pullrequests/{self.id}/reviewers/{self.me()}"
+                   "?api-version=7.1", self.headers(), method="PUT", body={"vote": 10})
+
     def _definition_name(self, definition_id: int | None) -> str:
         if definition_id is None:
             return ""
@@ -242,11 +259,72 @@ def _ado_vote(vote: int) -> str:
     )
 
 
+def ado_review_requests(org: str) -> list[dict]:
+    """The organization's active PRs on which the person checking is a reviewer who has not voted."""
+    headers = _ado_headers()
+    me = _http_json(f"https://dev.azure.com/{org}/_apis/connectionData", headers)["authenticatedUser"]["id"]  # type: ignore[index]
+    found = _http_json(f"https://dev.azure.com/{org}/_apis/git/pullrequests?searchCriteria.reviewerId={me}"
+                       "&searchCriteria.status=active&$top=100&api-version=7.1", headers)["value"]  # type: ignore[index]
+    rows = []
+    for pr in found:
+        mine = next((r for r in pr.get("reviewers", []) if r["id"] == me), None)
+        if mine is None or mine.get("vote") or pr.get("isDraft") or pr["createdBy"]["id"] == me:
+            continue
+        project, repo = pr["repository"]["project"]["name"], pr["repository"]["name"]
+        rows.append({
+            "url": f"https://dev.azure.com/{org}/{urllib.parse.quote(project)}/_git/{urllib.parse.quote(repo)}"
+                   f"/pullrequest/{pr['pullRequestId']}",
+            "repo": repo,
+            "number": str(pr["pullRequestId"]),
+            "title": pr["title"],
+            "author": pr["createdBy"]["displayName"],
+            "updated": _stamp(pr.get("creationDate", "")),
+        })
+    return rows
+
+
+def _github_token() -> str:
+    return os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or _run("gh", "auth", "token")
+
+
+def github_review_requests() -> list[dict]:
+    """The open, non-draft PRs whose review is requested from the person checking (none anonymously)."""
+    token = _github_token()
+    if not token:
+        return []
+    headers = {"Authorization": f"Bearer {token}", "X-GitHub-Api-Version": "2022-11-28"}
+    query = urllib.parse.quote("is:pr is:open draft:false review-requested:@me")
+    found = _http_json(f"https://api.github.com/search/issues?q={query}&sort=updated&per_page=50", headers)
+    rows = []
+    for item in found.get("items", []):  # type: ignore[union-attr]
+        match = GITHUB_URL.match(item["html_url"])
+        if match is None:
+            continue
+        rows.append({
+            "url": item["html_url"],
+            "repo": match["repo"],
+            "number": match["id"],
+            "title": item["title"],
+            "author": item["user"]["login"],
+            "updated": _stamp(item.get("updated_at", "")),
+        })
+    return rows
+
+
+def _stamp(iso: str) -> str:
+    """An ISO date from either host as `_now` writes them (minutes, UTC)."""
+    try:
+        at = datetime.fromisoformat(re.sub(r"\.\d+", "", iso).replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    return at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
+
+
 class GitHub:
     def __init__(self, match: re.Match[str]) -> None:
         self.base = f"https://api.github.com/repos/{match['owner']}/{match['repo']}"
         self.id = match["id"]
-        token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or _run("gh", "auth", "token")
+        token = _github_token()
         self.headers = {"Authorization": f"Bearer {token}"} if token else {}
 
     def get(self, path: str) -> object:
@@ -317,9 +395,13 @@ class GitHub:
         else:
             raise WatchError("a commit status is set by an outside service: rerun it there")
 
+    def approve(self) -> None:
+        """Submits an approving review with no body."""
+        _http_json(f"{self.base}/pulls/{self.id}/reviews", self.post_headers(), method="POST", body={"event": "APPROVE"})
+
     def post_headers(self) -> dict[str, str]:
         if not self.headers:
-            raise WatchError("GitHub: rerunning needs GITHUB_TOKEN or `gh auth login`")
+            raise WatchError("GitHub: writing needs GITHUB_TOKEN or `gh auth login`")
         return {"X-GitHub-Api-Version": "2022-11-28", **self.headers}
 
 
@@ -353,7 +435,41 @@ def entry_path(url: str) -> Path:
 
 def load_entries() -> list[tuple[Path, dict]]:
     return [(path, json.loads(path.read_text(encoding="utf-8")))
-            for path in sorted(WATCH_DIR.glob("*.json")) if path != CONFIG]
+            for path in sorted(WATCH_DIR.glob("*.json")) if path not in (CONFIG, REVIEWS)]
+
+
+def cached_reviews() -> list[dict]:
+    """The review requests found by the last check."""
+    if not REVIEWS.exists():
+        return []
+    return json.loads(REVIEWS.read_text(encoding="utf-8")).get("reviews", [])
+
+
+def fetch_review_requests(entries: list[tuple[Path, dict]]) -> tuple[list[dict], list[str]]:
+    """Open PRs waiting for the user's review, newest first: (rows, errors).
+
+    GitHub needs a token; Azure DevOps is asked per organization, those of the tracked PRs plus
+    `azureOrgs` in config.json.
+    """
+    orgs = config("azureOrgs")
+    for _, entry in entries:
+        if match := ADO_URL.match(entry["url"]):
+            orgs.add(match["org"] or match["org2"])
+    jobs: list[Callable[[], list[dict]]] = [github_review_requests]
+    jobs += [partial(ado_review_requests, org) for org in sorted(orgs)]
+
+    def one(job: Callable[[], list[dict]]) -> tuple[list[dict], str]:
+        try:
+            return job(), ""
+        except WatchError as error:
+            return [], f"review requests: {error}"
+        except (KeyError, TypeError) as error:
+            return [], f"review requests: unexpected answer ({error!r})"
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(one, jobs))
+    rows = sorted((row for found, _ in results for row in found), key=lambda row: row["updated"], reverse=True)
+    return rows, [error for _, error in results if error]
 
 
 def done_entries() -> list[dict]:
@@ -490,7 +606,8 @@ def check(peek: bool) -> None:
     Comments by the person checking are left out.
     """
     ignore, bots, report, errors = config("ignoreAuthors"), config("bots"), [], []
-    for path, entry, now, me, error in fetch_all(load_entries()):
+    entries = load_entries()
+    for path, entry, now, me, error in fetch_all(entries):
         if now is None:
             errors.append(f"{entry['url']}: {error}")
             continue
@@ -503,7 +620,14 @@ def check(peek: bool) -> None:
             report.append(f"{label(entry)}: {now['status']}, no longer tracked")
         else:
             save(path, {**entry, "checked": _now(), "seen": now})
+    reviews, review_errors = fetch_review_requests(entries)
+    known = {row["url"] for row in cached_reviews()}
+    report += [f"{row['repo']} #{row['number']} ({row['title']}): {row['author']} asks for your review"
+               for row in reviews if row["url"] not in known]
+    errors += review_errors
     if not peek:
+        # Saved even when a host failed: its requests are reported again once it answers.
+        save(REVIEWS, {"checked": _now(), "reviews": reviews})
         prune_done()
     print("\n".join(report) if report else "No change.")
     if errors:
@@ -552,7 +676,8 @@ def status(live: bool) -> None:
     """JSON for a pane or a script; `live` fetches every PR now but records nothing."""
     entries = load_entries()
     fetched = fetch_all(entries) if live else [(p, e, None, "", "") for p, e in entries]
-    ignore, bots, prs, errors = config("ignoreAuthors"), config("bots"), [], []
+    reviews, errors = fetch_review_requests(entries) if live else (cached_reviews(), [])
+    ignore, bots, prs = config("ignoreAuthors"), config("bots"), []
     for _, entry, now, me, error in fetched:
         if error:
             errors.append(f"{entry['url']}: {error}")
@@ -590,7 +715,8 @@ def status(live: bool) -> None:
             "target": entry["seen"].get("target", ""),
             "ended": entry.get("ended", ""),
         })
-    print(json.dumps({"live": live, "prs": merge_order(prs), "recent": recent, "errors": errors}, ensure_ascii=False))
+    print(json.dumps({"live": live, "prs": merge_order(prs), "reviews": reviews, "recent": recent, "errors": errors},
+                     ensure_ascii=False))
 
 
 def merge_order(prs: list[dict]) -> list[dict]:
@@ -654,6 +780,15 @@ def rerun(url: str, name: str) -> None:
     print(f"relaunched {name}")
 
 
+def approve(url: str) -> None:
+    pr = provider(normalize(url))
+    pr.approve()
+    reviews = [row for row in cached_reviews() if row["url"] != normalize(url)]
+    if REVIEWS.exists():
+        save(REVIEWS, {**json.loads(REVIEWS.read_text(encoding="utf-8")), "reviews": reviews})
+    print(f"approved {normalize(url)}")
+
+
 def open_(url: str) -> None:
     if not (ADO_URL.match(url) or GITHUB_URL.match(url)):
         raise WatchError(f"unsupported PR URL (Azure DevOps or GitHub): {url}")
@@ -691,6 +826,8 @@ def main(argv: list[str]) -> int:
             details(args[0])
         elif command == "rerun" and len(args) >= 2:
             rerun(args[0], " ".join(args[1:]))
+        elif command == "approve" and args:
+            approve(args[0])
         elif command == "remove" and args:
             remove(args[0])
         else:

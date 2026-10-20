@@ -16,10 +16,13 @@ bash $SK/pr-watch.sh status [--live]  # JSON per repo in merge order, with check
 bash $SK/pr-watch.sh open <PR URL>    # in the default browser
 bash $SK/pr-watch.sh details <PR URL> # JSON: each failed check, its failed steps and error lines
 bash $SK/pr-watch.sh rerun <PR URL> <check name>  # relaunch it: only on the user's yes
+bash $SK/pr-watch.sh approve <PR URL> # vote approved (Azure DevOps) or submit an approving review (GitHub): only on the user's yes
 bash $SK/pr-watch.sh remove <PR URL>
 ```
 
 `check` prints one line per change (new status, new vote, new comment with an excerpt and its file, a CI check that changed state with its link), or `No change.`. A PR that is merged, completed, abandoned or closed is reported once, then moved to `done/`, where `status` lists it as `recent` for `PR_WATCH_KEEP_DAYS` (default 7) days. Comments by the person checking are not reported. `list` shows each PR's status and CI summary.
+
+**Review requests**: `check` and `status --live` also look up the open PRs waiting for the user's review (not drafts, not their own): on GitHub with a token (`review-requested:@me`), on Azure DevOps in the organizations of the tracked and recent PRs plus `azureOrgs` in `config.json` (reviewer with no vote yet). `check` reports each new one (`<repo> #<n> (<title>): <author> asks for your review`) and keeps the list in `reviews.json`; `status` lists it as `reviews`. When one is reported, offer a quick review (a subagent reading the diff, nothing posted) and, on the user's yes, `approve`.
 
 **CI**: on Azure DevOps, the PR's build and status policies (what the target branch requires; a PR stacked on another feature branch often has none: `no CI`); on GitHub, the check runs and commit statuses of the head commit. The summary (`CI green`, `CI running`, `CI failed`) follows the required checks; a failed optional one is named apart (`optional failed: …`). An expired build (Azure DevOps, after a push to the target branch) counts as failed: it must be queued again.
 
