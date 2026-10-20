@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { CiCheck, PrRow, PrSnapshot, RecentPr } from '../types'
+import type { CiCheck, PrRow, PrSnapshot, RecentPr, ReviewPr } from '../types'
 
 const PANE = 'tracked-prs'
 const TITLE = 'Tracked PRs'
@@ -26,6 +26,7 @@ const ciToggled = atom({ plugin: 'pr-pane', key: 'ciToggled' } as const, {})
 const details = atom({ plugin: 'pr-pane', key: 'details' } as const, {})
 const armed = atom({ plugin: 'pr-pane', key: 'armed' } as const, '')
 const isRecentOpen = atom({ plugin: 'pr-pane', key: 'isRecentOpen' } as const, true)
+const openRepos = atom({ plugin: 'pr-pane', key: 'openRepos' } as const, {})
 
 const FAILED = new Set(['failed', 'broken', 'expired'])
 const RECENT_SHOWN = 8
@@ -38,8 +39,10 @@ const hasRequiredFailure = (checks: CiCheck[]) =>
 
 const checkKey =(url: string, name: string) => `${url}|${name}`
 
+const endedMs = (ended: string) => new Date(ended.replace(/Z$/, ':00Z')).getTime()
+
 const endedText = (ended: string, nowMs: number) => {
-  const at = new Date(ended.replace(/Z$/, ':00Z'))
+  const at = new Date(endedMs(ended))
 
   if (Number.isNaN(at.getTime())) {
     return ''
@@ -231,6 +234,47 @@ const askConflictFix = async ($: EngineInterface, pr: PrRow) => {
   $.ui.toast(`Asked Claude to fix the conflicts of #${pr.number}`)
 }
 
+const approveKey = (url: string) => `approve|${url}`
+
+// Approving is public and hard to undo: the first press arms the button, the second approves.
+const approvePr = async ($: EngineInterface, pr: ReviewPr) => {
+  const key = approveKey(pr.url)
+
+  if ((await read($, armed)) !== key) {
+    await update($, armed, () => key)
+
+    return
+  }
+
+  await update($, armed, () => '')
+  const ran = await prWatch($, ['approve', pr.url], 60_000).catch(error => ({
+    exitCode: 1,
+    stdout: '',
+    stderr: String(error),
+  }))
+
+  if (ran.exitCode !== 0) {
+    $.ui.toast(`Could not approve #${pr.number}: ${ran.stderr.trim().split('\n')[0]}`)
+
+    return
+  }
+
+  $.ui.toast(`Approved ${pr.repo} #${pr.number}`)
+  await load($, false)
+}
+
+const askReview = async ($: EngineInterface, pr: ReviewPr) => {
+  await $.prompt.submit({
+    asUser: true,
+    text:
+      `${pr.repo} #${pr.number} (${pr.url}) by ${pr.author} waits for my review. Run a quick review of it with a ` +
+      'subagent (the code-review skill at medium effort if you have it, else one general-purpose subagent reading ' +
+      'the diff with gh or az), then report here in a few lines what would block an approval, if anything. ' +
+      "Post nothing on the PR and change nothing: if it needs comments, I'll ask you.",
+  })
+  $.ui.toast(`Asked Claude to review #${pr.number}`)
+}
+
 const toggleCi = ($: EngineInterface, url: string, isOpen: boolean) =>
   update($, ciToggled, toggled => ({ ...toggled, [url]: !isOpen }))
 
@@ -261,8 +305,8 @@ const waitingColor = (waiting: string) => {
 }
 
 // pr-watch lists the PRs grouped by repo, each in merge order: the groups keep that order.
-const byRepo = (prs: PrRow[]) => {
-  const groups = new Map<string, PrRow[]>()
+const byRepo = <T extends { repo: string }>(prs: T[]) => {
+  const groups = new Map<string, T[]>()
 
   for (const pr of prs) {
     groups.set(pr.repo, [...(groups.get(pr.repo) ?? []), pr])
@@ -270,6 +314,19 @@ const byRepo = (prs: PrRow[]) => {
 
   return [...groups.entries()]
 }
+
+// Most recently ended first, within each repo and between repos; at most RECENT_SHOWN per repo.
+const recentByRepo = (recent: RecentPr[]) => {
+  const sorted = [...recent].sort((one, other) => (endedMs(other.ended) || 0) - (endedMs(one.ended) || 0))
+
+  return byRepo(sorted).map(([repo, rows]) => [repo, rows.slice(0, RECENT_SHOWN)] as const)
+}
+
+// Every repo block starts collapsed; what the user opens stays open for the session.
+const repoKey = (section: 'open' | 'recent', repo: string) => `${section}|${repo}`
+
+const toggleRepo = ($: EngineInterface, key: string) =>
+  update($, openRepos, open => ({ ...open, [key]: !(open[key] ?? false) }))
 
 const votesText =(votes: Record<string, string>) =>
   Object.entries(votes)
@@ -308,15 +365,18 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const beneath = await next(e)
-    const prs = (await read($, snapshot))?.prs ?? []
+    const shown = await read($, snapshot)
+    const prs = shown?.prs ?? []
+    const reviews = shown?.reviews?.length ?? 0
     const isBroken = (await read($, problem)) !== ''
 
-    if (e.props.hasSurvey || e.props.view.agentId !== undefined || (prs.length === 0 && !isBroken)) {
+    if (e.props.hasSurvey || e.props.view.agentId !== undefined || (prs.length === 0 && reviews === 0 && !isBroken)) {
       return beneath
     }
 
     const { Box, Button } = $.ui.resolve(e)
-    const needsUs = isBroken || prs.some(pr => NEEDS_US.has(pr.waiting))
+    const needsUs = isBroken || reviews > 0 || prs.some(pr => NEEDS_US.has(pr.waiting))
+    const label = `PRs ${prs.length}${reviews > 0 ? ` · ${reviews} to review` : ''}${needsUs ? ' !' : ''}`
 
     return (
       <Box flexDirection="row" justifyContent="space-between" alignItems="flex-start">
@@ -325,7 +385,7 @@ export const register: Register = on => {
         </Box>
         <Button
           key="prs"
-          label={isBroken ? 'PRs ?' : `PRs ${prs.length}${needsUs ? ' !' : ''}`}
+          label={isBroken ? 'PRs ?' : label}
           variant={needsUs ? 'primary' : undefined}
           dimColor={!needsUs}
           onPress={() => void openPane($)}
@@ -348,11 +408,14 @@ export const register: Register = on => {
     const toggled = await read($, ciToggled)
     const allDetails = await read($, details)
     const armedKey = await read($, armed)
-    const recent: RecentPr[] = (shown?.recent ?? []).slice(0, RECENT_SHOWN)
+    const recent = recentByRepo(shown?.recent ?? [])
+    const recentCount = recent.reduce((count, [, rows]) => count + rows.length, 0)
     const isRecentShown = await read($, isRecentOpen)
+    const expanded = await read($, openRepos)
     const nowMs = await $.clock.now()
     const width = Math.max(20, e.props.bodyColumns - 2)
     const prs = shown?.prs ?? []
+    const reviews = shown?.reviews ?? []
     const summary =
       shown === null
         ? 'Loading…'
@@ -374,18 +437,68 @@ export const register: Register = on => {
         {shown?.errors.map(line => (
           <Text color="red">{line}</Text>
         ))}
+        {reviews.length > 0 && (
+          <Box flexDirection="column" marginTop={1}>
+            <Text bold color="yellow">
+              Waiting for my review ({reviews.length})
+            </Text>
+            {reviews.map(pr => {
+              const id = `${pr.repo}-${pr.number}`
+              const isArmed = armedKey === approveKey(pr.url)
+
+              return (
+                <Box key={`review-${id}`} flexDirection="column" paddingLeft={2}>
+                  <Box flexDirection="row" justifyContent="space-between">
+                    <Text bold>
+                      <Link href={pr.url} label={`#${pr.number}`} />
+                      <Text> {truncate(pr.title, width - pr.number.length - 12)}</Text>
+                    </Text>
+                    <Button key={`review-open-${id}`} label="open" dimColor onPress={() => void openPr($, pr.url)} />
+                  </Box>
+                  <Box flexDirection="row" justifyContent="space-between">
+                    <Text dimColor>{truncate(`${pr.repo} · by ${pr.author} · ${endedText(pr.updated, nowMs)}`, width - 36)}</Text>
+                    <Box flexDirection="row">
+                      <Button
+                        key={`review-claude-${id}`}
+                        label="review with Claude"
+                        variant="primary"
+                        onPress={() => void askReview($, pr)}
+                      />
+                      <Text> </Text>
+                      <Button
+                        key={`review-approve-${id}`}
+                        label={isArmed ? 'press again to approve' : 'approve'}
+                        variant={isArmed ? 'primary' : undefined}
+                        dimColor={!isArmed}
+                        onPress={() => void approvePr($, pr)}
+                      />
+                    </Box>
+                  </Box>
+                </Box>
+              )
+            })}
+          </Box>
+        )}
         {shown !== null && prs.length === 0 && <Text dimColor>No PR tracked. Ask Claude to watch one.</Text>}
         {byRepo(prs).map(([repo, rows]) => {
           const isStacked = rows.some(pr => (pr.after ?? '') !== '')
           const inner = width - 2
+          const isOpen = expanded[repoKey('open', repo)] ?? false
+          const needing = rows.filter(pr => NEEDS_US.has(pr.waiting) || pr.conflicts === true).length
 
           return (
-            <Box key={`repo-${repo}`} flexDirection="column" marginTop={1}>
-              <Text>
-                <Text bold>{truncate(repo, width - 20)}</Text>
-                {isStacked && <Text dimColor> · merge top to bottom</Text>}
-              </Text>
-              {rows.map((pr, index) => (
+            <Box key={`repo-block-${repo}`} flexDirection="column" marginTop={1}>
+              <Box flexDirection="row">
+                <Button
+                  key={`repo-${repo}`}
+                  label={`${isOpen ? '▾' : '▸'} ${truncate(repo, width - 30)} (${rows.length})`}
+                  plain
+                  onPress={() => void toggleRepo($, repoKey('open', repo))}
+                />
+                {needing > 0 && <Text color="red"> · {needing} need{needing === 1 ? 's' : ''} us</Text>}
+                {isOpen && isStacked && <Text dimColor> · merge top to bottom</Text>}
+              </Box>
+              {isOpen && rows.map((pr, index) => (
                 <Box key={`pr-${repo}-${pr.number}`} flexDirection="column" paddingLeft={2}>
                   <Box flexDirection="row" justifyContent="space-between">
                     <Text bold>
@@ -490,26 +603,50 @@ export const register: Register = on => {
             </Box>
           )
         })}
-        {recent.length > 0 && (
+        {recentCount > 0 && (
           <Box flexDirection="column" marginTop={1}>
             <Button
               key="recent"
-              label={`${isRecentShown ? '▾' : '▸'} Recently merged or closed (${recent.length})`}
+              label={`${isRecentShown ? '▾' : '▸'} Recently merged or closed (${recentCount})`}
               plain
               onPress={() => void update($, isRecentOpen, isShown => !isShown)}
             />
             {isRecentShown &&
-              recent.map(pr => (
-                <Text key={`recent-${pr.repo}-${pr.number}`}>
-                  <Text color={pr.status === 'merged' || pr.status === 'completed' ? 'green' : 'gray'}>  ✓ </Text>
-                  <Link href={pr.url} label={`${pr.repo} #${pr.number}`} />
-                  <Text dimColor>
-                    {' '}
-                    {pr.status} {endedText(pr.ended, nowMs)}
-                  </Text>
-                  <Text> {truncate(pr.title, Math.max(10, width - pr.repo.length - 34))}</Text>
-                </Text>
-              ))}
+              recent.map(([repo, rows]) => {
+                const isOpen = expanded[repoKey('recent', repo)] ?? false
+                const latest = rows[0]
+
+                return (
+                  <Box key={`recent-block-${repo}`} flexDirection="column" paddingLeft={2}>
+                    <Box flexDirection="row">
+                      <Button
+                        key={`recent-repo-${repo}`}
+                        label={`${isOpen ? '▾' : '▸'} ${truncate(repo, width - 36)} (${rows.length})`}
+                        plain
+                        onPress={() => void toggleRepo($, repoKey('recent', repo))}
+                      />
+                      {!isOpen && latest !== undefined && (
+                        <Text dimColor>
+                          {' '}
+                          · last {latest.status} {endedText(latest.ended, nowMs)}
+                        </Text>
+                      )}
+                    </Box>
+                    {isOpen &&
+                      rows.map(pr => (
+                        <Text key={`recent-${pr.repo}-${pr.number}`}>
+                          <Text color={pr.status === 'merged' || pr.status === 'completed' ? 'green' : 'gray'}>  ✓ </Text>
+                          <Link href={pr.url} label={`#${pr.number}`} />
+                          <Text dimColor>
+                            {' '}
+                            {pr.status} {endedText(pr.ended, nowMs)}
+                          </Text>
+                          <Text> {truncate(pr.title, Math.max(10, width - 32))}</Text>
+                        </Text>
+                      ))}
+                  </Box>
+                )
+              })}
           </Box>
         )}
       </Box>
