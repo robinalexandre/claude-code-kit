@@ -311,6 +311,12 @@ def github_review_requests() -> list[dict]:
     return rows
 
 
+def _plain(text: str, width: int) -> str:
+    """Third-party text on one line, control characters out, cut at `width`: it is read by a model."""
+    text = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", text).split())
+    return text if len(text) <= width else text[: width - 1] + "…"
+
+
 def _stamp(iso: str) -> str:
     """An ISO date from either host as `_now` writes them (minutes, UTC)."""
     try:
@@ -622,8 +628,8 @@ def check(peek: bool) -> None:
             save(path, {**entry, "checked": _now(), "seen": now})
     reviews, review_errors = fetch_review_requests(entries)
     known = {row["url"] for row in cached_reviews()}
-    report += [f"{row['repo']} #{row['number']} ({row['title']}): {row['author']} asks for your review"
-               for row in reviews if row["url"] not in known]
+    report += [f"{row['repo']} #{row['number']} ({_plain(row['title'], 80)}): {_plain(row['author'], 40)} asks for "
+               f"your review: {row['url']}" for row in reviews if row["url"] not in known]
     errors += review_errors
     if not peek:
         # Saved even when a host failed: its requests are reported again once it answers.
