@@ -5,7 +5,7 @@
                                         (--peek: report without recording it as seen)
     pr_watch.py list                    tracked PRs and their status
     pr_watch.py status [--live]         the same as JSON, with what each PR waits for
-                                        (--live: fetched now, with the changes; records nothing)
+                                        (--live: fetched now, with the changes; records only the review requests)
     pr_watch.py open URL                open a PR in the default browser
     pr_watch.py details URL             JSON: the PR's failed checks with their failed steps and errors
     pr_watch.py rerun URL CHECK         relaunch a check (Azure DevOps: re-queue; GitHub: rerun failed jobs)
@@ -444,11 +444,25 @@ def load_entries() -> list[tuple[Path, dict]]:
             for path in sorted(WATCH_DIR.glob("*.json")) if path not in (CONFIG, REVIEWS)]
 
 
-def cached_reviews() -> list[dict]:
-    """The review requests found by the last check."""
+def reviews_file() -> dict:
+    """`reviews`: the requests last found (by a check or a live status); `announced`: the URLs a
+    check has reported, so a live status in between hides nothing from the next check."""
     if not REVIEWS.exists():
-        return []
-    return json.loads(REVIEWS.read_text(encoding="utf-8")).get("reviews", [])
+        return {}
+    return json.loads(REVIEWS.read_text(encoding="utf-8"))
+
+
+def cached_reviews() -> list[dict]:
+    return reviews_file().get("reviews", [])
+
+
+def save_reviews(reviews: list[dict], announced: list[str] | None = None) -> None:
+    stored = reviews_file()
+    save(REVIEWS, {
+        "checked": _now(),
+        "reviews": reviews,
+        "announced": announced if announced is not None else stored.get("announced", []),
+    })
 
 
 def fetch_review_requests(entries: list[tuple[Path, dict]]) -> tuple[list[dict], list[str]]:
@@ -627,13 +641,13 @@ def check(peek: bool) -> None:
         else:
             save(path, {**entry, "checked": _now(), "seen": now})
     reviews, review_errors = fetch_review_requests(entries)
-    known = {row["url"] for row in cached_reviews()}
+    announced = set(reviews_file().get("announced", []))
     report += [f"{row['repo']} #{row['number']} ({_plain(row['title'], 80)}): {_plain(row['author'], 40)} asks for "
-               f"your review: {row['url']}" for row in reviews if row["url"] not in known]
+               f"your review: {row['url']}" for row in reviews if row["url"] not in announced]
     errors += review_errors
     if not peek:
         # Saved even when a host failed: its requests are reported again once it answers.
-        save(REVIEWS, {"checked": _now(), "reviews": reviews})
+        save_reviews(reviews, announced=sorted(row["url"] for row in reviews))
         prune_done()
     print("\n".join(report) if report else "No change.")
     if errors:
@@ -683,6 +697,9 @@ def status(live: bool) -> None:
     entries = load_entries()
     fetched = fetch_all(entries) if live else [(p, e, None, "", "") for p, e in entries]
     reviews, errors = fetch_review_requests(entries) if live else (cached_reviews(), [])
+    if live:
+        # So the cached status the pane reloads in between shows the same list.
+        save_reviews(reviews)
     ignore, bots, prs = config("ignoreAuthors"), config("bots"), []
     for _, entry, now, me, error in fetched:
         if error:
@@ -789,9 +806,8 @@ def rerun(url: str, name: str) -> None:
 def approve(url: str) -> None:
     pr = provider(normalize(url))
     pr.approve()
-    reviews = [row for row in cached_reviews() if row["url"] != normalize(url)]
     if REVIEWS.exists():
-        save(REVIEWS, {**json.loads(REVIEWS.read_text(encoding="utf-8")), "reviews": reviews})
+        save_reviews([row for row in cached_reviews() if row["url"] != normalize(url)])
     print(f"approved {normalize(url)}")
 
 
