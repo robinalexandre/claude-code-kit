@@ -513,13 +513,30 @@ const BUILDS = {
       started: '2026-01-01T06:01Z',
       ended: '2026-01-01T06:09Z',
     },
+    {
+      url: 'https://dev.azure.com/org/project/_build/results?buildId=70100',
+      repo: 'project',
+      pipeline: 'api-packaging',
+      number: '70100',
+      branch: 'develop',
+      status: 'partially succeeded',
+      requestedBy: 'Grace Hopper',
+      queued: '2026-01-01T05:00Z',
+      started: '2026-01-01T05:01Z',
+      ended: '2026-01-01T05:20Z',
+    },
   ],
   errors: [],
+}
+const BUILD_DETAILS = {
+  url: 'https://dev.azure.com/org/project/_build/results?buildId=70100',
+  steps: [{ name: 'pylint', state: 'issues', errors: ["Bash exited with code '8'.", 'warning: too-many-branches'] }],
 }
 
 test('the pipeline runs the user launched come first, open while one runs, and refresh every minute', async ($, on) => {
   const clock = mock.clock(on)
   const calls: string[] = []
+  const submitted: string[] = []
   let liveCalls = 0
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
   on('process.run', ($, e) => {
@@ -527,12 +544,21 @@ test('the pipeline runs the user launched come first, open while one runs, and r
     calls.push(command)
     liveCalls += e.argv.includes('--live') ? 1 : 0
 
-    return ran(0, command.startsWith('status') ? JSON.stringify(BUILDS) : '')
+    if (command.startsWith('details')) {
+      return ran(0, JSON.stringify(BUILD_DETAILS))
+    }
+
+    return ran(0, command.startsWith('status') ? JSON.stringify(BUILDS) : 'relaunched api-packaging')
   })
   on('ui.render', () => Fragment({}))
   on('ui.open', () => ({ value: { isPlaced: true as const } }))
   on('ui.toast', () => ({ value: undefined }))
   on('ui.panes', () => ({ value: [{ id: 'tracked-prs', title: 'Tracked PRs', isShown: true, isFocused: false, isPlaced: true }] }))
+  on('prompt.submit', ($, e) => {
+    submitted.push(e.text)
+
+    return { text: e.text }
+  })
 
   await $.command.run(RUN)
   const band = await $.ui.mount({ plugin: 'pr-pane', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
@@ -540,11 +566,38 @@ test('the pipeline runs the user launched come first, open while one runs, and r
 
   expect(await band.find({ key: 'prs', text: 'PRs 1 · 1 build running' })).toBeDefined()
   // The section sits above the PRs, open because a run is in progress.
-  expect(await pane.find({ key: 'builds', text: '▾ Pipeline runs (2)' })).toBeDefined()
+  expect(await pane.find({ key: 'builds', text: '▾ Pipeline runs (3)' })).toBeDefined()
   const buttons = (await pane.findAll({ type: 'Button' })).map(element => element.key ?? '')
   expect(buttons.indexOf('builds')).toBeLessThan(buttons.indexOf('waiting'))
   expect(await pane.find({ text: /#70125 api-packaging · develop · running/ })).toBeDefined()
   expect(await pane.find({ text: /#42 Deploy · main · succeeded .* · 8 min/ })).toBeDefined()
+  // Only a run that did not succeed offers details, a rerun and a diagnosis.
+  expect(await pane.find({ key: 'build-details-42' })).toBeUndefined()
+  expect(await pane.find({ key: 'build-details-70125' })).toBeUndefined()
+  expect(await pane.find({ key: 'build-details-70100', text: 'details' })).toBeDefined()
+
+  await pane.press({ key: 'build-details-70100' })
+
+  expect(calls).toContain('details https://dev.azure.com/org/project/_build/results?buildId=70100')
+  expect(await pane.find({ text: 'pylint: issues' })).toBeDefined()
+  expect(await pane.find({ text: '  warning: too-many-branches' })).toBeDefined()
+  expect(await pane.find({ key: 'build-details-70100', text: 'hide' })).toBeDefined()
+
+  await pane.press({ key: 'build-rerun-70100' })
+
+  expect(calls.some(command => command.startsWith('rerun'))).toBe(false)
+  expect(await pane.find({ key: 'build-rerun-70100', text: 'press again to relaunch' })).toBeDefined()
+
+  await pane.press({ key: 'build-rerun-70100' })
+
+  expect(calls).toContain('rerun https://dev.azure.com/org/project/_build/results?buildId=70100')
+
+  await pane.press({ key: 'build-diagnose-70100' })
+
+  expect(submitted).toHaveLength(1)
+  expect(submitted[0]).toContain('api-packaging build 70100 on `develop`')
+  expect(submitted[0]).toContain('https://dev.azure.com/org/project/_build/results?buildId=70100')
+  expect(submitted[0]).toContain('launch nothing without asking')
 
   // On a narrow pane the pipeline's name keeps its room: the time and duration go first.
   const narrow = await mountPane($, 'desktop', 64)
@@ -557,7 +610,7 @@ test('the pipeline runs the user launched come first, open while one runs, and r
 
   await pane.press({ key: 'builds' })
 
-  expect(await pane.find({ key: 'builds', text: '▸ Pipeline runs (2)' })).toBeDefined()
+  expect(await pane.find({ key: 'builds', text: '▸ Pipeline runs (3)' })).toBeDefined()
   expect(await pane.find({ text: /^ · 1 running$/ })).toBeDefined()
   expect(await pane.find({ key: 'build-open-70125' })).toBeUndefined()
 

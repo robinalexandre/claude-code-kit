@@ -7,8 +7,11 @@
     pr_watch.py status [--live]         the same as JSON, with what each PR waits for
                                         (--live: fetched now, with the changes; records only the review requests)
     pr_watch.py open URL                open a PR or a build in the default browser
-    pr_watch.py details URL             JSON: the PR's failed checks with their failed steps and errors
+    pr_watch.py details URL             JSON: the PR's failed checks with their failed steps and errors,
+                                        or a build's steps that failed or had issues (a build URL)
     pr_watch.py rerun URL CHECK         relaunch a check (Azure DevOps: re-queue; GitHub: rerun failed jobs)
+    pr_watch.py rerun BUILD_URL         launch the pipeline run again (Azure DevOps: a new run of the same
+                                        pipeline, branch and parameters; GitHub: re-run the workflow run)
     pr_watch.py approve URL             approve a PR (Azure DevOps: vote approved; GitHub: an approving review)
                                         and track it as reviewed until it is merged
     pr_watch.py merge URL               merge a PR (GitHub: squash if the repo allows it; Azure DevOps: complete)
@@ -422,6 +425,123 @@ def github_manual_runs(owner: str, repo: str) -> list[dict]:
             "ended": _stamp(run.get("updated_at") or "") if status not in BUILD_RUNNING else "",
         })
     return rows
+
+
+ADO_ISSUE_RESULTS = {"failed": "failed", "succeededWithIssues": "issues", "canceled": "canceled"}
+
+
+class AzureBuild:
+    """One Azure DevOps build, from its results URL: its steps with issues, and a new run of it."""
+
+    def __init__(self, match: re.Match[str]) -> None:
+        self.base = f"https://dev.azure.com/{match['org']}/{match['project']}/_apis"
+        self.id = match["id"]
+
+    def get(self, path: str) -> dict:
+        separator = "&" if "?" in path else "?"
+        return _http_json(f"{self.base}/{path}{separator}api-version=7.1", _ado_headers())  # type: ignore[return-value]
+
+    def steps(self) -> list[dict]:
+        """The tasks that failed, were canceled or succeeded with issues, in order, with their
+        messages (warnings marked) and the error lines of their log."""
+        records = self.get(f"build/builds/{self.id}/timeline").get("records") or []
+        steps = []
+        for record in sorted(records, key=lambda one: one.get("order") or 0):
+            state = ADO_ISSUE_RESULTS.get(record.get("result") or "")
+            if record.get("type") != "Task" or state is None:
+                continue
+            messages = [("warning: " if issue.get("type") == "warning" else "") + (issue.get("message") or "")[:EXCERPT]
+                        for issue in record.get("issues") or []]
+            if (record.get("log") or {}).get("url"):
+                try:
+                    tail = log_tail(_http_text(record["log"]["url"], _ado_headers()))
+                except WatchError:
+                    tail = []
+                messages += [line[:EXCERPT] for line in tail if line not in messages]
+            steps.append({"name": record["name"], "state": state, "errors": messages[:8]})
+        return steps[:24]
+
+    def rerun(self) -> str:
+        """Queues a new run of the same pipeline on the same branch with the same parameters, as
+        the person checking; returns its URL."""
+        build = self.get(f"build/builds/{self.id}")
+        body: dict = {"definition": {"id": build["definition"]["id"]}, "sourceBranch": build.get("sourceBranch", ""),
+                      "reason": "manual"}
+        for key in ("parameters", "templateParameters"):
+            if build.get(key):
+                body[key] = build[key]
+        queued = _http_json(f"{self.base}/build/builds?api-version=7.1", _ado_headers(), method="POST", body=body)
+        return f"{self.base.removesuffix('/_apis')}/_build/results?buildId={queued['id']}"  # type: ignore[index]
+
+    def name(self) -> str:
+        return self.get(f"build/builds/{self.id}")["definition"]["name"]
+
+
+class GitHubRun:
+    """One GitHub Actions run, from its URL: its failed steps, and a re-run of it."""
+
+    def __init__(self, match: re.Match[str]) -> None:
+        self.base = f"https://api.github.com/repos/{match['owner']}/{match['repo']}"
+        self.id = match["id"]
+        token = _github_token()
+        self.headers = {"X-GitHub-Api-Version": "2022-11-28", **({"Authorization": f"Bearer {token}"} if token else {})}
+
+    def get(self, path: str) -> dict:
+        return _http_json(f"{self.base}/{path}", self.headers)  # type: ignore[return-value]
+
+    def steps(self) -> list[dict]:
+        """The failed steps of each failed job, with the job's failure annotations."""
+        steps = []
+        for job in self.get(f"actions/runs/{self.id}/jobs?per_page=100").get("jobs", []):
+            if job.get("conclusion") not in {"failure", "cancelled", "timed_out"}:
+                continue
+            state = "canceled" if job["conclusion"] == "cancelled" else "failed"
+            failed = [step["name"] for step in job.get("steps", []) if step.get("conclusion") == "failure"]
+            messages = []
+            try:
+                for annotation in self.get(f"check-runs/{job['id']}/annotations")[:10]:  # type: ignore[index]
+                    if annotation.get("annotation_level") == "failure":
+                        where = f"{annotation['path']}: " if annotation.get("path") else ""
+                        messages.append(f"{where}{(annotation.get('message') or '')[:EXCERPT]}")
+            except WatchError:
+                pass
+            for name in failed or [job["name"]]:
+                steps.append({"name": f"{job['name']} / {name}" if failed else job["name"], "state": state,
+                              "errors": messages[:8]})
+                messages = []
+        return steps[:24]
+
+    def rerun(self) -> str:
+        """Re-runs the whole workflow run (its URL stays the same)."""
+        if "Authorization" not in self.headers:
+            raise WatchError("GitHub: re-running needs GITHUB_TOKEN or `gh auth login`")
+        _http_json(f"{self.base}/actions/runs/{self.id}/rerun", self.headers, method="POST")
+        return f"{self.base.replace('https://api.github.com/repos/', 'https://github.com/')}/actions/runs/{self.id}"
+
+    def name(self) -> str:
+        return self.get(f"actions/runs/{self.id}").get("name") or "workflow"
+
+
+def build_provider(url: str) -> AzureBuild | GitHubRun | None:
+    if match := ADO_BUILD_URL.match(url):
+        return AzureBuild(match)
+    if match := GITHUB_RUN_URL.match(url):
+        return GitHubRun(match)
+    return None
+
+
+def build_details(build: AzureBuild | GitHubRun, url: str) -> None:
+    """JSON: the run's steps that failed or had issues, each with its error lines."""
+    steps = build.steps()
+    for step in steps:
+        if not step["errors"]:
+            step["errors"] = ["no step details kept: see the build log"]
+    print(json.dumps({"url": url, "steps": steps}, ensure_ascii=False))
+
+
+def rerun_build(build: AzureBuild | GitHubRun) -> None:
+    name = build.name()
+    print(f"relaunched {name}: {build.rerun()}")
 
 
 def _recent_enough(stamp: str) -> bool:
@@ -1076,8 +1196,13 @@ def main(argv: list[str]) -> int:
             status(live="--live" in args)
         elif command == "open" and args:
             open_(args[0])
+        # A build URL keeps its query (`?buildId=`): not normalized like a PR's.
+        elif command == "details" and args and (build := build_provider(args[0].strip())):
+            build_details(build, args[0].strip())
         elif command == "details" and args:
             details(args[0])
+        elif command == "rerun" and args and (build := build_provider(args[0].strip())):
+            rerun_build(build)
         elif command == "rerun" and len(args) >= 2:
             rerun(args[0], " ".join(args[1:]))
         elif command == "approve" and args:
