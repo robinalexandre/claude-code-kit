@@ -1,12 +1,14 @@
 # .github/workflows/ai-review.yml
 # Code review by the official action and plugin, on every PR push.
 # Secret: ANTHROPIC_API_KEY (or set use_bedrock / use_vertex instead, see the action's docs).
+# Actions are pinned to a commit (a tag can be moved); let Dependabot or Renovate bump them.
 name: AI review
 
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
 
+# id-token: the action trades it for its GitHub App token, and Bedrock or Vertex sign in with it.
 permissions:
   contents: read
   pull-requests: write
@@ -17,10 +19,11 @@ jobs:
   review:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
-      - uses: anthropics/claude-code-action@v1
+          persist-credentials: false
+      - uses: anthropics/claude-code-action@a5a423f75c251dcbff8a74e99f83b2cb03c72bfa # v1.0.256
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           plugin_marketplaces: "https://github.com/anthropics/claude-code.git"

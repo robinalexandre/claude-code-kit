@@ -1,6 +1,9 @@
 # Add to .gitlab-ci.yml. Review with a proof check on every merge request pipeline.
 # Masked CI/CD variables: ANTHROPIC_API_KEY, and GITLAB_REVIEW_TOKEN (project access token, api scope)
 # so the review can post its note. See code.claude.com/docs/en/gitlab-ci-cd (beta).
+# The MR's text and diff can carry instructions aimed at the agent, so the agent runs with
+# no CI token in its environment, reads only the workspace, and its reply is checked for
+# the secrets before it is posted.
 ai-review:
   stage: test
   image: node:24-bookworm-slim
@@ -16,8 +19,16 @@ ai-review:
       curl -fsS -H "PRIVATE-TOKEN: $GITLAB_REVIEW_TOKEN" "$API" | jq '{title, description}' > mr.json
       git fetch -q origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
       git diff "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME...HEAD" > mr.diff
-      claude -p --bare --permission-mode dontAsk --max-turns 20 --allowedTools "Read" "Grep" "Glob" \
+      env -i HOME="$HOME" PATH="$PATH" ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
+        claude -p --bare --permission-mode dontAsk --max-turns 20 \
+        --allowedTools "Read(./**)" "Grep" "Glob" --disallowedTools "Read(//proc/**)" "Read(~/**)" \
         "Merge request: read mr.json (title, description with the proof links) and mr.diff. Reply with the comment text only. $(cat ci/ai-review/review-prompt.md)" \
         > review.md
+      for secret in "$ANTHROPIC_API_KEY" "$GITLAB_REVIEW_TOKEN" "$CI_JOB_TOKEN"; do
+        if [ -n "$secret" ] && grep -qF -- "$secret" review.md; then
+          echo "The review quotes a secret; not posted." >&2
+          exit 1
+        fi
+      done
       jq -n --rawfile body review.md '{body: $body}' |
         curl -fsS -H "PRIVATE-TOKEN: $GITLAB_REVIEW_TOKEN" -H "Content-Type: application/json" --data @- "$API/notes" > /dev/null

@@ -2,6 +2,8 @@
 # Review with a proof check, through the CLI in headless mode and review-prompt.md.
 # Secret: ANTHROPIC_API_KEY. The job's own GITHUB_TOKEN reads the PR and posts the comment.
 # Another agent CLI works the same way: replace the "Review" command, keep the prompt file.
+# The PR's text and diff can carry instructions aimed at the agent, so the agent never
+# holds the GitHub token, reads only the workspace, and its reply is checked for the key.
 name: AI review
 
 on:
@@ -17,20 +19,34 @@ jobs:
     if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
       - name: Install the CLI
         run: |
           curl -fsSL https://claude.ai/install.sh | bash
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: Review
+      - name: Fetch the PR
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
         run: |
           gh pr view "$PR" --json title,body,comments > pr.json
           gh pr diff "$PR" > pr.diff
-          claude -p --bare --permission-mode dontAsk --max-turns 20 --allowedTools "Read" "Grep" "Glob" \
+      - name: Review
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          claude -p --bare --permission-mode dontAsk --max-turns 20 \
+            --allowedTools "Read(./**)" "Grep" "Glob" --disallowedTools "Read(//proc/**)" "Read(~/**)" \
             "Pull request: read pr.json (title, description with the proof links, comments) and pr.diff. Reply with the comment text only. $(cat .github/ai-review/review-prompt.md)" \
             > review.md
-          gh pr comment "$PR" --body-file review.md
+          if grep -qF -- "$ANTHROPIC_API_KEY" review.md; then
+            echo "The review quotes the API key; not posted." >&2
+            exit 1
+          fi
+      - name: Post
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: gh pr comment "$PR" --body-file review.md
