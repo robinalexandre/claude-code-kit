@@ -20,12 +20,14 @@ bash $SK/pr-watch.sh rerun <PR URL> <check name>  # relaunch it: only on the use
 bash $SK/pr-watch.sh rerun <build URL>  # launch the run again (Azure DevOps: a new run of the same pipeline, branch and parameters, as the user; GitHub: re-run the workflow run): only on the user's yes
 bash $SK/pr-watch.sh approve <PR URL> # vote approved (Azure DevOps) or submit an approving review (GitHub), then track it as reviewed (`reviewed: true` in status) until it is merged: only on the user's yes
 bash $SK/pr-watch.sh merge <PR URL>   # merge it (GitHub: squash when the repo allows it, else merge, else rebase; Azure DevOps: complete with the defaults): only on the user's yes
-bash $SK/pr-watch.sh remove <PR URL>
+bash $SK/pr-watch.sh remove <PR URL>  # stop tracking it; it is not tracked again on its own
 ```
 
 `check` prints one line per change (new status, new vote, new comment with an excerpt and its file, a CI check that changed state with its link), or `No change.`. A PR that is merged, completed, abandoned or closed is reported once, then moved to `done/`, where `status` lists it as `recent` for `PR_WATCH_KEEP_DAYS` (default 7) days. Comments by the person checking are not reported. `list` shows each PR's status and CI summary.
 
 **Review requests**: `check` and `status --live` also look up the open PRs waiting for the user's review (not drafts, not their own): on GitHub with a token (`review-requested:@me`), on Azure DevOps in the organizations of the tracked and recent PRs plus `azureOrgs` in `config.json` (reviewer with no vote yet). `check` reports each new one (`<repo> #<n> (<title>): <author> asks for your review`) and keeps the list in `reviews.json`; `status` lists it as `reviews`. When one is reported, offer a quick review (a subagent reading the diff, nothing posted) and, on the user's yes, `approve`.
+
+**The user's own PRs, tracked on their own**: `check` and `status --live` also start tracking the open PRs nobody added: those the user opened, those assigned to them (GitHub), and those they approved as a reviewer, in the web UI too (tracked as reviewed, as `approve` does). Same places as the review requests. `check` reports each one (`<repo> #<n> (<title>): now tracked (opened by you), …`), with its note saying why; add a real note when you know what it waits for. `autoTrack` in `config.json` picks which of `opened`, `assigned`, `approved` (all by default; `[]` turns it off). A PR the user `remove`s is listed in `dismissed.txt` and never tracked again on its own; `add` tracks it again. A PR where the user is a reviewer with no vote stays in the review requests.
 
 **Pipeline runs launched by hand** (a packaging, a deploy, a run started with the user from the CLI or the MCP tools): `check` and `status --live` also look up the runs the user requested, so one launched together shows up on its own as long as it ran under the user's identity (`az login`, their PAT, their GitHub token), not a service principal's. Azure DevOps: the manual builds (`reasonFilter=manual`, so PR builds stay with their PR) requested by the user in the projects of the tracked and recent PRs plus `azureProjects` (`org/project`) in `config.json`; GitHub: the `workflow_dispatch` runs by the user in the repos of the tracked and recent PRs plus `githubRepos` (`owner/repo`). `status` lists them as `builds`: the queued and running ones first, then those ended in the last `PR_WATCH_BUILD_HOURS` (default 24) hours, each with its pipeline, branch, status (`queued`, `running`, `succeeded`, `partially succeeded`, `failed`, `canceled`) and times; the last list is kept in `builds.json`. `check` reports a run that ended since the last check (`<pipeline> build <id> (<branch>): <status> <url>`): say what it means for the task (a deploy done, a package to test, a failure to read in the build's logs). When it failed or `partially succeeded` (Azure DevOps: a step with `continueOnError` had issues, often a lint or quality gate), start from `details <build URL>`: every step with its job and `state`; those `failed`, `canceled` or with `issues` carry their messages (warnings marked) and log error lines; open the build when that is not enough; say why and propose the fix. `rerun <build URL>` launches it again, only on the user's yes. A run requested by someone else, or by a service principal, is not found: say so if the user expects it, and open its URL for them instead.
 
@@ -35,7 +37,8 @@ bash $SK/pr-watch.sh remove <PR URL>
 
 ```json
 {"bots": ["<display name or login>"], "ignoreAuthors": ["<display name or login>"],
- "azureOrgs": ["<org>"], "azureProjects": ["<org>/<project>"], "githubRepos": ["<owner>/<repo>"]}
+ "azureOrgs": ["<org>"], "azureProjects": ["<org>/<project>"], "githubRepos": ["<owner>/<repo>"],
+ "autoTrack": ["opened", "assigned", "approved"]}
 ```
 
 `bots`: still reported, marked `(bot)`; mention them to the user only when they raise a real problem. `ignoreAuthors`: never reported. `azureOrgs`, `azureProjects`, `githubRepos`: looked up for review requests and pipeline runs on top of the places the tracked and recent PRs name.
@@ -44,7 +47,7 @@ Auth: Azure DevOps uses `AZURE_DEVOPS_PAT` if set, otherwise the `az login` toke
 
 ## When to track
 
-- Right after you open a PR with the user, or push to one you prepared together: add it, with a note saying what it is and what it waits for (review, a PR it is stacked on, a deploy order), and tell the user in one line. Don't ask first: tracking only reads.
+- Right after you open a PR with the user, or push to one you prepared together: add it, with a note saying what it is and what it waits for (review, a PR it is stacked on, a deploy order), and tell the user in one line. Don't ask first: tracking only reads. The next check would find it on its own, but without that note and only then.
 - When the user asks to watch a PR someone else opened, add it the same way.
 - Then run `bash ~/.claude-sync/sync.sh now` so the other computers get it.
 

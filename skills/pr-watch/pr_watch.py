@@ -5,7 +5,8 @@
                                         (--peek: report without recording it as seen)
     pr_watch.py list                    tracked PRs and their status
     pr_watch.py status [--live]         the same as JSON, with what each PR waits for
-                                        (--live: fetched now, with the changes; records only the review requests)
+                                        (--live: fetched now, with the changes; records only the review
+                                        requests, the pipeline runs and the user's PRs it starts tracking)
     pr_watch.py open URL                open a PR or a build in the default browser
     pr_watch.py details URL             JSON: the PR's failed checks with their failed steps and errors,
                                         or a build's steps, every one with its job and state, those
@@ -16,7 +17,7 @@
     pr_watch.py approve URL             approve a PR (Azure DevOps: vote approved; GitHub: an approving review)
                                         and track it as reviewed until it is merged
     pr_watch.py merge URL               merge a PR (GitHub: squash if the repo allows it; Azure DevOps: complete)
-    pr_watch.py remove URL              stop tracking a PR
+    pr_watch.py remove URL              stop tracking a PR (and never track it again on its own)
 
 Tracked PRs live in $PR_WATCH_DIR (default ~/.claude-sync/pr-watch), one JSON file per PR, so the
 config sync carries them to every computer. A merged, abandoned or closed PR is reported once, then
@@ -26,6 +27,11 @@ anonymous for public repos).
 `check` and `status --live` also look up the open PRs waiting for the user's review (GitHub with a
 token; the Azure DevOps organizations of the tracked PRs and of `azureOrgs` in config.json): a new
 one is reported, and `status` lists them as `reviews` from the last check.
+
+They also start tracking, with no `add`, the user's own open PRs (`autoTrack` in config.json, all
+by default): those they opened, those assigned to them (GitHub), and those they approved as a
+reviewer (tracked as reviewed). Same places as the review requests. A PR the user removed is not
+tracked again on its own (dismissed.txt).
 
 They also look up the pipeline runs the user launched by hand (Azure DevOps: manual builds requested
 by them in the projects of the tracked and recent PRs and of `azureProjects` in config.json; GitHub:
@@ -61,6 +67,8 @@ WATCH_DIR = Path(os.environ.get("PR_WATCH_DIR", Path.home() / ".claude-sync" / "
 CONFIG = WATCH_DIR / "config.json"
 REVIEWS = WATCH_DIR / "reviews.json"
 BUILDS = WATCH_DIR / "builds.json"
+# Not a .json file: older copies of this script read every .json file here as a tracked PR.
+DISMISSED = WATCH_DIR / "dismissed.txt"
 DONE_DIR = WATCH_DIR / "done"
 KEEP_DAYS = float(os.environ.get("PR_WATCH_KEEP_DAYS", "7"))
 BUILD_HOURS = float(os.environ.get("PR_WATCH_BUILD_HOURS", "24"))
@@ -354,6 +362,65 @@ def github_review_requests() -> list[dict]:
             "updated": _stamp(item.get("updated_at", "")),
         })
     return rows
+
+
+def ado_my_prs(org: str, kinds: set[str]) -> list[dict]:
+    """The organization's active PRs the person checking opened, or approved as a reviewer."""
+    headers, me = _ado_headers(), _ado_me(org)
+    search = f"https://dev.azure.com/{org}/_apis/git/pullrequests?searchCriteria.status=active&$top=100&api-version=7.1"
+    found: list[tuple[dict, str]] = []
+    if "opened" in kinds:
+        opened = _http_json(f"{search}&searchCriteria.creatorId={me}", headers).get("value") or []  # type: ignore[union-attr]
+        found += [(pr, "opened") for pr in opened]
+    if "approved" in kinds:
+        for pr in _http_json(f"{search}&searchCriteria.reviewerId={me}", headers).get("value") or []:  # type: ignore[union-attr]
+            mine = next((r for r in pr.get("reviewers") or [] if r.get("id") == me), None)
+            if mine is not None and mine.get("vote") in {10, 5} and (pr.get("createdBy") or {}).get("id") != me:
+                found.append((pr, "approved"))
+    rows = []
+    for pr, why in found:
+        project, repo = pr["repository"]["project"]["name"], pr["repository"]["name"]
+        rows.append({"url": f"https://dev.azure.com/{org}/{urllib.parse.quote(project)}/_git/"
+                            f"{urllib.parse.quote(repo)}/pullrequest/{pr['pullRequestId']}", "why": why})
+    return rows
+
+
+GITHUB_MINE = {"opened": "author:@me", "assigned": "assignee:@me -author:@me",
+               "approved": "reviewed-by:@me -author:@me -assignee:@me"}
+
+
+def github_my_prs(kinds: set[str], known: set[str]) -> list[dict]:
+    """The open PRs the person checking opened, is assigned to, or approved (none anonymously)."""
+    token = _github_token()
+    if not token:
+        return []
+    headers = {"Authorization": f"Bearer {token}", "X-GitHub-Api-Version": "2022-11-28"}
+    rows = []
+    for why, qualifier in GITHUB_MINE.items():
+        if why not in kinds:
+            continue
+        query = urllib.parse.quote(f"is:pr is:open {qualifier}")
+        found = _http_json(f"https://api.github.com/search/issues?q={query}&sort=updated&per_page=50", headers)
+        for item in found.get("items") or []:  # type: ignore[union-attr]
+            url = item["html_url"]
+            if GITHUB_URL.match(url) is None or same_pr(url) in known:
+                continue
+            if why == "approved" and not _github_approved(url, headers):
+                continue
+            rows.append({"url": url, "why": why})
+    return rows
+
+
+def _github_approved(url: str, headers: dict[str, str]) -> bool:
+    """Whether the person checking's last review of the PR approves it."""
+    match = GITHUB_URL.match(url)
+    assert match is not None
+    reviews = _http_json(f"https://api.github.com/repos/{match['owner']}/{match['repo']}/pulls/{match['id']}"
+                         "/reviews?per_page=100", headers)
+    me = _github_me(headers)
+    states = [r.get("state") for r in reviews if (r.get("user") or {}).get("login") == me  # type: ignore[union-attr]
+              and r.get("state") in {"APPROVED", "CHANGES_REQUESTED", "DISMISSED"}]
+    return bool(states) and states[-1] == "APPROVED"
 
 
 ADO_BUILD_STATES = {"notStarted": "queued", "postponed": "queued", "inProgress": "running", "cancelling": "running"}
@@ -833,6 +900,88 @@ def fetch_review_requests(entries: list[tuple[Path, dict]]) -> tuple[list[dict],
     return rows, [error for _, error in results if error]
 
 
+AUTO_TRACK = {"opened": "opened by you", "assigned": "assigned to you", "approved": "approved by you"}
+
+
+def auto_track_kinds() -> set[str]:
+    """`autoTrack` in config.json: which of the user's own PRs are tracked without an `add` (all by default)."""
+    if not CONFIG.exists():
+        return set(AUTO_TRACK)
+    kinds = json.loads(CONFIG.read_text(encoding="utf-8")).get("autoTrack", list(AUTO_TRACK))
+    return set(kinds) & set(AUTO_TRACK)
+
+
+def same_pr(url: str) -> str:
+    """One spelling per PR, whatever the quoting and case of the URL it came from."""
+    return urllib.parse.unquote(normalize(url)).lower()
+
+
+def dismissed() -> set[str]:
+    """The PRs the user stopped tracking: never tracked again on their own."""
+    if not DISMISSED.exists():
+        return set()
+    return {same_pr(line) for line in DISMISSED.read_text(encoding="utf-8").splitlines() if line.strip()}
+
+
+def save_dismissed(urls: set[str]) -> None:
+    DISMISSED.parent.mkdir(parents=True, exist_ok=True)
+    DISMISSED.write_text("".join(f"{url}\n" for url in sorted(urls)), encoding="utf-8", newline="\n")
+
+
+def auto_track(entries: list[tuple[Path, dict]]) -> tuple[list[str], list[str]]:
+    """Starts tracking the user's open PRs nobody added (see `autoTrack`), appending them to
+    `entries`: (one line per PR now tracked, errors).
+
+    Asked on GitHub with a token, and in the Azure DevOps organizations of the tracked and recent
+    PRs plus `azureOrgs`.
+    """
+    kinds = auto_track_kinds()
+    if not kinds:
+        return [], []
+    known = {same_pr(entry["url"]) for _, entry in entries} | dismissed()
+    orgs = config("azureOrgs")
+    for entry in [entry for _, entry in entries] + done_entries():
+        if match := ADO_URL.match(entry["url"]):
+            orgs.add(match["org"] or match["org2"])
+    jobs: list[Callable[[], list[dict]]] = [partial(github_my_prs, kinds, known)]
+    jobs += [partial(ado_my_prs, org, kinds) for org in sorted(orgs)]
+
+    def one(job: Callable[[], list[dict]]) -> tuple[list[dict], str]:
+        try:
+            return job(), ""
+        except WatchError as error:
+            return [], f"your PRs: {error}"
+        except (KeyError, TypeError, AttributeError) as error:
+            return [], f"your PRs: unexpected answer ({error!r})"
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(one, jobs))
+    lines, errors = [], [error for _, error in results if error]
+    for row in (row for found, _ in results for row in found):
+        url = normalize(row["url"])
+        if same_pr(url) in known:
+            continue
+        known.add(same_pr(url))
+        try:
+            seen = provider(url).snapshot()
+        except WatchError as error:
+            errors.append(f"{url}: {error}")
+            continue
+        except (KeyError, TypeError, AttributeError) as error:
+            errors.append(f"{url}: unexpected answer ({error!r})")
+            continue
+        if seen["status"] in FINAL:
+            continue
+        entry = {"url": url, "note": AUTO_TRACK[row["why"]], "added": _now(), "checked": _now(), "seen": seen,
+                 "auto": row["why"], **({"reviewed": True} if row["why"] == "approved" else {})}
+        path = entry_path(url)
+        save(path, entry)
+        entries.append((path, entry))
+        lines.append(f"{label(entry)}: now tracked ({AUTO_TRACK[row['why']]}), {seen['status']}, "
+                     f"{ci_summary(seen['checks'])} {url}")
+    return lines, errors
+
+
 def done_entries() -> list[dict]:
     """PRs merged, abandoned or closed in the last KEEP_DAYS days, newest first."""
     entries = [json.loads(path.read_text(encoding="utf-8")) for path in DONE_DIR.glob("*.json")]
@@ -923,6 +1072,8 @@ def changes(entry: dict, now: dict, ignore: set[str], bots: set[str]) -> list[st
 def add(url: str, note: str) -> None:
     url = normalize(url)
     path = entry_path(url)
+    if same_pr(url) in (gone := dismissed()):
+        save_dismissed(gone - {same_pr(url)})
     if path.exists():
         print(f"already tracked: {url}")
         return
@@ -983,6 +1134,10 @@ def check(peek: bool) -> None:
             report.append(f"{label(entry)}: {now['status']}, no longer tracked")
         else:
             save(path, {**entry, "checked": _now(), "seen": now})
+    if not peek:
+        found, found_errors = auto_track(entries)
+        report += found
+        errors += found_errors
     reviews, review_errors = fetch_review_requests(entries)
     announced = set(reviews_file().get("announced", []))
     report += [f"{row['repo']} #{row['number']} ({_plain(row['title'], 80)}): {_plain(row['author'], 40)} asks for "
@@ -1043,8 +1198,10 @@ def waiting_for(seen: dict) -> str:
 def status(live: bool) -> None:
     """JSON for a pane or a script; `live` fetches every PR now but records nothing."""
     entries = load_entries()
+    _, errors = auto_track(entries) if live else ([], [])
     fetched = fetch_all(entries) if live else [(p, e, None, "", "") for p, e in entries]
-    reviews, errors = fetch_review_requests(entries) if live else (cached_reviews(), [])
+    reviews, review_errors = fetch_review_requests(entries) if live else (cached_reviews(), [])
+    errors += review_errors
     builds, build_errors = fetch_builds(entries) if live else (cached_builds(), [])
     errors += build_errors
     if live:
@@ -1203,7 +1360,8 @@ def remove(url: str) -> None:
     if not path.exists():
         raise WatchError(f"not tracked: {url}")
     path.unlink()
-    print(f"stopped tracking {normalize(url)}")
+    save_dismissed(dismissed() | {same_pr(url)})
+    print(f"stopped tracking {normalize(url)} (not tracked again on its own; `add` it to track it again)")
 
 
 def _now() -> str:
