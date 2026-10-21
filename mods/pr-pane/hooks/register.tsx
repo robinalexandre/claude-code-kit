@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
 import type { BuildRow, BuildStep, CiCheck, PrRow, PrSnapshot, RecentPr, ReviewPr } from '../types'
 
@@ -31,6 +31,7 @@ const inFlight = atom({ plugin: 'pr-pane', key: 'busy' } as const, '')
 const isRecentOpen = atom({ plugin: 'pr-pane', key: 'isRecentOpen' } as const, true)
 const openRepos = atom({ plugin: 'pr-pane', key: 'openRepos' } as const, {})
 const openPrs = atom({ plugin: 'pr-pane', key: 'openPrs' } as const, {})
+const readChanges = atom({ plugin: 'pr-pane', key: 'readChanges' } as const, {})
 
 const FAILED = new Set(['failed', 'broken', 'expired'])
 const RECENT_SHOWN = 8
@@ -41,6 +42,9 @@ const isRunning = (checks: CiCheck[]) => checks.some(check => !ENDED.has(check.s
 const BUILD_RUNNING = new Set(['queued', 'running'])
 
 const isBuildRunning = (build: BuildRow) => BUILD_RUNNING.has(build.status)
+
+// A stale run's host did not answer: it may have ended long ago, so it is shown but not watched.
+const isBuildWatched = (build: BuildRow) => isBuildRunning(build) && build.stale !== true
 
 const buildColor = (status: string) =>
   BUILD_RUNNING.has(status) ? 'yellow' : status === 'succeeded' ? 'green' : status === 'canceled' ? 'gray' : 'red'
@@ -61,7 +65,7 @@ const minutesText = (fromMs: number, toMs: number) => {
 }
 
 const anyRunning = (prs: PrRow[], builds: BuildRow[]) =>
-  prs.some(pr => isRunning(pr.checks ?? [])) || builds.some(isBuildRunning)
+  prs.some(pr => isRunning(pr.checks ?? [])) || builds.some(isBuildWatched)
 
 const hasRequiredFailure = (checks: CiCheck[]) =>
   checks.some(check => FAILED.has(check.state) && check.required !== false)
@@ -490,14 +494,45 @@ const recentByRepo = (recent: RecentPr[]) => {
 
 // Sections and repo blocks start collapsed, except around a CI that runs: what the user toggles
 // stays that way for the session.
-const repoKey = (section: 'builds' | 'waiting' | 'approved' | 'recent', repo: string) => `${section}|${repo}`
+const repoKey = (section: 'builds' | 'attention' | 'reviews' | 'waiting' | 'approved' | 'recent', repo: string) =>
+  `${section}|${repo}`
 
 const toggleRepo = ($: EngineInterface, key: string, isOpen: boolean) =>
   update($, openRepos, open => ({ ...open, [key]: !isOpen }))
 
-// Each PR is one line until opened: its details (CI, votes, changes) fold under it.
-const togglePr = ($: EngineInterface, url: string, isOpen: boolean) =>
-  update($, openPrs, open => ({ ...open, [url]: !isOpen }))
+// Each PR is one line until opened: its details (CI, votes, changes) fold under it. Opening it reads
+// its changes: pr-watch clears them, the pane keeps showing them for the session.
+const togglePr = async ($: EngineInterface, pr: PrRow, isOpen: boolean) => {
+  await update($, openPrs, open => ({ ...open, [pr.url]: !isOpen }))
+  const kept = (await read($, readChanges))[pr.url] ?? []
+  const fresh = pr.changes.filter(change => !kept.includes(change))
+
+  if (isOpen || fresh.length === 0) {
+    return
+  }
+
+  await update($, readChanges, all => ({ ...all, [pr.url]: [...kept, ...fresh] }))
+  await update($, snapshot, shown =>
+    shown === null ? shown : { ...shown, prs: shown.prs.map(one => (one.url === pr.url ? { ...one, changes: [] } : one)) }
+  )
+  await prWatch($, ['read', pr.url], 60_000).catch(() => undefined)
+}
+
+// What the band says the user has to do, most urgent first: red, act on a PR; yellow, a review to
+// give, a run in progress or pr-watch not running; green, a PR to merge; nothing, all waits for others.
+const bandTone = (shown: PrSnapshot | null, isBroken: boolean) => {
+  const prs = shown?.prs ?? []
+
+  if (prs.some(pr => pr.reviewed !== true && needsAttention(pr))) {
+    return 'red'
+  }
+
+  if (isBroken || (shown?.reviews?.length ?? 0) > 0 || (shown?.builds ?? []).some(isBuildWatched)) {
+    return 'yellow'
+  }
+
+  return prs.some(canMerge) ? 'green' : undefined
+}
 
 // A CI we just launched (a push, a rerun) is worth watching: the blocks around it open by default.
 const hasRunningCi = (prs: PrRow[]) => prs.some(pr => isRunning(pr.checks ?? []))
@@ -545,7 +580,7 @@ export const register: Register = on => {
     const shown = await read($, snapshot)
     const prs = shown?.prs ?? []
     const reviews = shown?.reviews?.length ?? 0
-    const running = (shown?.builds ?? []).filter(isBuildRunning).length
+    const running = (shown?.builds ?? []).filter(isBuildWatched).length
     const isBroken = (await read($, problem)) !== ''
     const isEmpty = prs.length === 0 && reviews === 0 && running === 0 && !isBroken
 
@@ -553,24 +588,21 @@ export const register: Register = on => {
       return beneath
     }
 
-    const { Box, Button } = $.ui.resolve(e)
-    const needsUs = isBroken || reviews > 0 || prs.some(needsAttention)
+    const { Box, Button, Text } = $.ui.resolve(e)
+    const tone = bandTone(shown, isBroken)
     const label =
       `PRs ${prs.length}${reviews > 0 ? ` · ${reviews} to review` : ''}` +
-      `${running > 0 ? ` · ${running} build${running === 1 ? '' : 's'} running` : ''}${needsUs ? ' !' : ''}`
+      `${running > 0 ? ` · ${running} build${running === 1 ? '' : 's'} running` : ''}${tone === 'red' ? ' !' : ''}`
+    const text = isBroken ? 'PRs ?' : label
 
     return (
       <Box flexDirection="row" justifyContent="space-between" alignItems="flex-start">
         <Box flexDirection="column" flexShrink={1}>
           {beneath}
         </Box>
-        <Button
-          key="prs"
-          label={isBroken ? 'PRs ?' : label}
-          variant={needsUs ? 'primary' : undefined}
-          dimColor={!needsUs}
-          onPress={() => void openPane($)}
-        />
+        <Button key="prs" label={text} dimColor={tone === undefined} onPress={() => void openPane($)}>
+          {tone === undefined ? text : <Text color={tone} bold={tone === 'red'}>{text}</Text>}
+        </Button>
       </Box>
     )
   })
@@ -599,10 +631,16 @@ export const register: Register = on => {
     const nowMs = await $.clock.now()
     const width = Math.max(20, e.props.bodyColumns - 2)
     const inner = width - 2
-    const prs = shown?.prs ?? []
+    const alreadyRead = await read($, readChanges)
+    // A PR keeps the changes read this session, so it stays in its section until the session ends.
+    const prs = (shown?.prs ?? []).map(pr => {
+      const kept = alreadyRead[pr.url] ?? []
+
+      return kept.length === 0 ? pr : { ...pr, changes: [...kept, ...pr.changes.filter(change => !kept.includes(change))] }
+    })
     const reviews = shown?.reviews ?? []
     const builds = shown?.builds ?? []
-    const runningBuilds = builds.filter(isBuildRunning).length
+    const runningBuilds = builds.filter(isBuildWatched).length
     const isBuildsOpen = expanded[repoKey('builds', '*')] ?? runningBuilds > 0
     // By priority: what needs the user, then what waits for others, then what is ready to merge.
     const attention = prs.filter(pr => pr.reviewed !== true && needsAttention(pr))
@@ -633,7 +671,7 @@ export const register: Register = on => {
                 key={`pr-toggle-${group}-${pr.number}`}
                 label={isOpen ? '▾' : '▸'}
                 plain
-                onPress={() => void togglePr($, pr.url, isOpen)}
+                onPress={() => void togglePr($, pr, isOpen)}
               />
               <Text>
                 {' '}
@@ -772,7 +810,8 @@ export const register: Register = on => {
       const at = build.status === 'queued' ? endedText(build.queued, nowMs) : isEnded ? endedText(build.ended, nowMs) : ''
       const duration = build.status === 'running' ? minutesText(startedMs, nowMs) : isEnded ? minutesText(startedMs, endedMs(build.ended)) : ''
       const branch = build.branch ? ` · ${build.branch}` : ''
-      const room = inner - build.number.length - branch.length - build.status.length - 14
+      const staleMark = build.stale === true ? ' · cached' : ''
+      const room = inner - build.number.length - branch.length - build.status.length - staleMark.length - 14
       // The pipeline's name comes first: on a narrow pane the duration, then the time, give way.
       const when = [[at, duration].filter(Boolean).join(' · '), at, ''].find(option => room - option.length >= 20) ?? ''
       const nameWidth = Math.max(8, room - when.length - 2)
@@ -871,7 +910,7 @@ export const register: Register = on => {
                 <Text bold> {truncate(build.pipeline, nameWidth)}</Text>
                 <Text dimColor>{branch} · </Text>
                 <Text color={color}>{build.status}</Text>
-                <Text dimColor>{when ? ` ${when}` : ''}</Text>
+                <Text dimColor>{when ? ` ${when}` : ''}{staleMark}</Text>
               </Text>
             </Box>
             <Button key={`build-open-${build.number}`} label="open" dimColor onPress={() => void openPr($, build.url)} />
@@ -907,28 +946,96 @@ export const register: Register = on => {
       )
     }
 
-    // A section's PRs, one closed block per repo in pr-watch's order, each in merge order.
-    const repoBlocks = (section: 'waiting' | 'approved', rows: PrRow[], withMerge: boolean) =>
+    // One block per repo, in the order its rows come; `hint` is said beside a folded one.
+    const repoBlock = (key: string, buttonKey: string, repo: string, count: number, isOpen: boolean, hint: RenderChildren, body: () => RenderChildren) => (
+      <Box key={`block-${key}`} flexDirection="column" paddingLeft={2}>
+        <Box flexDirection="row">
+          <Button
+            key={buttonKey}
+            label={`${isOpen ? '▾' : '▸'} ${truncate(repo, width - 30)} (${count})`}
+            plain
+            onPress={() => void toggleRepo($, key, isOpen)}
+          />
+          {hint}
+        </Box>
+        {isOpen && body()}
+      </Box>
+    )
+
+    // A section's PRs, one block per repo in pr-watch's order, each in merge order. The PRs that need
+    // the user show open; the others fold unless a CI runs.
+    const repoBlocks = (section: 'attention' | 'waiting' | 'approved', rows: PrRow[], withMerge: boolean) =>
       byRepo(rows).map(([repo, prsOfRepo]) => {
         const isStacked = prsOfRepo.some(pr => (pr.after ?? '') !== '')
         const key = repoKey(section, repo)
-        const isOpen = expanded[key] ?? hasRunningCi(prsOfRepo)
+        const isOpen = expanded[key] ?? (section === 'attention' || hasRunningCi(prsOfRepo))
+        const hint = isOpen
+          ? isStacked && <Text dimColor> · merge top to bottom</Text>
+          : hasRunningCi(prsOfRepo) && <Text color="yellow"> · CI running</Text>
 
-        return (
-          <Box key={`${section}-block-${repo}`} flexDirection="column" paddingLeft={2}>
+        return repoBlock(key, section === 'waiting' ? `repo-${repo}` : `${section}-repo-${repo}`, repo, prsOfRepo.length, isOpen, hint, () =>
+          prsOfRepo.map((pr, index) => prRow(pr, repo, index, isStacked, withMerge)),
+        )
+      })
+
+    // A PR waiting for the user's review, with a quick review by Claude and `approve` beside it.
+    const reviewRow = (pr: ReviewPr) => {
+      const id = `${pr.repo}-${pr.number}`
+      const isArmed = armedKey === actionKey('approve', pr.url)
+
+      return (
+        <Box key={`review-${id}`} flexDirection="column" paddingLeft={2}>
+          <Box flexDirection="row" justifyContent="space-between">
+            <Text bold>
+              <Text color="yellow">● </Text>
+              <Link href={pr.url} label={`#${pr.number}`} />
+              <Text> {truncate(pr.title, width - pr.number.length - 16)}</Text>
+            </Text>
+            <Button key={`review-open-${id}`} label="open" dimColor onPress={() => void openPr($, pr.url)} />
+          </Box>
+          <Box flexDirection="row" justifyContent="space-between">
+            <Text dimColor>{truncate(`by ${pr.author} · ${endedText(pr.updated, nowMs)}`, width - 38)}</Text>
             <Box flexDirection="row">
               <Button
-                key={section === 'waiting' ? `repo-${repo}` : `${section}-repo-${repo}`}
-                label={`${isOpen ? '▾' : '▸'} ${truncate(repo, width - 30)} (${prsOfRepo.length})`}
-                plain
-                onPress={() => void toggleRepo($, key, isOpen)}
+                key={`review-claude-${id}`}
+                label="review with Claude"
+                variant="primary"
+                onPress={() => void askReview($, pr)}
               />
-              {isOpen && isStacked && <Text dimColor> · merge top to bottom</Text>}
-              {!isOpen && hasRunningCi(prsOfRepo) && <Text color="yellow"> · CI running</Text>}
+              <Text> </Text>
+              {busyKey === actionKey('approve', pr.url) ? (
+                <Text dimColor>approving…</Text>
+              ) : (
+                <Button
+                  key={`review-approve-${id}`}
+                  label={isArmed ? 'press again to approve' : 'approve'}
+                  variant={isArmed ? 'primary' : undefined}
+                  dimColor={!isArmed}
+                  onPress={() => void approvePr($, pr)}
+                />
+              )}
             </Box>
-            {isOpen && prsOfRepo.map((pr, index) => prRow(pr, repo, index, isStacked, withMerge))}
           </Box>
+        </Box>
+      )
+    }
+
+    // The runs of each repo, open unless folded by hand; a folded one says what it is doing.
+    const buildBlocks = () =>
+      byRepo(builds).map(([repo, runs]) => {
+        const key = repoKey('builds', repo)
+        const isOpen = expanded[key] ?? true
+        const running = runs.filter(isBuildWatched).length
+        const hint = isOpen ? null : running > 0 ? (
+          <Text color="yellow"> · {running} running</Text>
+        ) : (
+          <Text dimColor>
+            {' '}
+            · last {runs[0].status} {endedText(runs[0].ended, nowMs)}
+          </Text>
         )
+
+        return repoBlock(key, `builds-repo-${repo}`, repo, runs.length, isOpen, hint, () => runs.map(buildRow))
       })
 
     return (
@@ -965,7 +1072,7 @@ export const register: Register = on => {
                 </Text>
               )}
             </Box>
-            {isBuildsOpen && builds.map(buildRow)}
+            {isBuildsOpen && buildBlocks()}
           </Box>
         )}
         {attention.length > 0 && (
@@ -973,7 +1080,7 @@ export const register: Register = on => {
             <Text bold color="red">
               Needs your attention ({attention.length})
             </Text>
-            {attention.map((pr, index) => prRow(pr, pr.repo, index, false))}
+            {repoBlocks('attention', attention, false)}
           </Box>
         )}
         {reviews.length > 0 && (
@@ -981,45 +1088,11 @@ export const register: Register = on => {
             <Text bold color="yellow">
               Waiting for my review ({reviews.length})
             </Text>
-            {reviews.map(pr => {
-              const id = `${pr.repo}-${pr.number}`
-              const isArmed = armedKey === actionKey('approve', pr.url)
+            {byRepo(reviews).map(([repo, requests]) => {
+              const key = repoKey('reviews', repo)
+              const isOpen = expanded[key] ?? true
 
-              return (
-                <Box key={`review-${id}`} flexDirection="column" paddingLeft={2}>
-                  <Box flexDirection="row" justifyContent="space-between">
-                    <Text bold>
-                      <Text color="yellow">● </Text>
-                      <Link href={pr.url} label={`#${pr.number}`} />
-                      <Text> {truncate(pr.title, width - pr.number.length - 14)}</Text>
-                    </Text>
-                    <Button key={`review-open-${id}`} label="open" dimColor onPress={() => void openPr($, pr.url)} />
-                  </Box>
-                  <Box flexDirection="row" justifyContent="space-between">
-                    <Text dimColor>{truncate(`${pr.repo} · by ${pr.author} · ${endedText(pr.updated, nowMs)}`, width - 36)}</Text>
-                    <Box flexDirection="row">
-                      <Button
-                        key={`review-claude-${id}`}
-                        label="review with Claude"
-                        variant="primary"
-                        onPress={() => void askReview($, pr)}
-                      />
-                      <Text> </Text>
-                      {busyKey === actionKey('approve', pr.url) ? (
-                        <Text dimColor>approving…</Text>
-                      ) : (
-                        <Button
-                          key={`review-approve-${id}`}
-                          label={isArmed ? 'press again to approve' : 'approve'}
-                          variant={isArmed ? 'primary' : undefined}
-                          dimColor={!isArmed}
-                          onPress={() => void approvePr($, pr)}
-                        />
-                      )}
-                    </Box>
-                  </Box>
-                </Box>
-              )
+              return repoBlock(key, `reviews-repo-${repo}`, repo, requests.length, isOpen, null, () => requests.map(reviewRow))
             })}
           </Box>
         )}

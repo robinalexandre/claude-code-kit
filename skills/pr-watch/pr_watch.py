@@ -1,12 +1,15 @@
 """Track pull requests until they are merged: report new comments, votes, CI results and status changes.
 
     pr_watch.py add URL [--note TEXT]   start tracking a PR (takes a baseline, reports nothing)
-    pr_watch.py check [--peek]          what changed on every tracked PR since the last check
-                                        (--peek: report without recording it as seen)
+    pr_watch.py check [--peek|--quiet]  what changed on every tracked PR since the last check
+                                        (--peek: report without recording it as seen; --quiet:
+                                        record it, print nothing, keep it on each PR as unread)
+    pr_watch.py read URL                clear a PR's unread changes
     pr_watch.py list                    tracked PRs and their status
     pr_watch.py status [--live]         the same as JSON, with what each PR waits for
                                         (--live: fetched now, with the changes; records only the review
                                         requests, the pipeline runs and the user's PRs it starts tracking)
+                                        each PR's `changes` start with its unread ones
     pr_watch.py open URL                open a PR or a build in the default browser
     pr_watch.py details URL             JSON: the PR's failed checks with their failed steps and errors,
                                         or a build's steps, every one with its job and state, those
@@ -656,24 +659,40 @@ def fetch_builds(entries: list[tuple[Path, dict]]) -> tuple[list[dict], list[str
             projects.add(f"{match['org'] or match['org2']}/{urllib.parse.unquote(match['project'])}")
         elif match := GITHUB_URL.match(entry["url"]):
             repos.add(f"{match['owner']}/{match['repo']}")
-    jobs: list[Callable[[], list[dict]]] = [partial(ado_manual_builds, *place.split("/", 1)) for place in sorted(projects)]
-    jobs += [partial(github_manual_runs, *place.split("/", 1)) for place in sorted(repos)]
+    jobs: list[tuple[str, Callable[[], list[dict]]]] = [
+        (place, partial(ado_manual_builds, *place.split("/", 1))) for place in sorted(projects)]
+    jobs += [(place, partial(github_manual_runs, *place.split("/", 1))) for place in sorted(repos)]
 
-    def one(job: Callable[[], list[dict]]) -> tuple[list[dict], str]:
+    def one(item: tuple[str, Callable[[], list[dict]]]) -> tuple[str, list[dict], str]:
+        place, job = item
         try:
-            return job(), ""
+            return place, job(), ""
         except WatchError as error:
-            return [], f"pipeline runs: {error}"
+            return place, [], f"pipeline runs: {error}"
         except (KeyError, TypeError) as error:
-            return [], f"pipeline runs: unexpected answer ({error!r})"
+            return place, [], f"pipeline runs: unexpected answer ({error!r})"
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         results = list(pool.map(one, jobs))
-    rows = [row for found, _ in results for row in found]
+    # A place that did not answer (unreachable from this computer, slow, down) keeps the runs last
+    # found there, marked stale, until they are older than BUILD_HOURS.
+    failed = {place for place, _, error in results if error}
+    kept = [{**row, "stale": True} for row in cached_builds()
+            if _build_place(row["url"]) in failed and _recent_enough(row["ended"] or row["queued"])]
+    rows = [row for _, found, _ in results for row in found] + kept
     running = sorted((row for row in rows if row["status"] in BUILD_RUNNING), key=lambda row: row["queued"], reverse=True)
     ended = sorted((row for row in rows if row["status"] not in BUILD_RUNNING and _recent_enough(row["ended"])),
                    key=lambda row: row["ended"], reverse=True)
-    return running + ended, [error for _, error in results if error]
+    return running + ended, [error for _, _, error in results if error]
+
+
+def _build_place(url: str) -> str:
+    """The `org/project` or `owner/repo` a run's URL belongs to, as fetch_builds names its places."""
+    if match := ADO_BUILD_URL.match(url):
+        return f"{match['org']}/{urllib.parse.unquote(match['project'])}"
+    if match := GITHUB_RUN_URL.match(url):
+        return f"{match['owner']}/{match['repo']}"
+    return ""
 
 
 def builds_file() -> dict:
@@ -883,21 +902,31 @@ def fetch_review_requests(entries: list[tuple[Path, dict]]) -> tuple[list[dict],
     for _, entry in entries:
         if match := ADO_URL.match(entry["url"]):
             orgs.add(match["org"] or match["org2"])
-    jobs: list[Callable[[], list[dict]]] = [github_review_requests]
-    jobs += [partial(ado_review_requests, org) for org in sorted(orgs)]
+    jobs: list[tuple[str, Callable[[], list[dict]]]] = [("github", github_review_requests)]
+    jobs += [(org, partial(ado_review_requests, org)) for org in sorted(orgs)]
 
-    def one(job: Callable[[], list[dict]]) -> tuple[list[dict], str]:
+    def one(item: tuple[str, Callable[[], list[dict]]]) -> tuple[str, list[dict], str]:
+        place, job = item
         try:
-            return job(), ""
+            return place, job(), ""
         except WatchError as error:
-            return [], f"review requests: {error}"
+            return place, [], f"review requests: {error}"
         except (KeyError, TypeError) as error:
-            return [], f"review requests: unexpected answer ({error!r})"
+            return place, [], f"review requests: unexpected answer ({error!r})"
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         results = list(pool.map(one, jobs))
-    rows = sorted((row for found, _ in results for row in found), key=lambda row: row["updated"], reverse=True)
-    return rows, [error for _, error in results if error]
+    # A host that did not answer keeps the requests last found there.
+    failed = {place for place, _, error in results if error}
+    kept = [row for row in cached_reviews() if _review_place(row["url"]) in failed]
+    rows = sorted([row for _, found, _ in results for row in found] + kept, key=lambda row: row["updated"], reverse=True)
+    return rows, [error for _, _, error in results if error]
+
+
+def _review_place(url: str) -> str:
+    if match := ADO_URL.match(url):
+        return match["org"] or match["org2"]
+    return "github" if GITHUB_URL.match(url) else ""
 
 
 AUTO_TRACK = {"opened": "opened by you", "assigned": "assigned to you", "approved": "approved by you"}
@@ -1114,8 +1143,25 @@ def fetch_all(entries: list[tuple[Path, dict]]) -> list[tuple[Path, dict, dict |
         return list(pool.map(one, entries))
 
 
-def check(peek: bool) -> None:
+UNREAD_KEPT = 20
+
+
+def grouped_errors(lines: list[str]) -> list[str]:
+    """`<what>: <error>` lines, each error once with what it hit: a host that cannot be reached
+    fails every PR, review list and run list on it the same way."""
+    hit: dict[str, list[str]] = {}
+    for line in lines:
+        what, _, error = line.partition(": ")
+        if not error:
+            what, error = "", line
+        match = ADO_URL.match(what) or GITHUB_URL.match(what)
+        hit.setdefault(error, []).append(f"{match['repo']} #{match['id']}" if match else what)
+    return [f"{error} ({', '.join(filter(None, whats))})" if any(whats) else error for error, whats in hit.items()]
+
+
+def check(peek: bool, quiet: bool = False) -> None:
     """With `peek`, report without recording: the changes are reported again at the next check.
+    With `quiet`, record and print nothing: each PR keeps its changes as `unread` until `read`.
 
     Comments by the person checking are left out.
     """
@@ -1125,7 +1171,8 @@ def check(peek: bool) -> None:
         if now is None:
             errors.append(f"{entry['url']}: {error}")
             continue
-        report += changes(entry, now, ignore | {me} - {""}, bots)
+        found = changes(entry, now, ignore | {me} - {""}, bots)
+        report += found
         if peek:
             continue
         if now["status"] in FINAL:
@@ -1133,7 +1180,12 @@ def check(peek: bool) -> None:
             path.unlink()
             report.append(f"{label(entry)}: {now['status']}, no longer tracked")
         else:
-            save(path, {**entry, "checked": _now(), "seen": now})
+            unread = entry.get("unread", [])
+            if quiet:
+                prefix = f"{label(entry)}: "
+                fresh = [line.removeprefix(prefix) for line in found]
+                unread = list(dict.fromkeys(unread + fresh))[-UNREAD_KEPT:]
+            save(path, {**entry, "checked": _now(), "seen": now, "unread": unread})
     if not peek:
         found, found_errors = auto_track(entries)
         report += found
@@ -1147,14 +1199,31 @@ def check(peek: bool) -> None:
     report += build_changes(builds_file(), builds)
     errors += build_errors
     if not peek:
-        # Saved even when a host failed: its requests are reported again once it answers.
+        # Saved even when a host failed: its requests and runs are the ones last found there.
         save_reviews(reviews, announced=sorted(row["url"] for row in reviews))
-        if not build_errors:
-            save_builds(builds)
+        save_builds(builds)
         prune_done()
+    if quiet:
+        return
     print("\n".join(report) if report else "No change.")
     if errors:
-        print("Could not check:\n" + "\n".join(errors), file=sys.stderr)
+        print("Could not check:\n" + "\n".join(grouped_errors(errors)), file=sys.stderr)
+
+
+def read(url: str) -> None:
+    """The person has seen the PR's changes: its unread ones are cleared and, when the host answers,
+    what it shows now is recorded as seen, so the next check does not bring them back."""
+    path = entry_path(normalize(url))
+    if not path.exists():
+        raise WatchError(f"not tracked: {url}")
+    entry = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        now = provider(entry["url"]).snapshot()
+    except (WatchError, KeyError, TypeError, AttributeError):
+        now = None
+    if now is not None and now["status"] not in FINAL:
+        entry = {**entry, "checked": _now(), "seen": now}
+    save(path, {**entry, "unread": []})
 
 
 def list_() -> None:
@@ -1205,11 +1274,10 @@ def status(live: bool) -> None:
     builds, build_errors = fetch_builds(entries) if live else (cached_builds(), [])
     errors += build_errors
     if live:
-        # So the cached status the pane reloads in between shows the same lists. The runs are kept
-        # as they were when a host failed, so a check still reports what ended in between.
+        # So the cached status the pane reloads in between shows the same lists; a host that failed
+        # keeps its cached rows in them.
         save_reviews(reviews)
-        if not build_errors:
-            save_builds(builds)
+        save_builds(builds)
     ignore, bots, prs = config("ignoreAuthors"), config("bots"), []
     for _, entry, now, me, error in fetched:
         if error:
@@ -1218,6 +1286,7 @@ def status(live: bool) -> None:
         match = ADO_URL.match(entry["url"]) or GITHUB_URL.match(entry["url"])
         prefix = f"{label(entry)}: "
         news = [line.removeprefix(prefix) for line in changes(entry, now, ignore | {me} - {""}, bots)] if now else []
+        news = list(dict.fromkeys(entry.get("unread", []) + news))
         prs.append({
             "url": entry["url"],
             "repo": match["repo"] if match else "",
@@ -1252,7 +1321,7 @@ def status(live: bool) -> None:
             "ended": entry.get("ended", ""),
         })
     print(json.dumps({"live": live, "prs": merge_order(prs), "reviews": reviews, "builds": builds, "recent": recent,
-                      "errors": errors}, ensure_ascii=False))
+                      "errors": grouped_errors(errors)}, ensure_ascii=False))
 
 
 def merge_order(prs: list[dict]) -> list[dict]:
@@ -1375,7 +1444,9 @@ def main(argv: list[str]) -> int:
             note = args[args.index("--note") + 1] if "--note" in args[1:-1] else ""
             add(args[0], note)
         elif command == "check":
-            check(peek="--peek" in args)
+            check(peek="--peek" in args, quiet="--quiet" in args)
+        elif command == "read" and args:
+            read(args[0])
         elif command == "list":
             list_()
         elif command == "status":

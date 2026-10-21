@@ -49,6 +49,8 @@ export type BuildRow = {
   queued: string
   started: string
   ended: string
+  /** The run's host did not answer: this is the run as last found there. */
+  stale?: boolean
 }
 
 export type PrSnapshot = {
@@ -87,6 +89,8 @@ declare module 'claude-code' {
       openRepos: Record<string, boolean>
       /** PR URLs whose details are unfolded. */
       openPrs: Record<string, boolean>
+      /** The changes the user read by opening a PR, kept on screen for the session. */
+      readChanges: Record<string, string[]>
     }
   }
 }

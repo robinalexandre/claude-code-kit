@@ -41,6 +41,14 @@ const LIVE = {
   errors: [],
 }
 
+// The color the band's PRs button is drawn in; none when it is drawn dim.
+const bandColor = async (band: { find: (query: { key: string }) => Promise<{ children: unknown[] } | undefined> }) => {
+  const button = await band.find({ key: 'prs' })
+  const text = button?.children.find(child => typeof child === 'object') as { props?: { color?: string } } | undefined
+
+  return text?.props?.color
+}
+
 const mountPane = ($: Engine, surface: 'terminal' | 'desktop', bodyColumns = PANE_PROPS.bodyColumns) =>
   $.ui.mount({
     plugin: 'pr-pane',
@@ -150,6 +158,8 @@ test('PRs are grouped per repo in merge order and CI checks show while they run,
 
   // The conflicted PR is listed first, under the red title; the others wait in a closed section.
   expect(await pane.find({ text: 'Needs your attention (1)' })).toBeDefined()
+  // Grouped per repo too, open: these are the PRs to act on.
+  expect(await pane.find({ key: 'attention-repo-web', text: '▾ web (1)' })).toBeDefined()
   expect(await pane.find({ key: 'waiting', text: '▸ Waiting for others (2)' })).toBeDefined()
   expect(await pane.find({ key: 'repo-api' })).toBeUndefined()
   expect(await pane.find({ key: 'repo-web' })).toBeUndefined()
@@ -210,6 +220,7 @@ test('a merge conflict marks the band and the pane asks Claude to rebase and fix
   const pane = await mountPane($, 'terminal')
 
   expect(await band.find({ key: 'prs', text: 'PRs 1 !' })).toBeDefined()
+  expect(await bandColor(band)).toBe('red')
 
   await pane.press({ key: 'pr-toggle-shop-9' })
   await pane.press({ key: 'fix-shop-9' })
@@ -350,9 +361,12 @@ test('a PR waiting for my review is listed first: approve on a second press, or 
   const band = await $.ui.mount({ plugin: 'pr-pane', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
   const pane = await mountPane($, 'terminal')
 
-  expect(await band.find({ key: 'prs', text: 'PRs 1 · 1 to review !' })).toBeDefined()
+  // A review to give is something to do, not a problem: yellow, no `!`.
+  expect(await band.find({ key: 'prs', text: 'PRs 1 · 1 to review' })).toBeDefined()
+  expect(await bandColor(band)).toBe('yellow')
   expect(await pane.find({ text: 'Waiting for my review (1)' })).toBeDefined()
-  expect(await pane.find({ text: /api · by grace · 3\/1/ })).toBeDefined()
+  expect(await pane.find({ key: 'reviews-repo-api', text: '▾ api (1)' })).toBeDefined()
+  expect(await pane.find({ text: /^by grace · 3\/1/ })).toBeDefined()
   const buttons = (await pane.findAll({ type: 'Button' })).map(element => element.key ?? '')
   expect(buttons.indexOf('review-approve-api-873')).toBeGreaterThan(-1)
   expect(buttons.indexOf('review-approve-api-873')).toBeLessThan(buttons.indexOf('waiting'))
@@ -568,11 +582,24 @@ test('the pipeline runs the user launched come first, open while one runs, and r
   const pane = await mountPane($, 'terminal', 100)
 
   expect(await band.find({ key: 'prs', text: 'PRs 1 · 1 build running' })).toBeDefined()
+  expect(await bandColor(band)).toBe('yellow')
   // The section sits above the PRs, open because a run is in progress.
   expect(await pane.find({ key: 'builds', text: '▾ Pipeline runs (3)' })).toBeDefined()
   const buttons = (await pane.findAll({ type: 'Button' })).map(element => element.key ?? '')
   expect(buttons.indexOf('builds')).toBeLessThan(buttons.indexOf('waiting'))
+  // One block per repo, the one with a running run first.
+  expect(buttons.indexOf('builds-repo-project')).toBeLessThan(buttons.indexOf('builds-repo-shop'))
+  expect(await pane.find({ key: 'builds-repo-project', text: '▾ project (2)' })).toBeDefined()
   expect(await pane.find({ text: /#70125 api-packaging · develop · running/ })).toBeDefined()
+
+  await pane.press({ key: 'builds-repo-shop' })
+
+  expect(await pane.find({ key: 'builds-repo-shop', text: '▸ shop (1)' })).toBeDefined()
+  expect(await pane.find({ text: /^ · last succeeded / })).toBeDefined()
+  expect(await pane.find({ key: 'build-toggle-42' })).toBeUndefined()
+
+  await pane.press({ key: 'builds-repo-shop' })
+
   expect(await pane.find({ text: /#42 Deploy · main · succeeded .* · 8 min/ })).toBeDefined()
   // Every run unfolds from its line; the actions sit inside, a diagnosis only when it did not succeed.
   expect(await pane.find({ key: 'build-toggle-42', text: '▸' })).toBeDefined()
@@ -653,6 +680,38 @@ test('the pipeline runs the user launched come first, open while one runs, and r
   expect(liveCalls).toBe(before + 1)
 })
 
+test('a run whose host did not answer is shown as cached and not watched', async ($, on) => {
+  const clock = mock.clock(on)
+  let liveCalls = 0
+  const stale = { ...BUILDS, builds: [{ ...BUILDS.builds[0], stale: true }, BUILDS.builds[1]] }
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
+  on('process.run', ($, e) => {
+    liveCalls += e.argv.includes('--live') ? 1 : 0
+
+    return ran(0, JSON.stringify(stale))
+  })
+  on('ui.render', () => Fragment({}))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  on('ui.panes', () => ({ value: [{ id: 'tracked-prs', title: 'Tracked PRs', isShown: true, isFocused: false, isPlaced: true }] }))
+
+  await $.command.run(RUN)
+  const band = await $.ui.mount({ plugin: 'pr-pane', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
+  const pane = await mountPane($, 'terminal', 100)
+
+  expect(await band.find({ key: 'prs', text: 'PRs 1' })).toBeDefined()
+  expect(await bandColor(band)).toBeUndefined()
+  expect(await pane.find({ key: 'builds', text: '▸ Pipeline runs (2)' })).toBeDefined()
+
+  await pane.press({ key: 'builds' })
+
+  expect(await pane.find({ text: /#70125 api-packaging · develop · running · cached$/ })).toBeDefined()
+
+  const before = liveCalls
+  await clock.advance(60_000)
+
+  expect(liveCalls).toBe(before)
+})
+
 test('on Windows, Git Bash is found from git when bash is not on the PATH', async ($, on) => {
   mock.clock(on)
   const calls: string[][] = []
@@ -717,6 +776,47 @@ test('the band shows a PRs button, marked when one needs us, that opens the pane
   await band.press({ key: 'prs' })
 
   expect(opened).toEqual(['tracked-prs', 'tracked-prs'])
+})
+
+test('the band is green when a PR only waits for the merge', async ($, on) => {
+  mock.clock(on)
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
+  on('process.run', () => ran(0, JSON.stringify({ live: false, prs: [row('1', { waiting: 'the merge' })], errors: [] })))
+  on('ui.render', () => Fragment({}))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+
+  await $.command.run(RUN)
+  const band = await $.ui.mount({ plugin: 'pr-pane', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
+
+  expect(await band.find({ key: 'prs', text: 'PRs 1' })).toBeDefined()
+  expect(await bandColor(band)).toBe('green')
+})
+
+test('opening a PR with a new comment reads it: pr-watch clears it, the pane keeps it on screen', async ($, on) => {
+  mock.clock(on)
+  const calls: string[] = []
+  const commented = row('4', { waiting: 'a review', changes: ['new comment by Ada on api.ts: why?'] })
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
+  on('process.run', ($, e) => {
+    calls.push(e.argv.slice(2).join(' '))
+
+    return ran(0, e.argv[2] === 'status' ? JSON.stringify({ live: false, prs: [commented], errors: [] }) : '')
+  })
+  on('ui.render', () => Fragment({}))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+
+  await $.command.run(RUN)
+  const band = await $.ui.mount({ plugin: 'pr-pane', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
+  const pane = await mountPane($, 'terminal')
+
+  expect(await bandColor(band)).toBe('red')
+  expect(await pane.find({ key: 'pr-toggle-shop-4' })).toBeDefined()
+
+  await pane.press({ key: 'pr-toggle-shop-4' })
+
+  expect(calls).toContain('read https://dev.azure.com/org/project/_git/shop/pullrequest/4')
+  expect(await pane.find({ text: /new comment by Ada on api\.ts: why\?/ })).toBeDefined()
+  expect(await bandColor(band)).toBeUndefined()
 })
 
 test('a failing pr-watch is shown in the pane', async ($, on) => {
