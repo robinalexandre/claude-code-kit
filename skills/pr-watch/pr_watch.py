@@ -176,17 +176,18 @@ class AzureDevOps:
 
     def snapshot(self) -> dict:
         pr = self.get(f"git/repositories/{self.repo}/pullrequests/{self.id}")
-        threads = self.get(f"git/repositories/{self.repo}/pullrequests/{self.id}/threads")["value"]
+        threads = self.get(f"git/repositories/{self.repo}/pullrequests/{self.id}/threads").get("value") or []
         comments = {}
         for thread in threads:
-            if thread.get("isDeleted") or thread.get("properties", {}).get("CodeReviewThreadType"):
+            if thread.get("isDeleted") or (thread.get("properties") or {}).get("CodeReviewThreadType"):
                 continue
-            for comment in thread.get("comments", []):
+            for comment in thread.get("comments") or []:
                 if comment.get("commentType") == "system" or comment.get("isDeleted"):
                     continue
+                author = comment.get("author") or {}
                 comments[f"{thread['id']}/{comment['id']}"] = {
-                    "author": comment["author"]["displayName"],
-                    "author_id": comment["author"]["id"],
+                    "author": author.get("displayName") or "someone",
+                    "author_id": author.get("id") or "",
                     "text": (comment.get("content") or "")[:EXCERPT],
                     "file": (thread.get("threadContext") or {}).get("filePath"),
                 }
@@ -194,10 +195,11 @@ class AzureDevOps:
             "title": pr["title"],
             "description": (pr.get("description") or "")[:DESCRIPTION],
             "status": pr["status"],
-            "target": pr.get("targetRefName", "").removeprefix("refs/heads/"),
-            "source": pr.get("sourceRefName", "").removeprefix("refs/heads/"),
+            "target": (pr.get("targetRefName") or "").removeprefix("refs/heads/"),
+            "source": (pr.get("sourceRefName") or "").removeprefix("refs/heads/"),
             "conflicts": pr.get("mergeStatus") == "conflicts",
-            "votes": {r["displayName"]: _ado_vote(r["vote"]) for r in pr.get("reviewers", []) if r["vote"]},
+            "votes": {r.get("displayName") or "someone": _ado_vote(r["vote"])
+                      for r in pr.get("reviewers") or [] if r.get("vote")},
             "comments": comments,
             "checks": self.checks(pr["repository"]["project"]["id"]),
         }
@@ -207,14 +209,14 @@ class AzureDevOps:
         artifact = f"vstfs:///CodeReview/CodeReviewId/{project_id}/{self.id}"
         evaluations = _http_json(
             f"{self.base}/policy/evaluations?artifactId={artifact}&api-version=7.1-preview.1", self.headers()
-        )["value"]  # type: ignore[index]
+        ).get("value") or []  # type: ignore[union-attr]
         checks = {}
         for evaluation in evaluations:
-            config = evaluation["configuration"]
-            kind = config["type"]["displayName"]
+            config = evaluation.get("configuration") or {}
+            kind = (config.get("type") or {}).get("displayName")
             if kind not in {"Build", "Status"} or evaluation["status"] == "notApplicable":
                 continue
-            settings, context = config["settings"], evaluation.get("context") or {}
+            settings, context = config.get("settings") or {}, evaluation.get("context") or {}
             name = (settings.get("displayName")
                     or self._definition_name(settings.get("buildDefinitionId"))
                     or "/".join(filter(None, (settings.get("statusGenre"), settings.get("statusName"))))
@@ -225,7 +227,7 @@ class AzureDevOps:
             build = context.get("buildId")
             checks[name] = {
                 "state": state,
-                "required": config["isBlocking"],
+                "required": config.get("isBlocking", True),
                 "link": f"{self.base.removesuffix('/_apis')}/_build/results?buildId={build}" if build else None,
                 "build": build,
                 "evaluation": evaluation["evaluationId"],
@@ -310,7 +312,7 @@ def ado_review_requests(org: str) -> list[dict]:
                        "&searchCriteria.status=active&$top=100&api-version=7.1", headers)["value"]  # type: ignore[index]
     rows = []
     for pr in found:
-        mine = next((r for r in pr.get("reviewers", []) if r["id"] == me), None)
+        mine = next((r for r in pr.get("reviewers") or [] if r.get("id") == me), None)
         if mine is None or mine.get("vote") or pr.get("isDraft") or pr["createdBy"]["id"] == me:
             continue
         project, repo = pr["repository"]["project"]["name"], pr["repository"]["name"]
@@ -675,15 +677,17 @@ class GitHub:
             for item in self.get(path):  # type: ignore[union-attr]
                 if kind == "summary" and not item.get("body"):
                     continue
+                # A deleted account comes back as `"user": null`.
+                author = (item.get("user") or {}).get("login") or "ghost"
                 comments[f"{kind}/{item['id']}"] = {
-                    "author": item["user"]["login"],
-                    "author_id": item["user"]["login"],
+                    "author": author,
+                    "author_id": author,
                     "text": (item.get("body") or "")[:EXCERPT],
                     "file": item.get("path"),
                 }
         reviews = self.get(f"pulls/{self.id}/reviews?per_page=100")
-        votes = {r["user"]["login"]: r["state"].lower().replace("_", " ") for r in reviews  # type: ignore[union-attr]
-                 if r["state"] in {"APPROVED", "CHANGES_REQUESTED"}}
+        votes = {(r.get("user") or {}).get("login") or "ghost": r["state"].lower().replace("_", " ")
+                 for r in reviews if r.get("state") in {"APPROVED", "CHANGES_REQUESTED"}}  # type: ignore[union-attr]
         status = "merged" if pr.get("merged_at") else pr["state"]
         return {"title": pr["title"], "description": (pr.get("body") or "")[:DESCRIPTION], "status": status,
                 "target": pr["base"]["ref"], "source": pr["head"]["ref"],
@@ -952,6 +956,8 @@ def fetch_all(entries: list[tuple[Path, dict]]) -> list[tuple[Path, dict, dict |
             return path, entry, pr.snapshot(), known, ""
         except WatchError as error:
             return path, entry, None, "", str(error)
+        except (KeyError, TypeError, AttributeError) as error:
+            return path, entry, None, "", f"{entry['url']}: unexpected answer ({error!r})"
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         return list(pool.map(one, entries))
@@ -1238,6 +1244,9 @@ def main(argv: list[str]) -> int:
             return 2
     except WatchError as error:
         print(f"pr-watch: {error}", file=sys.stderr)
+        return 1
+    except (KeyError, TypeError, AttributeError) as error:
+        print(f"pr-watch: unexpected answer from the host ({error!r})", file=sys.stderr)
         return 1
     return 0
 
