@@ -17,6 +17,7 @@ bash $SK/pr-watch.sh open <PR URL>    # in the default browser
 bash $SK/pr-watch.sh details <PR URL> # JSON: each failed check, its failed steps and error lines
 bash $SK/pr-watch.sh rerun <PR URL> <check name>  # relaunch it: only on the user's yes
 bash $SK/pr-watch.sh approve <PR URL> # vote approved (Azure DevOps) or submit an approving review (GitHub), then track it as reviewed (`reviewed: true` in status) until it is merged: only on the user's yes
+bash $SK/pr-watch.sh merge <PR URL>   # merge it (GitHub: squash when the repo allows it, else merge, else rebase; Azure DevOps: complete with the defaults): only on the user's yes
 bash $SK/pr-watch.sh remove <PR URL>
 ```
 

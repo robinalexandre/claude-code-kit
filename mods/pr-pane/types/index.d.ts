@@ -54,7 +54,8 @@ declare module 'claude-code' {
       ciToggled: Record<string, boolean>
       details: Record<string, CheckDetails>
       armed: string
-      approving: string
+      /** `approve|<url>` or `merge|<url>` while pr-watch runs it. */
+      busy: string
       isRecentOpen: boolean
       openRepos: Record<string, boolean>
     }

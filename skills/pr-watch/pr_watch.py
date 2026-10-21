@@ -11,6 +11,7 @@
     pr_watch.py rerun URL CHECK         relaunch a check (Azure DevOps: re-queue; GitHub: rerun failed jobs)
     pr_watch.py approve URL             approve a PR (Azure DevOps: vote approved; GitHub: an approving review)
                                         and track it as reviewed until it is merged
+    pr_watch.py merge URL               merge a PR (GitHub: squash if the repo allows it; Azure DevOps: complete)
     pr_watch.py remove URL              stop tracking a PR
 
 Tracked PRs live in $PR_WATCH_DIR (default ~/.claude-sync/pr-watch), one JSON file per PR, so the
@@ -246,6 +247,15 @@ class AzureDevOps:
         _http_json(f"{self.base}/git/repositories/{self.repo}/pullrequests/{self.id}/reviewers/{self.me()}"
                    "?api-version=7.1", self.headers(), method="PUT", body={"vote": 10})
 
+    def merge(self) -> None:
+        """Completes the PR with the project's default options, as its Complete button does."""
+        pr = self.get(f"git/repositories/{self.repo}/pullrequests/{self.id}")
+        commit = (pr.get("lastMergeSourceCommit") or {}).get("commitId")
+        if not commit:
+            raise WatchError("the PR has no merge candidate yet")
+        _http_json(f"{self.base}/git/repositories/{self.repo}/pullrequests/{self.id}?api-version=7.1", self.headers(),
+                   method="PATCH", body={"status": "completed", "lastMergeSourceCommit": {"commitId": commit}})
+
     def _definition_name(self, definition_id: int | None) -> str:
         if definition_id is None:
             return ""
@@ -405,6 +415,18 @@ class GitHub:
     def approve(self) -> None:
         """Submits an approving review with no body."""
         _http_json(f"{self.base}/pulls/{self.id}/reviews", self.post_headers(), method="POST", body={"event": "APPROVE"})
+
+    def merge(self) -> None:
+        """Merges the way the repository allows: squash first, else a merge commit, else a rebase."""
+        repo = _http_json(self.base, self.post_headers())
+        assert isinstance(repo, dict)
+        if repo.get("allow_squash_merge", True):
+            method = "squash"
+        elif repo.get("allow_merge_commit", True):
+            method = "merge"
+        else:
+            method = "rebase"
+        _http_json(f"{self.base}/pulls/{self.id}/merge", self.post_headers(), method="PUT", body={"merge_method": method})
 
     def post_headers(self) -> dict[str, str]:
         if not self.headers:
@@ -821,6 +843,23 @@ def approve(url: str) -> None:
     print(f"approved {url}")
 
 
+def merge(url: str) -> None:
+    """Merges the PR; a tracked one that is merged by then moves to the recent list at once."""
+    url = normalize(url)
+    pr = provider(url)
+    pr.merge()
+    path = entry_path(url)
+    if path.exists():
+        entry = json.loads(path.read_text(encoding="utf-8"))
+        seen = pr.snapshot()
+        if seen["status"] in FINAL:
+            save(DONE_DIR / path.name, {**entry, "checked": _now(), "ended": _now(), "seen": seen})
+            path.unlink()
+        else:
+            save(path, {**entry, "checked": _now(), "seen": seen})
+    print(f"merged {url}")
+
+
 def open_(url: str) -> None:
     if not (ADO_URL.match(url) or GITHUB_URL.match(url)):
         raise WatchError(f"unsupported PR URL (Azure DevOps or GitHub): {url}")
@@ -860,6 +899,8 @@ def main(argv: list[str]) -> int:
             rerun(args[0], " ".join(args[1:]))
         elif command == "approve" and args:
             approve(args[0])
+        elif command == "merge" and args:
+            merge(args[0])
         elif command == "remove" and args:
             remove(args[0])
         else:

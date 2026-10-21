@@ -65,21 +65,26 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(calls[0]).toEqual(['bash', '-c', 'exit 0'])
     expect(calls[1]).toEqual(['bash', '/home/someone/.claude/skills/pr-watch/pr-watch.sh', 'status'])
     expect(await pane.find({ text: /^2 PRs/ })).toBeDefined()
-    expect(await pane.find({ key: 'repo-shop', text: '▸ shop (2)' })).toBeDefined()
-    expect(await pane.find({ text: /1 needs us/ })).toBeDefined()
-    expect(await pane.find({ text: 'a CI fix' })).toBeUndefined()
-
-    await pane.press({ key: 'repo-shop' })
-
-    expect(await pane.find({ key: 'repo-shop', text: '▾ shop (2)' })).toBeDefined()
+    // The failing one is listed first, always open; the other, closed under its repo.
+    expect(await pane.find({ text: 'Needs your attention (1)' })).toBeDefined()
     expect(await pane.find({ text: 'a CI fix' })).toBeDefined()
+    expect(await pane.find({ text: 'a review' })).toBeUndefined()
 
     await pane.press({ key: 'refresh' })
 
     expect(calls.some(argv => argv.slice(2).join(' ') === 'status --live')).toBe(true)
-    expect(await pane.find({ text: 'the merge' })).toBeDefined()
-    expect(await pane.find({ text: /Ada Lovelace voted approved/ })).toBeDefined()
     expect(await pane.find({ text: /live at/ })).toBeDefined()
+    // Approved and green: it moved to the closed approved block, with a merge button inside.
+    expect(await pane.find({ key: 'repo-shop' })).toBeUndefined()
+    expect(await pane.find({ key: 'approved', text: '▸ Approved, waiting for the merge (1)' })).toBeDefined()
+    expect(await pane.find({ text: /1 ready to merge/ })).toBeDefined()
+    expect(await pane.find({ text: /waits for the merge/ })).toBeUndefined()
+
+    await pane.press({ key: 'approved' })
+
+    expect(await pane.find({ text: /waits for the merge/ })).toBeDefined()
+    expect(await pane.find({ text: /Ada Lovelace voted approved/ })).toBeDefined()
+    expect(await pane.find({ key: 'merge-shop-1', text: 'merge' })).toBeDefined()
 
     await pane.press({ key: 'open-shop-2' })
 
@@ -128,9 +133,11 @@ test('PRs are grouped per repo in merge order and CI checks show while they run,
 
   expect(await pane.find({ key: 'repo-api', text: '▸ api (2)' })).toBeDefined()
   expect(await pane.find({ text: ' · merge top to bottom' })).toBeUndefined()
+  // The conflicted PR is listed first, under the red title, not under its repo.
+  expect(await pane.find({ text: 'Needs your attention (1)' })).toBeDefined()
+  expect(await pane.find({ key: 'repo-web' })).toBeUndefined()
 
   await pane.press({ key: 'repo-api' })
-  await pane.press({ key: 'repo-web' })
 
   expect(await pane.find({ text: ' · merge top to bottom' })).toBeDefined()
   expect(await pane.find({ text: '#10 to merge first' })).toBeDefined()
@@ -173,7 +180,6 @@ test('a merge conflict marks the band and the pane asks Claude to rebase and fix
 
   expect(await band.find({ key: 'prs', text: 'PRs 1 !' })).toBeDefined()
 
-  await pane.press({ key: 'repo-shop' })
   await pane.press({ key: 'fix-shop-9' })
 
   expect(submitted).toHaveLength(1)
@@ -239,7 +245,6 @@ test('a failed check shows its errors, reruns only on a second press, and merged
   const repos = (await pane.findAll({ type: 'Button' })).map(element => element.key ?? '')
   expect(repos.indexOf('recent-repo-shop')).toBeLessThan(repos.indexOf('recent-repo-api'))
 
-  await pane.press({ key: 'repo-shop' })
   await pane.press({ key: 'details-shop-7-build' })
 
   expect(await pane.find({ text: 'Run tests: failed' })).toBeDefined()
@@ -346,20 +351,43 @@ const REVIEWED = {
   errors: [],
 }
 
-test('a PR the user approved stays listed apart, waiting for the merge', async ($, on) => {
+test('a PR the user approved stays listed apart, closed, and merges on a second press', async ($, on) => {
   mock.clock(on)
+  const calls: string[] = []
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
-  on('process.run', ($, e) => ran(0, e.argv[2] === 'status' ? JSON.stringify(REVIEWED) : ''))
+  on('process.run', ($, e) => {
+    const command = e.argv.slice(2).join(' ')
+    calls.push(command)
+
+    return ran(0, command.startsWith('status') ? JSON.stringify(REVIEWED) : 'merged')
+  })
   on('ui.render', () => Fragment({}))
   on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  on('ui.toast', () => ({ value: undefined }))
 
   await $.command.run(RUN)
   const pane = await mountPane($, 'terminal')
 
-  expect(await pane.find({ text: 'Approved, waiting for the merge (1)' })).toBeDefined()
-  expect(await pane.find({ text: /Grace approved/ })).toBeDefined()
+  expect(await pane.find({ key: 'approved', text: '▸ Approved, waiting for the merge (1)' })).toBeDefined()
+  expect(await pane.find({ text: /Grace approved/ })).toBeUndefined()
   expect(await pane.find({ key: 'repo-shop', text: '▸ shop (1)' })).toBeDefined()
   expect(await pane.find({ key: 'repo-api' })).toBeUndefined()
+  // Our PRs first, the approved block after them, before the recent list.
+  const buttons = (await pane.findAll({ type: 'Button' })).map(element => element.key ?? '')
+  expect(buttons.indexOf('repo-shop')).toBeLessThan(buttons.indexOf('approved'))
+
+  await pane.press({ key: 'approved' })
+
+  expect(await pane.find({ text: /Grace approved/ })).toBeDefined()
+
+  await pane.press({ key: 'merge-api-884' })
+
+  expect(calls.some(command => command.startsWith('merge'))).toBe(false)
+  expect(await pane.find({ key: 'merge-api-884', text: 'press again to merge' })).toBeDefined()
+
+  await pane.press({ key: 'merge-api-884' })
+
+  expect(calls).toContain('merge https://dev.azure.com/org/project/_git/shop/pullrequest/884')
 })
 
 test('on Windows, Git Bash is found from git when bash is not on the PATH', async ($, on) => {

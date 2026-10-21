@@ -25,7 +25,7 @@ const problem = atom({ plugin: 'pr-pane', key: 'problem' } as const, '')
 const ciToggled = atom({ plugin: 'pr-pane', key: 'ciToggled' } as const, {})
 const details = atom({ plugin: 'pr-pane', key: 'details' } as const, {})
 const armed = atom({ plugin: 'pr-pane', key: 'armed' } as const, '')
-const approving = atom({ plugin: 'pr-pane', key: 'approving' } as const, '')
+const inFlight = atom({ plugin: 'pr-pane', key: 'busy' } as const, '')
 const isRecentOpen = atom({ plugin: 'pr-pane', key: 'isRecentOpen' } as const, true)
 const openRepos = atom({ plugin: 'pr-pane', key: 'openRepos' } as const, {})
 
@@ -235,11 +235,17 @@ const askConflictFix = async ($: EngineInterface, pr: PrRow) => {
   $.ui.toast(`Asked Claude to fix the conflicts of #${pr.number}`)
 }
 
-const approveKey = (url: string) => `approve|${url}`
+const actionKey = (action: 'approve' | 'merge', url: string) => `${action}|${url}`
 
-// Approving is public and hard to undo: the first press arms the button, the second approves.
-const approvePr = async ($: EngineInterface, pr: ReviewPr) => {
-  const key = approveKey(pr.url)
+// Approving and merging are public and hard to undo: the first press arms the button, the second
+// acts, and the button reads "approving…" / "merging…" until pr-watch has answered.
+const actOnPr = async (
+  $: EngineInterface,
+  action: 'approve' | 'merge',
+  pr: { url: string; repo: string; number: string },
+  done: string
+) => {
+  const key = actionKey(action, pr.url)
 
   if ((await read($, armed)) !== key) {
     await update($, armed, () => key)
@@ -248,25 +254,37 @@ const approvePr = async ($: EngineInterface, pr: ReviewPr) => {
   }
 
   await update($, armed, () => '')
-  await update($, approving, () => pr.url)
-  const ran = await prWatch($, ['approve', pr.url], 60_000).catch(error => ({
+  await update($, inFlight,() => key)
+  const ran = await prWatch($, [action, pr.url], 60_000).catch(error => ({
     exitCode: 1,
     stdout: '',
     stderr: String(error),
   }))
 
   if (ran.exitCode !== 0) {
-    await update($, approving, () => '')
-    $.ui.toast(`Could not approve #${pr.number}: ${ran.stderr.trim().split('\n')[0]}`)
+    await update($, inFlight,() => '')
+    $.ui.toast(`Could not ${action} #${pr.number}: ${ran.stderr.trim().split('\n')[0]}`)
 
     return
   }
 
-  $.ui.toast(`Approved ${pr.repo} #${pr.number}`)
-  // pr-watch now tracks the PR as reviewed: the cached status moves it to its own block.
+  $.ui.toast(`${done} ${pr.repo} #${pr.number}`)
+  // pr-watch recorded the outcome (tracked as reviewed, or moved to the recent list): the cached
+  // status shows it.
   await load($, false)
-  await update($, approving, () => '')
+  await update($, inFlight,() => '')
 }
+
+const approvePr = ($: EngineInterface, pr: ReviewPr) => actOnPr($, 'approve', pr, 'Approved')
+
+const mergePr = ($: EngineInterface, pr: PrRow) => actOnPr($, 'merge', pr, 'Merged')
+
+// What the user has to act on: a failing or expired CI, a conflict, a rejection, or a new comment
+// since the last check.
+const needsAttention = (pr: PrRow) =>
+  NEEDS_US.has(pr.waiting) || pr.conflicts === true || pr.changes.some(change => change.startsWith('new comment'))
+
+const canMerge = (pr: PrRow) => pr.waiting === 'the merge' && pr.conflicts !== true
 
 // Repo and author names come from the host and end up in a prompt: keep them to plain words.
 const plainName = (text: string) => text.replace(/[^A-Za-z0-9._ -]/g, '').trim().slice(0, 60) || 'someone'
@@ -333,7 +351,7 @@ const recentByRepo = (recent: RecentPr[]) => {
 }
 
 // Every repo block starts collapsed; what the user opens stays open for the session.
-const repoKey = (section: 'open' | 'recent', repo: string) => `${section}|${repo}`
+const repoKey = (section: 'open' | 'approved' | 'recent', repo: string) => `${section}|${repo}`
 
 const toggleRepo = ($: EngineInterface, key: string) =>
   update($, openRepos, open => ({ ...open, [key]: !(open[key] ?? false) }))
@@ -385,7 +403,7 @@ export const register: Register = on => {
     }
 
     const { Box, Button } = $.ui.resolve(e)
-    const needsUs = isBroken || reviews > 0 || prs.some(pr => NEEDS_US.has(pr.waiting))
+    const needsUs = isBroken || reviews > 0 || prs.some(needsAttention)
     const label = `PRs ${prs.length}${reviews > 0 ? ` · ${reviews} to review` : ''}${needsUs ? ' !' : ''}`
 
     return (
@@ -422,21 +440,26 @@ export const register: Register = on => {
     const recentCount = recent.reduce((count, [, rows]) => count + rows.length, 0)
     const isRecentShown = await read($, isRecentOpen)
     const expanded = await read($, openRepos)
-    const approvingUrl = await read($, approving)
+    const busyKey = await read($, inFlight)
     const nowMs = await $.clock.now()
     const width = Math.max(20, e.props.bodyColumns - 2)
     const inner = width - 2
     const prs = shown?.prs ?? []
     const reviews = shown?.reviews ?? []
-    const approved = prs.filter(pr => pr.reviewed === true)
-    const ours = prs.filter(pr => pr.reviewed !== true)
+    // By priority: what needs the user, then what waits for others, then what is ready to merge.
+    const attention = prs.filter(pr => pr.reviewed !== true && needsAttention(pr))
+    const approved = prs.filter(pr => !attention.includes(pr) && (pr.reviewed === true || pr.waiting === 'the merge'))
+    const ours = prs.filter(pr => !attention.includes(pr) && !approved.includes(pr))
+    const isApprovedOpen = expanded[repoKey('approved', '*')] ?? false
+    const mergeable = approved.filter(canMerge).length
     const summary =
       shown === null
         ? 'Loading…'
         : `${prs.length} PR${prs.length === 1 ? '' : 's'} · ${shown.isLive ? 'live at' : 'last check, read at'} ${shown.at}`
 
-    // One tracked PR: title, what it waits for, conflicts, CI checks and the changes since the last check.
-    const prRow = (pr: PrRow, group: string, index: number, isStacked: boolean) => (
+    // One tracked PR: title, what it waits for (with `merge` when that is all it waits for), conflicts,
+    // CI checks and the changes since the last check.
+    const prRow = (pr: PrRow, group: string, index: number, isStacked: boolean, withMerge = false) => (
       <Box key={`pr-${group}-${pr.number}`} flexDirection="column" paddingLeft={2}>
         <Box flexDirection="row" justifyContent="space-between">
           <Text bold>
@@ -446,10 +469,24 @@ export const register: Register = on => {
           </Text>
           <Button key={`open-${group}-${pr.number}`} label="open" dimColor onPress={() => void openPr($, pr.url)} />
         </Box>
-        <Text>
-          <Text dimColor>waits for </Text>
-          <Text color={waitingColor(pr.waiting)}>{pr.waiting}</Text>
-        </Text>
+        <Box flexDirection="row" justifyContent="space-between">
+          <Text>
+            <Text dimColor>waits for </Text>
+            <Text color={waitingColor(pr.waiting)}>{pr.waiting}</Text>
+          </Text>
+          {withMerge && canMerge(pr) && (
+            busyKey === actionKey('merge', pr.url) ? (
+              <Text dimColor>merging…</Text>
+            ) : (
+              <Button
+                key={`merge-${group}-${pr.number}`}
+                label={armedKey === actionKey('merge', pr.url) ? 'press again to merge' : 'merge'}
+                variant="primary"
+                onPress={() => void mergePr($, pr)}
+              />
+            )
+          )}
+        </Box>
         {pr.conflicts === true && (
           <Box flexDirection="row" justifyContent="space-between">
             <Text color="red" bold>
@@ -555,6 +592,14 @@ export const register: Register = on => {
         {shown?.errors.map(line => (
           <Text color="red">{line}</Text>
         ))}
+        {attention.length > 0 && (
+          <Box flexDirection="column" marginTop={1}>
+            <Text bold color="red">
+              Needs your attention ({attention.length})
+            </Text>
+            {attention.map((pr, index) => prRow(pr, pr.repo, index, false))}
+          </Box>
+        )}
         {reviews.length > 0 && (
           <Box flexDirection="column" marginTop={1}>
             <Text bold color="yellow">
@@ -562,7 +607,7 @@ export const register: Register = on => {
             </Text>
             {reviews.map(pr => {
               const id = `${pr.repo}-${pr.number}`
-              const isArmed = armedKey === approveKey(pr.url)
+              const isArmed = armedKey === actionKey('approve', pr.url)
 
               return (
                 <Box key={`review-${id}`} flexDirection="column" paddingLeft={2}>
@@ -583,7 +628,7 @@ export const register: Register = on => {
                         onPress={() => void askReview($, pr)}
                       />
                       <Text> </Text>
-                      {approvingUrl === pr.url ? (
+                      {busyKey === actionKey('approve', pr.url) ? (
                         <Text dimColor>approving…</Text>
                       ) : (
                         <Button
@@ -601,19 +646,10 @@ export const register: Register = on => {
             })}
           </Box>
         )}
-        {approved.length > 0 && (
-          <Box flexDirection="column" marginTop={1}>
-            <Text bold color="green">
-              Approved, waiting for the merge ({approved.length})
-            </Text>
-            {approved.map((pr, index) => prRow(pr, `approved-${pr.repo}`, index, false))}
-          </Box>
-        )}
         {shown !== null && prs.length === 0 && <Text dimColor>No PR tracked. Ask Claude to watch one.</Text>}
         {byRepo(ours).map(([repo, rows]) => {
           const isStacked = rows.some(pr => (pr.after ?? '') !== '')
           const isOpen = expanded[repoKey('open', repo)] ?? false
-          const needing = rows.filter(pr => NEEDS_US.has(pr.waiting) || pr.conflicts === true).length
 
           return (
             <Box key={`repo-block-${repo}`} flexDirection="column" marginTop={1}>
@@ -624,13 +660,28 @@ export const register: Register = on => {
                   plain
                   onPress={() => void toggleRepo($, repoKey('open', repo))}
                 />
-                {needing > 0 && <Text color="red"> · {needing} need{needing === 1 ? 's' : ''} us</Text>}
                 {isOpen && isStacked && <Text dimColor> · merge top to bottom</Text>}
               </Box>
               {isOpen && rows.map((pr, index) => prRow(pr, repo, index, isStacked))}
             </Box>
           )
         })}
+        {approved.length > 0 && (
+          <Box flexDirection="column" marginTop={1}>
+            <Box flexDirection="row">
+              <Button
+                key="approved"
+                label={`${isApprovedOpen ? '▾' : '▸'} Approved, waiting for the merge (${approved.length})`}
+                plain
+                onPress={() => void toggleRepo($, repoKey('approved', '*'))}
+              />
+              {!isApprovedOpen && mergeable > 0 && (
+                <Text color="green"> · {mergeable} ready to merge</Text>
+              )}
+            </Box>
+            {isApprovedOpen && approved.map((pr, index) => prRow(pr, pr.repo, index, false, true))}
+          </Box>
+        )}
         {recentCount > 0 && (
           <Box flexDirection="column" marginTop={1}>
             <Button
