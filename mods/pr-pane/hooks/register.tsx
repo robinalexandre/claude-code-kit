@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { CiCheck, PrRow, PrSnapshot, RecentPr, ReviewPr } from '../types'
+import type { BuildRow, CiCheck, PrRow, PrSnapshot, RecentPr, ReviewPr } from '../types'
 
 const PANE = 'tracked-prs'
 const TITLE = 'Tracked PRs'
@@ -35,6 +35,31 @@ const RECENT_SHOWN = 8
 const AFTER_RERUN_MS = 5_000
 
 const isRunning = (checks: CiCheck[]) => checks.some(check => !ENDED.has(check.state))
+
+const BUILD_RUNNING = new Set(['queued', 'running'])
+
+const isBuildRunning = (build: BuildRow) => BUILD_RUNNING.has(build.status)
+
+const buildColor = (status: string) =>
+  BUILD_RUNNING.has(status) ? 'yellow' : status === 'succeeded' ? 'green' : status === 'canceled' ? 'gray' : 'red'
+
+// Rounded to the minute, as pr-watch records the times; nothing when a time is missing or odd.
+const minutesText = (fromMs: number, toMs: number) => {
+  const minutes = Math.round((toMs - fromMs) / 60_000)
+
+  if (Number.isNaN(minutes) || minutes < 0) {
+    return ''
+  }
+
+  if (minutes < 1) {
+    return '<1 min'
+  }
+
+  return minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h ${minutes % 60 ? `${minutes % 60} min` : ''}`.trim()
+}
+
+const anyRunning = (prs: PrRow[], builds: BuildRow[]) =>
+  prs.some(pr => isRunning(pr.checks ?? [])) || builds.some(isBuildRunning)
 
 const hasRequiredFailure = (checks: CiCheck[]) =>
   checks.some(check => FAILED.has(check.state) && check.required !== false)
@@ -161,7 +186,8 @@ const load = async ($: EngineInterface, isLive: boolean) => {
 
 let whileRunning: { cancel: () => void } | undefined
 
-// While a PR's CI runs and the pane is open, it is fetched live again every minute until it ends.
+// While a PR's CI or a pipeline run is in progress and the pane is open, it is fetched live again
+// every minute until it ends.
 const refresh = async ($: EngineInterface) => {
   if (await read($, isRefreshing)) {
     return
@@ -170,9 +196,9 @@ const refresh = async ($: EngineInterface) => {
   await load($, true)
   whileRunning?.cancel()
   whileRunning = undefined
-  const prs = (await read($, snapshot))?.prs ?? []
+  const shown = await read($, snapshot)
 
-  if (prs.some(pr => isRunning(pr.checks ?? []))) {
+  if (anyRunning(shown?.prs ?? [], shown?.builds ?? [])) {
     whileRunning = $.clock.after(WHILE_RUNNING_EVERY_MS, () => void refreshIfShown($))
   }
 }
@@ -364,15 +390,19 @@ const recentByRepo = (recent: RecentPr[]) => {
   return byRepo(sorted).map(([repo, rows]) => [repo, rows.slice(0, RECENT_SHOWN)] as const)
 }
 
-// Every repo block starts collapsed; what the user opens stays open for the session.
-const repoKey = (section: 'open' | 'waiting' | 'approved' | 'recent', repo: string) => `${section}|${repo}`
+// Sections and repo blocks start collapsed, except around a CI that runs: what the user toggles
+// stays that way for the session.
+const repoKey = (section: 'builds' | 'waiting' | 'approved' | 'recent', repo: string) => `${section}|${repo}`
 
-const toggleRepo = ($: EngineInterface, key: string) =>
-  update($, openRepos, open => ({ ...open, [key]: !(open[key] ?? false) }))
+const toggleRepo = ($: EngineInterface, key: string, isOpen: boolean) =>
+  update($, openRepos, open => ({ ...open, [key]: !isOpen }))
 
 // Each PR is one line until opened: its details (CI, votes, changes) fold under it.
-const togglePr = ($: EngineInterface, url: string) =>
-  update($, openPrs, open => ({ ...open, [url]: !(open[url] ?? false) }))
+const togglePr = ($: EngineInterface, url: string, isOpen: boolean) =>
+  update($, openPrs, open => ({ ...open, [url]: !isOpen }))
+
+// A CI we just launched (a push, a rerun) is worth watching: the blocks around it open by default.
+const hasRunningCi = (prs: PrRow[]) => prs.some(pr => isRunning(pr.checks ?? []))
 
 // Red: the user has to act. Green: only the merge is left. Yellow: someone or something else.
 const statusColor = (pr: PrRow) => (needsAttention(pr) ? 'red' : canMerge(pr) ? 'green' : waitingColor(pr.waiting))
@@ -417,15 +447,19 @@ export const register: Register = on => {
     const shown = await read($, snapshot)
     const prs = shown?.prs ?? []
     const reviews = shown?.reviews?.length ?? 0
+    const running = (shown?.builds ?? []).filter(isBuildRunning).length
     const isBroken = (await read($, problem)) !== ''
+    const isEmpty = prs.length === 0 && reviews === 0 && running === 0 && !isBroken
 
-    if (e.props.hasSurvey || e.props.view.agentId !== undefined || (prs.length === 0 && reviews === 0 && !isBroken)) {
+    if (e.props.hasSurvey || e.props.view.agentId !== undefined || isEmpty) {
       return beneath
     }
 
     const { Box, Button } = $.ui.resolve(e)
     const needsUs = isBroken || reviews > 0 || prs.some(needsAttention)
-    const label = `PRs ${prs.length}${reviews > 0 ? ` · ${reviews} to review` : ''}${needsUs ? ' !' : ''}`
+    const label =
+      `PRs ${prs.length}${reviews > 0 ? ` · ${reviews} to review` : ''}` +
+      `${running > 0 ? ` · ${running} build${running === 1 ? '' : 's'} running` : ''}${needsUs ? ' !' : ''}`
 
     return (
       <Box flexDirection="row" justifyContent="space-between" alignItems="flex-start">
@@ -467,12 +501,15 @@ export const register: Register = on => {
     const inner = width - 2
     const prs = shown?.prs ?? []
     const reviews = shown?.reviews ?? []
+    const builds = shown?.builds ?? []
+    const runningBuilds = builds.filter(isBuildRunning).length
+    const isBuildsOpen = expanded[repoKey('builds', '*')] ?? runningBuilds > 0
     // By priority: what needs the user, then what waits for others, then what is ready to merge.
     const attention = prs.filter(pr => pr.reviewed !== true && needsAttention(pr))
     const approved = prs.filter(pr => !attention.includes(pr) && (pr.reviewed === true || pr.waiting === 'the merge'))
     const ours = prs.filter(pr => !attention.includes(pr) && !approved.includes(pr))
-    const isApprovedOpen = expanded[repoKey('approved', '*')] ?? false
-    const isWaitingOpen = expanded[repoKey('waiting', '*')] ?? false
+    const isApprovedOpen = expanded[repoKey('approved', '*')] ?? hasRunningCi(approved)
+    const isWaitingOpen = expanded[repoKey('waiting', '*')] ?? hasRunningCi(ours)
     const openDetails = await read($, openPrs)
     const mergeable = approved.filter(canMerge).length
     const summary =
@@ -484,7 +521,7 @@ export const register: Register = on => {
     // when that is all it waits for. Opened, it shows conflicts, CI checks, votes and the changes
     // since the last check.
     const prRow = (pr: PrRow, group: string, index: number, isStacked: boolean, withMerge = false) => {
-      const isOpen = openDetails[pr.url] ?? false
+      const isOpen = openDetails[pr.url] ?? isRunning(pr.checks ?? [])
       const color = statusColor(pr)
       const titleWidth = Math.max(8, inner - pr.number.length - pr.waiting.length - (withMerge && canMerge(pr) ? 26 : 20))
 
@@ -496,7 +533,7 @@ export const register: Register = on => {
                 key={`pr-toggle-${group}-${pr.number}`}
                 label={isOpen ? '▾' : '▸'}
                 plain
-                onPress={() => void togglePr($, pr.url)}
+                onPress={() => void togglePr($, pr.url, isOpen)}
               />
               <Text>
                 {' '}
@@ -626,6 +663,59 @@ export const register: Register = on => {
       )
     }
 
+    // A pipeline run on one line: a colored dot, its id, pipeline and branch, then its status with
+    // the time it started or ended and how long it took.
+    const buildRow = (build: BuildRow) => {
+      const color = buildColor(build.status)
+      const startedMs = endedMs(build.started || build.queued)
+      const isEnded = !isBuildRunning(build)
+      const at = build.status === 'queued' ? endedText(build.queued, nowMs) : isEnded ? endedText(build.ended, nowMs) : ''
+      const duration = build.status === 'running' ? minutesText(startedMs, nowMs) : isEnded ? minutesText(startedMs, endedMs(build.ended)) : ''
+      const branch = build.branch ? ` · ${build.branch}` : ''
+      const room = inner - build.number.length - branch.length - build.status.length - 14
+      // The pipeline's name comes first: on a narrow pane the duration, then the time, give way.
+      const when = [[at, duration].filter(Boolean).join(' · '), at, ''].find(option => room - option.length >= 20) ?? ''
+      const nameWidth = Math.max(8, room - when.length)
+
+      return (
+        <Box key={`build-${build.number}`} flexDirection="row" justifyContent="space-between" paddingLeft={2}>
+          <Text>
+            <Text color={color}>● </Text>
+            <Link href={build.url} label={`#${build.number}`} />
+            <Text bold> {truncate(build.pipeline, nameWidth)}</Text>
+            <Text dimColor>{branch} · </Text>
+            <Text color={color}>{build.status}</Text>
+            <Text dimColor>{when ? ` ${when}` : ''}</Text>
+          </Text>
+          <Button key={`build-open-${build.number}`} label="open" dimColor onPress={() => void openPr($, build.url)} />
+        </Box>
+      )
+    }
+
+    // A section's PRs, one closed block per repo in pr-watch's order, each in merge order.
+    const repoBlocks = (section: 'waiting' | 'approved', rows: PrRow[], withMerge: boolean) =>
+      byRepo(rows).map(([repo, prsOfRepo]) => {
+        const isStacked = prsOfRepo.some(pr => (pr.after ?? '') !== '')
+        const key = repoKey(section, repo)
+        const isOpen = expanded[key] ?? hasRunningCi(prsOfRepo)
+
+        return (
+          <Box key={`${section}-block-${repo}`} flexDirection="column" paddingLeft={2}>
+            <Box flexDirection="row">
+              <Button
+                key={section === 'waiting' ? `repo-${repo}` : `${section}-repo-${repo}`}
+                label={`${isOpen ? '▾' : '▸'} ${truncate(repo, width - 30)} (${prsOfRepo.length})`}
+                plain
+                onPress={() => void toggleRepo($, key, isOpen)}
+              />
+              {isOpen && isStacked && <Text dimColor> · merge top to bottom</Text>}
+              {!isOpen && hasRunningCi(prsOfRepo) && <Text color="yellow"> · CI running</Text>}
+            </Box>
+            {isOpen && prsOfRepo.map((pr, index) => prRow(pr, repo, index, isStacked, withMerge))}
+          </Box>
+        )
+      })
+
     return (
       <Box flexDirection="column">
         <Box flexDirection="row" justifyContent="space-between">
@@ -642,6 +732,27 @@ export const register: Register = on => {
         {shown?.errors.map(line => (
           <Text color="red">{line}</Text>
         ))}
+        {builds.length > 0 && (
+          <Box flexDirection="column" marginTop={1}>
+            <Box flexDirection="row">
+              <Text color={runningBuilds > 0 ? 'yellow' : 'gray'}>● </Text>
+              <Button
+                key="builds"
+                label={`${isBuildsOpen ? '▾' : '▸'} Pipeline runs (${builds.length})`}
+                plain
+                onPress={() => void toggleRepo($, repoKey('builds', '*'), isBuildsOpen)}
+              />
+              {!isBuildsOpen && runningBuilds > 0 && <Text color="yellow"> · {runningBuilds} running</Text>}
+              {!isBuildsOpen && runningBuilds === 0 && (
+                <Text dimColor>
+                  {' '}
+                  · last {builds[0].status} {endedText(builds[0].ended, nowMs)}
+                </Text>
+              )}
+            </Box>
+            {isBuildsOpen && builds.map(buildRow)}
+          </Box>
+        )}
         {attention.length > 0 && (
           <Box flexDirection="column" marginTop={1}>
             <Text bold color="red">
@@ -706,29 +817,11 @@ export const register: Register = on => {
                 key="waiting"
                 label={`${isWaitingOpen ? '▾' : '▸'} Waiting for others (${ours.length})`}
                 plain
-                onPress={() => void toggleRepo($, repoKey('waiting', '*'))}
+                onPress={() => void toggleRepo($, repoKey('waiting', '*'), isWaitingOpen)}
               />
+              {!isWaitingOpen && hasRunningCi(ours) && <Text color="yellow"> · CI running</Text>}
             </Box>
-            {isWaitingOpen &&
-              byRepo(ours).map(([repo, rows]) => {
-                const isStacked = rows.some(pr => (pr.after ?? '') !== '')
-                const isOpen = expanded[repoKey('open', repo)] ?? false
-
-                return (
-                  <Box key={`repo-block-${repo}`} flexDirection="column" paddingLeft={2}>
-                    <Box flexDirection="row">
-                      <Button
-                        key={`repo-${repo}`}
-                        label={`${isOpen ? '▾' : '▸'} ${truncate(repo, width - 30)} (${rows.length})`}
-                        plain
-                        onPress={() => void toggleRepo($, repoKey('open', repo))}
-                      />
-                      {isOpen && isStacked && <Text dimColor> · merge top to bottom</Text>}
-                    </Box>
-                    {isOpen && rows.map((pr, index) => prRow(pr, repo, index, isStacked))}
-                  </Box>
-                )
-              })}
+            {isWaitingOpen && repoBlocks('waiting', ours, false)}
           </Box>
         )}
         {approved.length > 0 && (
@@ -739,13 +832,14 @@ export const register: Register = on => {
                 key="approved"
                 label={`${isApprovedOpen ? '▾' : '▸'} Approved, waiting for the merge (${approved.length})`}
                 plain
-                onPress={() => void toggleRepo($, repoKey('approved', '*'))}
+                onPress={() => void toggleRepo($, repoKey('approved', '*'), isApprovedOpen)}
               />
               {!isApprovedOpen && mergeable > 0 && (
                 <Text color="green"> · {mergeable} ready to merge</Text>
               )}
+              {!isApprovedOpen && hasRunningCi(approved) && <Text color="yellow"> · CI running</Text>}
             </Box>
-            {isApprovedOpen && approved.map((pr, index) => prRow(pr, pr.repo, index, false, true))}
+            {isApprovedOpen && repoBlocks('approved', approved, true)}
           </Box>
         )}
         {recentCount > 0 && (
@@ -771,7 +865,7 @@ export const register: Register = on => {
                         key={`recent-repo-${repo}`}
                         label={`${isOpen ? '▾' : '▸'} ${truncate(repo, width - 36)} (${rows.length})`}
                         plain
-                        onPress={() => void toggleRepo($, repoKey('recent', repo))}
+                        onPress={() => void toggleRepo($, repoKey('recent', repo), isOpen)}
                       />
                       {!isOpen && latest !== undefined && (
                         <Text dimColor>

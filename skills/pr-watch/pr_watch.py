@@ -6,7 +6,7 @@
     pr_watch.py list                    tracked PRs and their status
     pr_watch.py status [--live]         the same as JSON, with what each PR waits for
                                         (--live: fetched now, with the changes; records only the review requests)
-    pr_watch.py open URL                open a PR in the default browser
+    pr_watch.py open URL                open a PR or a build in the default browser
     pr_watch.py details URL             JSON: the PR's failed checks with their failed steps and errors
     pr_watch.py rerun URL CHECK         relaunch a check (Azure DevOps: re-queue; GitHub: rerun failed jobs)
     pr_watch.py approve URL             approve a PR (Azure DevOps: vote approved; GitHub: an approving review)
@@ -22,6 +22,12 @@ anonymous for public repos).
 `check` and `status --live` also look up the open PRs waiting for the user's review (GitHub with a
 token; the Azure DevOps organizations of the tracked PRs and of `azureOrgs` in config.json): a new
 one is reported, and `status` lists them as `reviews` from the last check.
+
+They also look up the pipeline runs the user launched by hand (Azure DevOps: manual builds requested
+by them in the projects of the tracked and recent PRs and of `azureProjects` in config.json; GitHub:
+workflow runs they dispatched in the repos of the tracked and recent PRs and of `githubRepos`):
+running ones and those ended in the last PR_WATCH_BUILD_HOURS (default 24) hours. `check` reports a
+run that ended since the last check, and `status` lists them as `builds`.
 """
 
 from __future__ import annotations
@@ -50,8 +56,10 @@ from typing import Callable
 WATCH_DIR = Path(os.environ.get("PR_WATCH_DIR", Path.home() / ".claude-sync" / "pr-watch"))
 CONFIG = WATCH_DIR / "config.json"
 REVIEWS = WATCH_DIR / "reviews.json"
+BUILDS = WATCH_DIR / "builds.json"
 DONE_DIR = WATCH_DIR / "done"
 KEEP_DAYS = float(os.environ.get("PR_WATCH_KEEP_DAYS", "7"))
+BUILD_HOURS = float(os.environ.get("PR_WATCH_BUILD_HOURS", "24"))
 ADO_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"
 FINAL = {"merged", "completed", "abandoned", "closed"}
 EXCERPT = 400
@@ -62,6 +70,10 @@ ADO_URL = re.compile(
     r"/(?P<project>[^/]+)/_git/(?P<repo>[^/]+)/pullrequest/(?P<id>\d+)"
 )
 GITHUB_URL = re.compile(r"https://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/(?P<id>\d+)")
+ADO_BUILD_URL = re.compile(
+    r"https://dev\.azure\.com/(?P<org>[^/]+)/(?P<project>[^/]+)/_build/results\?buildId=(?P<id>\d+)"
+)
+GITHUB_RUN_URL = re.compile(r"https://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/actions/runs/(?P<id>\d+)")
 
 
 class WatchError(Exception):
@@ -272,10 +284,24 @@ def _ado_vote(vote: int) -> str:
     )
 
 
+_ADO_ME: dict[str, str] = {}
+
+
+def _ado_me(org: str) -> str:
+    """The id of the person checking in the organization, looked up once per process."""
+    with _ADO_LOCK:
+        known = _ADO_ME.get(org)
+    if known is None:
+        known = _http_json(f"https://dev.azure.com/{org}/_apis/connectionData", _ado_headers())["authenticatedUser"]["id"]  # type: ignore[index]
+        with _ADO_LOCK:
+            _ADO_ME[org] = known
+    return known
+
+
 def ado_review_requests(org: str) -> list[dict]:
     """The organization's active PRs on which the person checking is a reviewer who has not voted."""
     headers = _ado_headers()
-    me = _http_json(f"https://dev.azure.com/{org}/_apis/connectionData", headers)["authenticatedUser"]["id"]  # type: ignore[index]
+    me = _ado_me(org)
     found = _http_json(f"https://dev.azure.com/{org}/_apis/git/pullrequests?searchCriteria.reviewerId={me}"
                        "&searchCriteria.status=active&$top=100&api-version=7.1", headers)["value"]  # type: ignore[index]
     rows = []
@@ -322,6 +348,149 @@ def github_review_requests() -> list[dict]:
             "updated": _stamp(item.get("updated_at", "")),
         })
     return rows
+
+
+ADO_BUILD_STATES = {"notStarted": "queued", "postponed": "queued", "inProgress": "running", "cancelling": "running"}
+ADO_BUILD_RESULTS = {"succeeded": "succeeded", "partiallySucceeded": "partially succeeded", "failed": "failed",
+                     "canceled": "canceled"}
+GITHUB_RUN_STATES = {"queued": "queued", "waiting": "queued", "requested": "queued", "pending": "queued",
+                     "in_progress": "running"}
+GITHUB_RUN_RESULTS = {"success": "succeeded", "neutral": "succeeded", "failure": "failed", "timed_out": "failed",
+                      "action_required": "failed", "startup_failure": "failed", "cancelled": "canceled",
+                      "skipped": "canceled", "stale": "canceled"}
+BUILD_RUNNING = {"queued", "running"}
+BUILDS_PER_PLACE = 20
+
+
+def ado_manual_builds(org: str, project: str) -> list[dict]:
+    """The project's latest builds queued by hand by the person checking (PR builds stay with their PR)."""
+    base = f"https://dev.azure.com/{org}/{urllib.parse.quote(project)}"
+    found = _http_json(f"{base}/_apis/build/builds?requestedFor={_ado_me(org)}&reasonFilter=manual"
+                       f"&$top={BUILDS_PER_PLACE}&queryOrder=queueTimeDescending&api-version=7.1",
+                       _ado_headers())["value"]  # type: ignore[index]
+    rows = []
+    for build in found:
+        status = ADO_BUILD_STATES.get(build["status"]) or ADO_BUILD_RESULTS.get(build.get("result") or "", "failed")
+        # The build's repository is the one holding the YAML, a shared template repo at times: the
+        # project says more.
+        rows.append({
+            "url": f"{base}/_build/results?buildId={build['id']}",
+            "repo": project,
+            "pipeline": build["definition"]["name"],
+            "number": str(build["id"]),
+            "branch": (build.get("sourceBranch") or "").removeprefix("refs/heads/"),
+            "status": status,
+            "requestedBy": (build.get("requestedFor") or {}).get("displayName", ""),
+            "queued": _stamp(build.get("queueTime") or ""),
+            "started": _stamp(build.get("startTime") or ""),
+            "ended": _stamp(build.get("finishTime") or "") if status not in BUILD_RUNNING else "",
+        })
+    return rows
+
+
+_GITHUB_ME: list[str] = []
+
+
+def _github_me(headers: dict[str, str]) -> str:
+    with _ADO_LOCK:
+        if not _GITHUB_ME:
+            _GITHUB_ME.append(_http_json("https://api.github.com/user", headers)["login"])  # type: ignore[index]
+        return _GITHUB_ME[0]
+
+
+def github_manual_runs(owner: str, repo: str) -> list[dict]:
+    """The repo's latest workflow runs the person checking dispatched by hand (none anonymously)."""
+    token = _github_token()
+    if not token:
+        return []
+    headers = {"Authorization": f"Bearer {token}", "X-GitHub-Api-Version": "2022-11-28"}
+    found = _http_json(f"https://api.github.com/repos/{owner}/{repo}/actions/runs?actor={_github_me(headers)}"
+                       f"&event=workflow_dispatch&per_page={BUILDS_PER_PLACE}", headers)["workflow_runs"]  # type: ignore[index]
+    rows = []
+    for run in found:
+        status = GITHUB_RUN_STATES.get(run["status"]) or GITHUB_RUN_RESULTS.get(run.get("conclusion") or "", "failed")
+        rows.append({
+            "url": run["html_url"],
+            "repo": repo,
+            "pipeline": run.get("name") or run.get("path") or "workflow",
+            "number": str(run["id"]),
+            "branch": run.get("head_branch") or "",
+            "status": status,
+            "requestedBy": (run.get("actor") or {}).get("login", ""),
+            "queued": _stamp(run.get("created_at") or ""),
+            "started": _stamp(run.get("run_started_at") or ""),
+            "ended": _stamp(run.get("updated_at") or "") if status not in BUILD_RUNNING else "",
+        })
+    return rows
+
+
+def _recent_enough(stamp: str) -> bool:
+    try:
+        ended = datetime.strptime(stamp, "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return False
+    return (datetime.now(timezone.utc) - ended).total_seconds() <= BUILD_HOURS * 3600
+
+
+def fetch_builds(entries: list[tuple[Path, dict]]) -> tuple[list[dict], list[str]]:
+    """The user's manual pipeline runs, running ones first (newest queued first), then those ended
+    in the last BUILD_HOURS hours (newest first): (rows, errors).
+
+    Asked in the Azure DevOps projects and GitHub repos of the tracked and recent PRs, plus
+    `azureProjects` (`org/project`) and `githubRepos` (`owner/repo`) in config.json.
+    """
+    projects, repos = config("azureProjects"), config("githubRepos")
+    for entry in [entry for _, entry in entries] + done_entries():
+        if match := ADO_URL.match(entry["url"]):
+            projects.add(f"{match['org'] or match['org2']}/{urllib.parse.unquote(match['project'])}")
+        elif match := GITHUB_URL.match(entry["url"]):
+            repos.add(f"{match['owner']}/{match['repo']}")
+    jobs: list[Callable[[], list[dict]]] = [partial(ado_manual_builds, *place.split("/", 1)) for place in sorted(projects)]
+    jobs += [partial(github_manual_runs, *place.split("/", 1)) for place in sorted(repos)]
+
+    def one(job: Callable[[], list[dict]]) -> tuple[list[dict], str]:
+        try:
+            return job(), ""
+        except WatchError as error:
+            return [], f"pipeline runs: {error}"
+        except (KeyError, TypeError) as error:
+            return [], f"pipeline runs: unexpected answer ({error!r})"
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(one, jobs))
+    rows = [row for found, _ in results for row in found]
+    running = sorted((row for row in rows if row["status"] in BUILD_RUNNING), key=lambda row: row["queued"], reverse=True)
+    ended = sorted((row for row in rows if row["status"] not in BUILD_RUNNING and _recent_enough(row["ended"])),
+                   key=lambda row: row["ended"], reverse=True)
+    return running + ended, [error for _, error in results if error]
+
+
+def builds_file() -> dict:
+    """`builds`: the runs last found (by a check or a live status); `checked`: when."""
+    if not BUILDS.exists():
+        return {}
+    return json.loads(BUILDS.read_text(encoding="utf-8"))
+
+
+def cached_builds() -> list[dict]:
+    return builds_file().get("builds", [])
+
+
+def save_builds(builds: list[dict]) -> None:
+    save(BUILDS, {"checked": _now(), "builds": builds})
+
+
+def build_changes(before: dict, builds: list[dict]) -> list[str]:
+    """One line per run that ended since the last check (one seen running then, or ended after it)."""
+    was_running = {row["url"] for row in before.get("builds", []) if row["status"] in BUILD_RUNNING}
+    since = before.get("checked", "")
+    lines = []
+    for row in builds:
+        if row["status"] in BUILD_RUNNING or not (row["url"] in was_running or (since and row["ended"] >= since)):
+            continue
+        branch = f" ({row['branch']})" if row["branch"] else ""
+        lines.append(f"{_plain(row['pipeline'], 60)} build {row['number']}{branch}: {row['status']} {row['url']}")
+    return lines
 
 
 def _plain(text: str, width: int) -> str:
@@ -467,7 +636,7 @@ def entry_path(url: str) -> Path:
 
 def load_entries() -> list[tuple[Path, dict]]:
     return [(path, json.loads(path.read_text(encoding="utf-8")))
-            for path in sorted(WATCH_DIR.glob("*.json")) if path not in (CONFIG, REVIEWS)]
+            for path in sorted(WATCH_DIR.glob("*.json")) if path not in (CONFIG, REVIEWS, BUILDS)]
 
 
 def reviews_file() -> dict:
@@ -671,9 +840,14 @@ def check(peek: bool) -> None:
     report += [f"{row['repo']} #{row['number']} ({_plain(row['title'], 80)}): {_plain(row['author'], 40)} asks for "
                f"your review: {row['url']}" for row in reviews if row["url"] not in announced]
     errors += review_errors
+    builds, build_errors = fetch_builds(entries)
+    report += build_changes(builds_file(), builds)
+    errors += build_errors
     if not peek:
         # Saved even when a host failed: its requests are reported again once it answers.
         save_reviews(reviews, announced=sorted(row["url"] for row in reviews))
+        if not build_errors:
+            save_builds(builds)
         prune_done()
     print("\n".join(report) if report else "No change.")
     if errors:
@@ -723,9 +897,14 @@ def status(live: bool) -> None:
     entries = load_entries()
     fetched = fetch_all(entries) if live else [(p, e, None, "", "") for p, e in entries]
     reviews, errors = fetch_review_requests(entries) if live else (cached_reviews(), [])
+    builds, build_errors = fetch_builds(entries) if live else (cached_builds(), [])
+    errors += build_errors
     if live:
-        # So the cached status the pane reloads in between shows the same list.
+        # So the cached status the pane reloads in between shows the same lists. The runs are kept
+        # as they were when a host failed, so a check still reports what ended in between.
         save_reviews(reviews)
+        if not build_errors:
+            save_builds(builds)
     ignore, bots, prs = config("ignoreAuthors"), config("bots"), []
     for _, entry, now, me, error in fetched:
         if error:
@@ -767,8 +946,8 @@ def status(live: bool) -> None:
             "reviewed": bool(entry.get("reviewed")),
             "ended": entry.get("ended", ""),
         })
-    print(json.dumps({"live": live, "prs": merge_order(prs), "reviews": reviews, "recent": recent, "errors": errors},
-                     ensure_ascii=False))
+    print(json.dumps({"live": live, "prs": merge_order(prs), "reviews": reviews, "builds": builds, "recent": recent,
+                      "errors": errors}, ensure_ascii=False))
 
 
 def merge_order(prs: list[dict]) -> list[dict]:
@@ -865,8 +1044,8 @@ def merge(url: str) -> None:
 
 
 def open_(url: str) -> None:
-    if not (ADO_URL.match(url) or GITHUB_URL.match(url)):
-        raise WatchError(f"unsupported PR URL (Azure DevOps or GitHub): {url}")
+    if not any(pattern.match(url) for pattern in (ADO_URL, GITHUB_URL, ADO_BUILD_URL, GITHUB_RUN_URL)):
+        raise WatchError(f"unsupported PR or build URL (Azure DevOps or GitHub): {url}")
     if not webbrowser.open(url):
         raise WatchError(f"no browser could open {url}")
 

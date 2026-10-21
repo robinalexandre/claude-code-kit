@@ -41,8 +41,14 @@ const LIVE = {
   errors: [],
 }
 
-const mountPane = ($: Engine, surface: 'terminal' | 'desktop') =>
-  $.ui.mount({ plugin: 'pr-pane', surface, component: 'Pane', requestId: 'tracked-prs', props: PANE_PROPS })
+const mountPane = ($: Engine, surface: 'terminal' | 'desktop', bodyColumns = PANE_PROPS.bodyColumns) =>
+  $.ui.mount({
+    plugin: 'pr-pane',
+    surface,
+    component: 'Pane',
+    requestId: 'tracked-prs',
+    props: { ...PANE_PROPS, bodyColumns },
+  })
 
 for (const surface of ['terminal', 'desktop'] as const) {
   test(`/prs lists the tracked PRs, refresh shows live changes and open calls pr-watch (${surface})`, async ($, on) => {
@@ -81,6 +87,12 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(await pane.find({ key: 'pr-toggle-shop-1' })).toBeUndefined()
 
     await pane.press({ key: 'approved' })
+
+    // Grouped per repo like the waiting section, each block closed.
+    expect(await pane.find({ key: 'approved-repo-shop', text: '▸ shop (1)' })).toBeDefined()
+    expect(await pane.find({ key: 'pr-toggle-shop-1' })).toBeUndefined()
+
+    await pane.press({ key: 'approved-repo-shop' })
 
     // One line per PR: the merge button is on it, the changes fold under it.
     expect(await pane.find({ key: 'pr-toggle-shop-1', text: '▸' })).toBeDefined()
@@ -151,7 +163,11 @@ test('PRs are grouped per repo in merge order and CI checks show while they run,
 
   expect(await pane.find({ text: ' · merge top to bottom' })).toBeDefined()
   expect(await pane.find({ text: '#10 to merge first' })).toBeDefined()
-  // A PR's details fold under its line.
+  // A PR's details fold under its line, except while its CI runs: then they show at once.
+  expect(await pane.find({ key: 'ci-web-3', text: '▾ CI 1/2 running' })).toBeDefined()
+
+  await pane.press({ key: 'pr-toggle-web-3' })
+
   expect(await pane.find({ key: 'ci-web-3' })).toBeUndefined()
 
   await pane.press({ key: 'pr-toggle-web-3' })
@@ -404,6 +420,10 @@ test('a PR the user approved stays listed apart, closed, and merges on a second 
   expect(buttons.indexOf('waiting')).toBeLessThan(buttons.indexOf('approved'))
 
   await pane.press({ key: 'approved' })
+
+  expect(await pane.find({ key: 'approved-repo-api', text: '▸ api (1)' })).toBeDefined()
+
+  await pane.press({ key: 'approved-repo-api' })
   await pane.press({ key: 'pr-toggle-api-884' })
 
   expect(await pane.find({ text: /Grace approved/ })).toBeDefined()
@@ -416,6 +436,135 @@ test('a PR the user approved stays listed apart, closed, and merges on a second 
   await pane.press({ key: 'merge-api-884' })
 
   expect(calls).toContain('merge https://dev.azure.com/org/project/_git/shop/pullrequest/884')
+})
+
+const RUNNING = {
+  live: false,
+  prs: [
+    row('5', {
+      repo: 'api',
+      ci: 'CI running',
+      waiting: 'CI',
+      checks: [
+        { name: 'build', state: 'running', required: true, link: null },
+        { name: 'lint', state: 'passed', required: true, link: null },
+      ],
+    }),
+    row('6', { repo: 'web' }),
+  ],
+  errors: [],
+}
+
+test('a CI that runs opens the section, the repo block and the PR around it until the user folds them', async ($, on) => {
+  mock.clock(on)
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
+  on('process.run', ($, e) => ran(0, e.argv[2] === 'status' ? JSON.stringify(RUNNING) : ''))
+  on('ui.render', () => Fragment({}))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+
+  await $.command.run(RUN)
+  const pane = await mountPane($, 'terminal')
+
+  // Nothing to press: the running checks are on screen, the other repo stays closed.
+  expect(await pane.find({ key: 'waiting', text: '▾ Waiting for others (2)' })).toBeDefined()
+  expect(await pane.find({ key: 'repo-api', text: '▾ api (1)' })).toBeDefined()
+  expect(await pane.find({ key: 'repo-web', text: '▸ web (1)' })).toBeDefined()
+  expect(await pane.find({ key: 'ci-api-5', text: '▾ CI 1/2 running' })).toBeDefined()
+  expect(await pane.find({ text: /^ · CI running$/ })).toBeUndefined()
+
+  await pane.press({ key: 'repo-api' })
+
+  expect(await pane.find({ key: 'repo-api', text: '▸ api (1)' })).toBeDefined()
+  expect(await pane.find({ key: 'ci-api-5' })).toBeUndefined()
+  expect(await pane.find({ text: /^ · CI running$/ })).toBeDefined()
+
+  await pane.press({ key: 'waiting' })
+
+  expect(await pane.find({ key: 'waiting', text: '▸ Waiting for others (2)' })).toBeDefined()
+  expect(await pane.find({ key: 'repo-api' })).toBeUndefined()
+  expect(await pane.find({ text: /^ · CI running$/ })).toBeDefined()
+})
+
+const BUILDS = {
+  live: false,
+  prs: [row('1', {})],
+  builds: [
+    {
+      url: 'https://dev.azure.com/org/project/_build/results?buildId=70125',
+      repo: 'project',
+      pipeline: 'api-packaging',
+      number: '70125',
+      branch: 'develop',
+      status: 'running',
+      requestedBy: 'Grace Hopper',
+      queued: '2026-01-01T07:37Z',
+      started: '2026-01-01T07:43Z',
+      ended: '',
+    },
+    {
+      url: 'https://github.com/o/shop/actions/runs/42',
+      repo: 'shop',
+      pipeline: 'Deploy',
+      number: '42',
+      branch: 'main',
+      status: 'succeeded',
+      requestedBy: 'grace',
+      queued: '2026-01-01T06:00Z',
+      started: '2026-01-01T06:01Z',
+      ended: '2026-01-01T06:09Z',
+    },
+  ],
+  errors: [],
+}
+
+test('the pipeline runs the user launched come first, open while one runs, and refresh every minute', async ($, on) => {
+  const clock = mock.clock(on)
+  const calls: string[] = []
+  let liveCalls = 0
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
+  on('process.run', ($, e) => {
+    const command = e.argv.slice(2).join(' ')
+    calls.push(command)
+    liveCalls += e.argv.includes('--live') ? 1 : 0
+
+    return ran(0, command.startsWith('status') ? JSON.stringify(BUILDS) : '')
+  })
+  on('ui.render', () => Fragment({}))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('ui.panes', () => ({ value: [{ id: 'tracked-prs', title: 'Tracked PRs', isShown: true, isFocused: false, isPlaced: true }] }))
+
+  await $.command.run(RUN)
+  const band = await $.ui.mount({ plugin: 'pr-pane', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
+  const pane = await mountPane($, 'terminal', 100)
+
+  expect(await band.find({ key: 'prs', text: 'PRs 1 · 1 build running' })).toBeDefined()
+  // The section sits above the PRs, open because a run is in progress.
+  expect(await pane.find({ key: 'builds', text: '▾ Pipeline runs (2)' })).toBeDefined()
+  const buttons = (await pane.findAll({ type: 'Button' })).map(element => element.key ?? '')
+  expect(buttons.indexOf('builds')).toBeLessThan(buttons.indexOf('waiting'))
+  expect(await pane.find({ text: /#70125 api-packaging · develop · running/ })).toBeDefined()
+  expect(await pane.find({ text: /#42 Deploy · main · succeeded .* · 8 min/ })).toBeDefined()
+
+  // On a narrow pane the pipeline's name keeps its room: the time and duration go first.
+  const narrow = await mountPane($, 'desktop', 64)
+
+  expect(await narrow.find({ text: /#42 Deploy · main · succeeded$/ })).toBeDefined()
+
+  await pane.press({ key: 'build-open-70125' })
+
+  expect(calls).toContain('open https://dev.azure.com/org/project/_build/results?buildId=70125')
+
+  await pane.press({ key: 'builds' })
+
+  expect(await pane.find({ key: 'builds', text: '▸ Pipeline runs (2)' })).toBeDefined()
+  expect(await pane.find({ text: /^ · 1 running$/ })).toBeDefined()
+  expect(await pane.find({ key: 'build-open-70125' })).toBeUndefined()
+
+  const before = liveCalls
+  await clock.advance(60_000)
+
+  expect(liveCalls).toBe(before + 1)
 })
 
 test('on Windows, Git Bash is found from git when bash is not on the PATH', async ($, on) => {

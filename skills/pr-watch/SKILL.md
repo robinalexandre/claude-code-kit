@@ -12,8 +12,8 @@ bash $SK/pr-watch.sh add <PR URL> [--note "<what it is, what it waits for>"]
 bash $SK/pr-watch.sh check            # what changed since the last check, then records it
 bash $SK/pr-watch.sh check --peek     # same, without recording (the next check reports it again)
 bash $SK/pr-watch.sh list
-bash $SK/pr-watch.sh status [--live]  # JSON per repo in merge order, with checks and what each PR waits for (--live: fetched now, records nothing)
-bash $SK/pr-watch.sh open <PR URL>    # in the default browser
+bash $SK/pr-watch.sh status [--live]  # JSON per repo in merge order, with checks and what each PR waits for, plus the review requests and the user's pipeline runs (--live: fetched now, records only those two lists)
+bash $SK/pr-watch.sh open <PR or build URL>  # in the default browser
 bash $SK/pr-watch.sh details <PR URL> # JSON: each failed check, its failed steps and error lines
 bash $SK/pr-watch.sh rerun <PR URL> <check name>  # relaunch it: only on the user's yes
 bash $SK/pr-watch.sh approve <PR URL> # vote approved (Azure DevOps) or submit an approving review (GitHub), then track it as reviewed (`reviewed: true` in status) until it is merged: only on the user's yes
@@ -25,15 +25,18 @@ bash $SK/pr-watch.sh remove <PR URL>
 
 **Review requests**: `check` and `status --live` also look up the open PRs waiting for the user's review (not drafts, not their own): on GitHub with a token (`review-requested:@me`), on Azure DevOps in the organizations of the tracked and recent PRs plus `azureOrgs` in `config.json` (reviewer with no vote yet). `check` reports each new one (`<repo> #<n> (<title>): <author> asks for your review`) and keeps the list in `reviews.json`; `status` lists it as `reviews`. When one is reported, offer a quick review (a subagent reading the diff, nothing posted) and, on the user's yes, `approve`.
 
+**Pipeline runs launched by hand** (a packaging, a deploy, a run started with the user from the CLI or the MCP tools): `check` and `status --live` also look up the runs the user requested, so one launched together shows up on its own as long as it ran under the user's identity (`az login`, their PAT, their GitHub token), not a service principal's. Azure DevOps: the manual builds (`reasonFilter=manual`, so PR builds stay with their PR) requested by the user in the projects of the tracked and recent PRs plus `azureProjects` (`org/project`) in `config.json`; GitHub: the `workflow_dispatch` runs by the user in the repos of the tracked and recent PRs plus `githubRepos` (`owner/repo`). `status` lists them as `builds`: the queued and running ones first, then those ended in the last `PR_WATCH_BUILD_HOURS` (default 24) hours, each with its pipeline, branch, status (`queued`, `running`, `succeeded`, `partially succeeded`, `failed`, `canceled`) and times; the last list is kept in `builds.json`. `check` reports a run that ended since the last check (`<pipeline> build <id> (<branch>): <status> <url>`): say what it means for the task (a deploy done, a package to test, a failure to read in the build's logs), and when it failed, read the failed steps before proposing anything. A run requested by someone else, or by a service principal, is not found: say so if the user expects it, and open its URL for them instead.
+
 **CI**: on Azure DevOps, the PR's build and status policies (what the target branch requires; a PR stacked on another feature branch often has none: `no CI`); on GitHub, the check runs and commit statuses of the head commit. The summary (`CI green`, `CI running`, `CI failed`) follows the required checks; a failed optional one is named apart (`optional failed: …`). An expired build (Azure DevOps, after a push to the target branch) counts as failed: it must be queued again.
 
 **Comment authors**, in `~/.claude-sync/pr-watch/config.json`; ask the user before adding one:
 
 ```json
-{"bots": ["<display name or login>"], "ignoreAuthors": ["<display name or login>"]}
+{"bots": ["<display name or login>"], "ignoreAuthors": ["<display name or login>"],
+ "azureOrgs": ["<org>"], "azureProjects": ["<org>/<project>"], "githubRepos": ["<owner>/<repo>"]}
 ```
 
-`bots`: still reported, marked `(bot)`; mention them to the user only when they raise a real problem. `ignoreAuthors`: never reported.
+`bots`: still reported, marked `(bot)`; mention them to the user only when they raise a real problem. `ignoreAuthors`: never reported. `azureOrgs`, `azureProjects`, `githubRepos`: looked up for review requests and pipeline runs on top of the places the tracked and recent PRs name.
 
 Auth: Azure DevOps uses `AZURE_DEVOPS_PAT` if set, otherwise the `az login` token; GitHub uses `GITHUB_TOKEN`, then `gh auth token`, then anonymous calls (public repos only). An error on one PR (signed out, no access) is printed apart and the others are still checked.
 

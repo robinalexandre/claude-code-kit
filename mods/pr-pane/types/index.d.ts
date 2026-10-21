@@ -36,9 +36,25 @@ export type RecentPr = {
 /** An open PR whose review was asked from the user and not given yet. */
 export type ReviewPr = { url: string; repo: string; number: string; title: string; author: string; updated: string }
 
+/** A pipeline run the user launched by hand: queued or running, or ended in the last day. */
+export type BuildRow = {
+  url: string
+  repo: string
+  pipeline: string
+  number: string
+  branch: string
+  /** `queued`, `running`, `succeeded`, `partially succeeded`, `failed` or `canceled`. */
+  status: string
+  requestedBy: string
+  queued: string
+  started: string
+  ended: string
+}
+
 export type PrSnapshot = {
   prs: PrRow[]
   reviews?: ReviewPr[]
+  builds?: BuildRow[]
   recent?: RecentPr[]
   errors: string[]
   isLive: boolean
