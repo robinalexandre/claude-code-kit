@@ -15,11 +15,21 @@ export type PrRow = {
   votes: Record<string, string>
   waiting: string
   note: string
+  /** Tracked because the user approved it: listed apart until it is merged. */
+  reviewed?: boolean
   changes: string[]
   checked: string
 }
 
-export type RecentPr = { url: string; repo: string; number: string; title: string; status: string; ended: string }
+export type RecentPr = {
+  url: string
+  repo: string
+  number: string
+  title: string
+  status: string
+  reviewed?: boolean
+  ended: string
+}
 
 /** An open PR whose review was asked from the user and not given yet. */
 export type ReviewPr = { url: string; repo: string; number: string; title: string; author: string; updated: string }
@@ -44,6 +54,7 @@ declare module 'claude-code' {
       ciToggled: Record<string, boolean>
       details: Record<string, CheckDetails>
       armed: string
+      approving: string
       isRecentOpen: boolean
       openRepos: Record<string, boolean>
     }

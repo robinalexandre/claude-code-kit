@@ -276,11 +276,18 @@ test('a PR waiting for my review is listed first: approve on a second press, or 
   const calls: string[] = []
   const submitted: string[] = []
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
+  let finishApprove: ((value: ReturnType<typeof ran>) => void) | undefined
   on('process.run', ($, e) => {
     const command = e.argv.slice(2).join(' ')
     calls.push(command)
 
-    return ran(0, command.startsWith('status') ? JSON.stringify(REVIEWS) : 'approved')
+    if (command.startsWith('approve')) {
+      return new Promise<ReturnType<typeof ran>>(resolve => {
+        finishApprove = resolve
+      })
+    }
+
+    return ran(0, command.startsWith('status') ? JSON.stringify(REVIEWS) : '')
   })
   on('ui.render', () => Fragment({}))
   on('ui.open', () => ({ value: { isPlaced: true as const } }))
@@ -316,6 +323,43 @@ test('a PR waiting for my review is listed first: approve on a second press, or 
   await pane.press({ key: 'review-approve-api-873' })
 
   expect(calls).toContain('approve https://github.com/o/api/pull/873')
+  expect(await pane.find({ text: 'approving…' })).toBeDefined()
+  expect(await pane.find({ key: 'review-approve-api-873' })).toBeUndefined()
+
+  finishApprove?.(ran(0, 'approved'))
+
+  // The status mock still lists the request, so the button comes back once pr-watch has answered.
+  let back = await pane.find({ key: 'review-approve-api-873', text: 'approve' })
+  for (let tries = 0; back === undefined && tries < 20; tries++) {
+    await new Promise(resolve => setTimeout(resolve, 5))
+    back = await pane.find({ key: 'review-approve-api-873', text: 'approve' })
+  }
+  expect(back).toBeDefined()
+})
+
+const REVIEWED = {
+  live: false,
+  prs: [
+    row('884', { repo: 'api', reviewed: true, waiting: 'the merge', votes: { 'Grace Hopper': 'approved' } }),
+    row('1', {}),
+  ],
+  errors: [],
+}
+
+test('a PR the user approved stays listed apart, waiting for the merge', async ($, on) => {
+  mock.clock(on)
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
+  on('process.run', ($, e) => ran(0, e.argv[2] === 'status' ? JSON.stringify(REVIEWED) : ''))
+  on('ui.render', () => Fragment({}))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+
+  await $.command.run(RUN)
+  const pane = await mountPane($, 'terminal')
+
+  expect(await pane.find({ text: 'Approved, waiting for the merge (1)' })).toBeDefined()
+  expect(await pane.find({ text: /Grace approved/ })).toBeDefined()
+  expect(await pane.find({ key: 'repo-shop', text: '▸ shop (1)' })).toBeDefined()
+  expect(await pane.find({ key: 'repo-api' })).toBeUndefined()
 })
 
 test('on Windows, Git Bash is found from git when bash is not on the PATH', async ($, on) => {

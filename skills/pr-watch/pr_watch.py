@@ -10,6 +10,7 @@
     pr_watch.py details URL             JSON: the PR's failed checks with their failed steps and errors
     pr_watch.py rerun URL CHECK         relaunch a check (Azure DevOps: re-queue; GitHub: rerun failed jobs)
     pr_watch.py approve URL             approve a PR (Azure DevOps: vote approved; GitHub: an approving review)
+                                        and track it as reviewed until it is merged
     pr_watch.py remove URL              stop tracking a PR
 
 Tracked PRs live in $PR_WATCH_DIR (default ~/.claude-sync/pr-watch), one JSON file per PR, so the
@@ -723,6 +724,7 @@ def status(live: bool) -> None:
             "votes": seen["votes"],
             "waiting": waiting_for(seen),
             "note": entry.get("note", ""),
+            "reviewed": bool(entry.get("reviewed")),
             "changes": news,
             "checked": _now() if now else entry.get("checked", ""),
         })
@@ -736,6 +738,7 @@ def status(live: bool) -> None:
             "title": entry["seen"]["title"],
             "status": entry["seen"]["status"],
             "target": entry["seen"].get("target", ""),
+            "reviewed": bool(entry.get("reviewed")),
             "ended": entry.get("ended", ""),
         })
     print(json.dumps({"live": live, "prs": merge_order(prs), "reviews": reviews, "recent": recent, "errors": errors},
@@ -804,11 +807,18 @@ def rerun(url: str, name: str) -> None:
 
 
 def approve(url: str) -> None:
-    pr = provider(normalize(url))
+    """Approves, then tracks the PR as one the user reviewed, until it is merged."""
+    url = normalize(url)
+    pr = provider(url)
     pr.approve()
     if REVIEWS.exists():
-        save_reviews([row for row in cached_reviews() if row["url"] != normalize(url)])
-    print(f"approved {normalize(url)}")
+        save_reviews([row for row in cached_reviews() if row["url"] != url])
+    path = entry_path(url)
+    entry = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {"url": url, "note": "", "added": _now()}
+    seen = pr.snapshot()
+    if seen["status"] not in FINAL:
+        save(path, {**entry, "reviewed": True, "checked": _now(), "seen": seen})
+    print(f"approved {url}")
 
 
 def open_(url: str) -> None:

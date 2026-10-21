@@ -25,6 +25,7 @@ const problem = atom({ plugin: 'pr-pane', key: 'problem' } as const, '')
 const ciToggled = atom({ plugin: 'pr-pane', key: 'ciToggled' } as const, {})
 const details = atom({ plugin: 'pr-pane', key: 'details' } as const, {})
 const armed = atom({ plugin: 'pr-pane', key: 'armed' } as const, '')
+const approving = atom({ plugin: 'pr-pane', key: 'approving' } as const, '')
 const isRecentOpen = atom({ plugin: 'pr-pane', key: 'isRecentOpen' } as const, true)
 const openRepos = atom({ plugin: 'pr-pane', key: 'openRepos' } as const, {})
 
@@ -247,6 +248,7 @@ const approvePr = async ($: EngineInterface, pr: ReviewPr) => {
   }
 
   await update($, armed, () => '')
+  await update($, approving, () => pr.url)
   const ran = await prWatch($, ['approve', pr.url], 60_000).catch(error => ({
     exitCode: 1,
     stdout: '',
@@ -254,13 +256,16 @@ const approvePr = async ($: EngineInterface, pr: ReviewPr) => {
   }))
 
   if (ran.exitCode !== 0) {
+    await update($, approving, () => '')
     $.ui.toast(`Could not approve #${pr.number}: ${ran.stderr.trim().split('\n')[0]}`)
 
     return
   }
 
   $.ui.toast(`Approved ${pr.repo} #${pr.number}`)
+  // pr-watch now tracks the PR as reviewed: the cached status moves it to its own block.
   await load($, false)
+  await update($, approving, () => '')
 }
 
 // Repo and author names come from the host and end up in a prompt: keep them to plain words.
@@ -417,14 +422,122 @@ export const register: Register = on => {
     const recentCount = recent.reduce((count, [, rows]) => count + rows.length, 0)
     const isRecentShown = await read($, isRecentOpen)
     const expanded = await read($, openRepos)
+    const approvingUrl = await read($, approving)
     const nowMs = await $.clock.now()
     const width = Math.max(20, e.props.bodyColumns - 2)
+    const inner = width - 2
     const prs = shown?.prs ?? []
     const reviews = shown?.reviews ?? []
+    const approved = prs.filter(pr => pr.reviewed === true)
+    const ours = prs.filter(pr => pr.reviewed !== true)
     const summary =
       shown === null
         ? 'Loading…'
         : `${prs.length} PR${prs.length === 1 ? '' : 's'} · ${shown.isLive ? 'live at' : 'last check, read at'} ${shown.at}`
+
+    // One tracked PR: title, what it waits for, conflicts, CI checks and the changes since the last check.
+    const prRow = (pr: PrRow, group: string, index: number, isStacked: boolean) => (
+      <Box key={`pr-${group}-${pr.number}`} flexDirection="column" paddingLeft={2}>
+        <Box flexDirection="row" justifyContent="space-between">
+          <Text bold>
+            {isStacked ? `${index + 1}. ` : ''}
+            <Link href={pr.url} label={`#${pr.number}`} />
+            <Text> {truncate(pr.title, inner - pr.number.length - 14)}</Text>
+          </Text>
+          <Button key={`open-${group}-${pr.number}`} label="open" dimColor onPress={() => void openPr($, pr.url)} />
+        </Box>
+        <Text>
+          <Text dimColor>waits for </Text>
+          <Text color={waitingColor(pr.waiting)}>{pr.waiting}</Text>
+        </Text>
+        {pr.conflicts === true && (
+          <Box flexDirection="row" justifyContent="space-between">
+            <Text color="red" bold>
+              ⚠ merge conflicts with {pr.target || 'the target branch'}
+            </Text>
+            <Button
+              key={`fix-${group}-${pr.number}`}
+              label="fix with Claude"
+              variant="primary"
+              onPress={() => void askConflictFix($, pr)}
+            />
+          </Box>
+        )}
+        <Text dimColor>
+          {truncate([pr.status, pr.ci, votesText(pr.votes), pr.note].filter(part => part !== '').join(' · '), inner)}
+        </Text>
+        {(pr.checks ?? []).length > 0 && (() => {
+          const checks = pr.checks ?? []
+          const isOpen = toggled[pr.url] ?? (isRunning(checks) || hasRequiredFailure(checks))
+          const passed = checks.filter(check => check.state === 'passed').length
+
+          return (
+            <Box flexDirection="column">
+              <Button
+                key={`ci-${group}-${pr.number}`}
+                label={`${isOpen ? '▾' : '▸'} CI ${passed}/${checks.length}${isRunning(checks) ? ' running' : ''}`}
+                plain
+                dimColor
+                onPress={() => void toggleCi($, pr.url, isOpen)}
+              />
+              {isOpen &&
+                checks.map(check => {
+                  const { mark, color } = CHECK_MARKS[check.state] ?? { mark: '◌', color: 'yellow' }
+                  const name = truncate(check.name, inner - 24)
+                  const key = checkKey(pr.url, check.name)
+                  const shownDetails = allDetails[key]
+                  const id = `${group}-${pr.number}-${check.name}`
+
+                  return (
+                    <Box key={`check-${id}`} flexDirection="column">
+                      <Text>
+                        <Text color={color}>  {mark} </Text>
+                        {check.link === null ? name : <Link href={check.link} label={name} />}
+                        <Text dimColor>
+                          {' '}
+                          {check.state}
+                          {check.required === false ? ' · optional' : ''}
+                        </Text>
+                      </Text>
+                      {FAILED.has(check.state) && (
+                        <Box flexDirection="row" paddingLeft={4}>
+                          <Button
+                            key={`details-${id}`}
+                            label={shownDetails === undefined ? 'details' : 'hide'}
+                            dimColor
+                            onPress={() => void toggleDetails($, pr.url, check.name)}
+                          />
+                          <Text> </Text>
+                          <Button
+                            key={`rerun-${id}`}
+                            label={armedKey === key ? 'press again to relaunch' : 'rerun'}
+                            variant={armedKey === key ? 'primary' : undefined}
+                            dimColor={armedKey !== key}
+                            onPress={() => void rerunCheck($, pr.url, check.name)}
+                          />
+                        </Box>
+                      )}
+                      {shownDetails !== undefined && (
+                        <Box flexDirection="column" paddingLeft={4}>
+                          {shownDetails.isLoading && <Text dimColor>Reading the build…</Text>}
+                          {shownDetails.lines.map(line => (
+                            <Text color={line.startsWith(' ') ? undefined : 'red'} dimColor={line.startsWith(' ')}>
+                              {line}
+                            </Text>
+                          ))}
+                        </Box>
+                      )}
+                    </Box>
+                  )
+                })}
+            </Box>
+          )
+        })()}
+        {pr.changes.map(change => (
+          <Text color="cyan">{truncate(`• ${change}`, inner)}</Text>
+        ))}
+      </Box>
+    )
 
     return (
       <Box flexDirection="column">
@@ -470,13 +583,17 @@ export const register: Register = on => {
                         onPress={() => void askReview($, pr)}
                       />
                       <Text> </Text>
-                      <Button
-                        key={`review-approve-${id}`}
-                        label={isArmed ? 'press again to approve' : 'approve'}
-                        variant={isArmed ? 'primary' : undefined}
-                        dimColor={!isArmed}
-                        onPress={() => void approvePr($, pr)}
-                      />
+                      {approvingUrl === pr.url ? (
+                        <Text dimColor>approving…</Text>
+                      ) : (
+                        <Button
+                          key={`review-approve-${id}`}
+                          label={isArmed ? 'press again to approve' : 'approve'}
+                          variant={isArmed ? 'primary' : undefined}
+                          dimColor={!isArmed}
+                          onPress={() => void approvePr($, pr)}
+                        />
+                      )}
                     </Box>
                   </Box>
                 </Box>
@@ -484,10 +601,17 @@ export const register: Register = on => {
             })}
           </Box>
         )}
+        {approved.length > 0 && (
+          <Box flexDirection="column" marginTop={1}>
+            <Text bold color="green">
+              Approved, waiting for the merge ({approved.length})
+            </Text>
+            {approved.map((pr, index) => prRow(pr, `approved-${pr.repo}`, index, false))}
+          </Box>
+        )}
         {shown !== null && prs.length === 0 && <Text dimColor>No PR tracked. Ask Claude to watch one.</Text>}
-        {byRepo(prs).map(([repo, rows]) => {
+        {byRepo(ours).map(([repo, rows]) => {
           const isStacked = rows.some(pr => (pr.after ?? '') !== '')
-          const inner = width - 2
           const isOpen = expanded[repoKey('open', repo)] ?? false
           const needing = rows.filter(pr => NEEDS_US.has(pr.waiting) || pr.conflicts === true).length
 
@@ -503,108 +627,7 @@ export const register: Register = on => {
                 {needing > 0 && <Text color="red"> · {needing} need{needing === 1 ? 's' : ''} us</Text>}
                 {isOpen && isStacked && <Text dimColor> · merge top to bottom</Text>}
               </Box>
-              {isOpen && rows.map((pr, index) => (
-                <Box key={`pr-${repo}-${pr.number}`} flexDirection="column" paddingLeft={2}>
-                  <Box flexDirection="row" justifyContent="space-between">
-                    <Text bold>
-                      {isStacked ? `${index + 1}. ` : ''}
-                      <Link href={pr.url} label={`#${pr.number}`} />
-                      <Text> {truncate(pr.title, inner - pr.number.length - 14)}</Text>
-                    </Text>
-                    <Button key={`open-${repo}-${pr.number}`} label="open" dimColor onPress={() => void openPr($, pr.url)} />
-                  </Box>
-                  <Text>
-                    <Text dimColor>waits for </Text>
-                    <Text color={waitingColor(pr.waiting)}>{pr.waiting}</Text>
-                  </Text>
-                  {pr.conflicts === true && (
-                    <Box flexDirection="row" justifyContent="space-between">
-                      <Text color="red" bold>
-                        ⚠ merge conflicts with {pr.target || 'the target branch'}
-                      </Text>
-                      <Button
-                        key={`fix-${repo}-${pr.number}`}
-                        label="fix with Claude"
-                        variant="primary"
-                        onPress={() => void askConflictFix($, pr)}
-                      />
-                    </Box>
-                  )}
-                  <Text dimColor>
-                    {truncate([pr.status, pr.ci, votesText(pr.votes), pr.note].filter(part => part !== '').join(' · '), inner)}
-                  </Text>
-                  {(pr.checks ?? []).length > 0 && (() => {
-                    const checks = pr.checks ?? []
-                    const isOpen = toggled[pr.url] ?? (isRunning(checks) || hasRequiredFailure(checks))
-                    const passed = checks.filter(check => check.state === 'passed').length
-
-                    return (
-                      <Box flexDirection="column">
-                        <Button
-                          key={`ci-${repo}-${pr.number}`}
-                          label={`${isOpen ? '▾' : '▸'} CI ${passed}/${checks.length}${isRunning(checks) ? ' running' : ''}`}
-                          plain
-                          dimColor
-                          onPress={() => void toggleCi($, pr.url, isOpen)}
-                        />
-                        {isOpen &&
-                          checks.map(check => {
-                            const { mark, color } = CHECK_MARKS[check.state] ?? { mark: '◌', color: 'yellow' }
-                            const name = truncate(check.name, inner - 24)
-                            const key = checkKey(pr.url, check.name)
-                            const shownDetails = allDetails[key]
-                            const id = `${repo}-${pr.number}-${check.name}`
-
-                            return (
-                              <Box key={`check-${id}`} flexDirection="column">
-                                <Text>
-                                  <Text color={color}>  {mark} </Text>
-                                  {check.link === null ? name : <Link href={check.link} label={name} />}
-                                  <Text dimColor>
-                                    {' '}
-                                    {check.state}
-                                    {check.required === false ? ' · optional' : ''}
-                                  </Text>
-                                </Text>
-                                {FAILED.has(check.state) && (
-                                  <Box flexDirection="row" paddingLeft={4}>
-                                    <Button
-                                      key={`details-${id}`}
-                                      label={shownDetails === undefined ? 'details' : 'hide'}
-                                      dimColor
-                                      onPress={() => void toggleDetails($, pr.url, check.name)}
-                                    />
-                                    <Text> </Text>
-                                    <Button
-                                      key={`rerun-${id}`}
-                                      label={armedKey === key ? 'press again to relaunch' : 'rerun'}
-                                      variant={armedKey === key ? 'primary' : undefined}
-                                      dimColor={armedKey !== key}
-                                      onPress={() => void rerunCheck($, pr.url, check.name)}
-                                    />
-                                  </Box>
-                                )}
-                                {shownDetails !== undefined && (
-                                  <Box flexDirection="column" paddingLeft={4}>
-                                    {shownDetails.isLoading && <Text dimColor>Reading the build…</Text>}
-                                    {shownDetails.lines.map(line => (
-                                      <Text color={line.startsWith(' ') ? undefined : 'red'} dimColor={line.startsWith(' ')}>
-                                        {line}
-                                      </Text>
-                                    ))}
-                                  </Box>
-                                )}
-                              </Box>
-                            )
-                          })}
-                      </Box>
-                    )
-                  })()}
-                  {pr.changes.map(change => (
-                    <Text color="cyan">{truncate(`• ${change}`, inner)}</Text>
-                  ))}
-                </Box>
-              ))}
+              {isOpen && rows.map((pr, index) => prRow(pr, repo, index, isStacked))}
             </Box>
           )
         })}
