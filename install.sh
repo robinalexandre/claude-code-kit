@@ -42,10 +42,25 @@ statusline:statusline:A status line with folder, branch, model, context, effort 
 video-montage:skill:Not dev, video montages from a folder of phone clips, Instagram Reel by default (ffmpeg; saving to Photos needs macOS)
 insta360-montage:skill:Not dev, video montages from raw Insta360 footage, Instagram Reel by default (ffmpeg, python3)"
 
+source_of() {
+  case "$2" in
+    skill) echo "skills/$1" ;;
+    mod) echo "mods/$1" ;;
+    rules) echo "rules/$1.md" ;;
+    statusline) echo statusline-command.sh ;;
+    hook) if [ "$1" = wave-check-hook ]; then echo hooks/wave-check.sh; else echo "hooks/$1.sh"; fi ;;
+  esac
+}
+
+# A copy of the kit that carries only some parts offers only those.
+PARTS=$(while IFS=: read -r name kind what; do
+  if [ -e "$KIT/$(source_of "$name" "$kind")" ]; then printf '%s:%s:%s\n' "$name" "$kind" "$what"; fi
+done <<< "$PARTS")
+
 field() { awk -F: -v p="$1" -v f="$2" '$1 == p { print $f }' <<< "$PARTS"; }
 
 if [ "${1:-}" = --list ]; then
-  awk -F: '{ printf "%-17s %-10s %s\n", $1, $2, $3 }' <<< "$PARTS"
+  awk -F: '{ what = $0; sub(/^[^:]*:[^:]*:/, "", what); printf "%-17s %-10s %s\n", $1, $2, what }' <<< "$PARTS"
   exit 0
 fi
 
