@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { BuildRow, CiCheck, PrRow, PrSnapshot, RecentPr, ReviewPr } from '../types'
+import type { BuildRow, BuildStep, CiCheck, PrRow, PrSnapshot, RecentPr, ReviewPr } from '../types'
 
 const PANE = 'tracked-prs'
 const TITLE = 'Tracked PRs'
@@ -24,6 +24,8 @@ const isRefreshing = atom({ plugin: 'pr-pane', key: 'isRefreshing' } as const, f
 const problem = atom({ plugin: 'pr-pane', key: 'problem' } as const, '')
 const ciToggled = atom({ plugin: 'pr-pane', key: 'ciToggled' } as const, {})
 const details = atom({ plugin: 'pr-pane', key: 'details' } as const, {})
+const buildDetails = atom({ plugin: 'pr-pane', key: 'buildDetails' } as const, {})
+const openSteps = atom({ plugin: 'pr-pane', key: 'openSteps' } as const, {})
 const armed = atom({ plugin: 'pr-pane', key: 'armed' } as const, '')
 const inFlight = atom({ plugin: 'pr-pane', key: 'busy' } as const, '')
 const isRecentOpen = atom({ plugin: 'pr-pane', key: 'isRecentOpen' } as const, true)
@@ -236,34 +238,61 @@ const toggleDetails = async ($: EngineInterface, url: string, name: string) => {
   await update($, details, shown => ({ ...shown, [key]: { isLoading: false, lines } }))
 }
 
-const BUILD_DETAILS = '*build*'
+const STEP_MARKS: Record<string, { mark: string; color: string }> = {
+  succeeded: { mark: '✓', color: 'green' },
+  issues: { mark: '!', color: 'yellow' },
+  failed: { mark: '✗', color: 'red' },
+  canceled: { mark: '–', color: 'gray' },
+  skipped: { mark: '–', color: 'gray' },
+}
 
-// A run that did not succeed unfolds its steps that failed or had issues, read through pr-watch.
+// An unfolded run shows every step of it, read through pr-watch; a problem reading them is shown as
+// one failed step.
 const toggleBuildDetails = async ($: EngineInterface, url: string) => {
-  const key = checkKey(url, BUILD_DETAILS)
-
-  if ((await read($, details))[key] !== undefined) {
-    await update($, details, shown => Object.fromEntries(Object.entries(shown).filter(([one]) => one !== key)))
+  if ((await read($, buildDetails))[url] !== undefined) {
+    await update($, buildDetails, shown => Object.fromEntries(Object.entries(shown).filter(([one]) => one !== url)))
 
     return
   }
 
-  await update($, details, shown => ({ ...shown, [key]: { isLoading: true, lines: [] } }))
-  const lines = await prWatch($, ['details', url], 120_000)
-    .then(ran => {
-      if (ran.exitCode !== 0) {
-        return [ran.stderr.trim() || `pr-watch exited with ${ran.exitCode}`]
-      }
-
-      const { steps } = JSON.parse(ran.stdout) as { steps: { name: string; state: string; errors: string[] }[] }
-
-      return steps.length === 0
-        ? ['no step failed or had issues']
-        : steps.flatMap(step => [`${step.name}: ${step.state}`, ...step.errors.map(line => `  ${line}`)])
-    })
-    .catch(error => [`pr-watch did not run: ${String(error)}`])
-  await update($, details, shown => ({ ...shown, [key]: { isLoading: false, lines } }))
+  await update($, buildDetails, shown => ({ ...shown, [url]: { isLoading: true, steps: [] } }))
+  const problem = (text: string): BuildStep[] => [{ name: 'pr-watch', job: '', state: 'failed', errors: [text] }]
+  const steps = await prWatch($, ['details', url], 120_000)
+    .then(ran =>
+      ran.exitCode === 0
+        ? (JSON.parse(ran.stdout) as { steps: BuildStep[] }).steps
+        : problem(ran.stderr.trim() || `pr-watch exited with ${ran.exitCode}`)
+    )
+    .catch(error => problem(`pr-watch did not run: ${String(error)}`))
+  await update($, buildDetails, shown => ({ ...shown, [url]: { isLoading: false, steps } }))
 }
+
+const stepKey = (url: string, index: number | string) => `${url}|${index}`
+
+const toggleStep = ($: EngineInterface, key: string, isOpen: boolean) =>
+  update($, openSteps, open => ({ ...open, [key]: !isOpen }))
+
+// The run's steps in their jobs, in order; a step keeps its index in the whole list.
+const byJob = (steps: BuildStep[]) => {
+  const groups: { job: string; steps: { step: BuildStep; index: number }[] }[] = []
+
+  steps.forEach((step, index) => {
+    const last = groups[groups.length - 1]
+
+    if (last !== undefined && last.job === step.job) {
+      last.steps.push({ step, index })
+    } else {
+      groups.push({ job: step.job, steps: [{ step, index }] })
+    }
+  })
+
+  return groups
+}
+
+const STEP_SEVERITY = ['failed', 'issues', 'canceled', 'running', 'succeeded', 'skipped']
+
+const worstState = (steps: BuildStep[]) =>
+  STEP_SEVERITY.find(state => steps.some(step => step.state === state)) ?? 'succeeded'
 
 // Launching a run again is a real build: the first press arms the button, the second acts.
 const rerunBuild = async ($: EngineInterface, build: BuildRow) => {
@@ -559,6 +588,8 @@ export const register: Register = on => {
     const trouble = await read($, problem)
     const toggled = await read($, ciToggled)
     const allDetails = await read($, details)
+    const allBuildDetails = await read($, buildDetails)
+    const unfoldedSteps = await read($, openSteps)
     const armedKey = await read($, armed)
     const recent = recentByRepo(shown?.recent ?? [])
     const recentCount = recent.reduce((count, [, rows]) => count + rows.length, 0)
@@ -744,57 +775,132 @@ export const register: Register = on => {
       const room = inner - build.number.length - branch.length - build.status.length - 14
       // The pipeline's name comes first: on a narrow pane the duration, then the time, give way.
       const when = [[at, duration].filter(Boolean).join(' · '), at, ''].find(option => room - option.length >= 20) ?? ''
-      const nameWidth = Math.max(8, room - when.length)
+      const nameWidth = Math.max(8, room - when.length - 2)
       const hasIssues = isEnded && build.status !== 'succeeded'
-      const shownDetails = allDetails[checkKey(build.url, BUILD_DETAILS)]
+      const shownDetails = allBuildDetails[build.url]
+      const isOpen = shownDetails !== undefined
       const rerunKey = actionKey('rerun', build.url)
 
+      // One step per line; its messages fold under a toggle, closed at first.
+      const stepRow = (step: BuildStep, index: number) => {
+        const key = stepKey(build.url, index)
+        const isOpen = unfoldedSteps[key] ?? false
+        const { mark, color } = STEP_MARKS[step.state] ?? { mark: '◌', color: 'yellow' }
+        const hasLines = step.errors.length > 0
+
+        return (
+          <Box key={`build-step-${build.number}-${index}`} flexDirection="column">
+            <Box flexDirection="row">
+              {hasLines ? (
+                <Button
+                  key={`build-step-toggle-${build.number}-${index}`}
+                  label={isOpen ? '▾' : '▸'}
+                  plain
+                  onPress={() => void toggleStep($, key, isOpen)}
+                />
+              ) : (
+                <Text> </Text>
+              )}
+              <Text>
+                {' '}
+                <Text color={color}>{mark}</Text> {truncate(step.name, Math.max(8, inner - step.state.length - 14))}
+                <Text dimColor> {step.state}</Text>
+              </Text>
+            </Box>
+            {isOpen && (
+              <Box flexDirection="column" paddingLeft={4}>
+                {step.errors.map(line => (
+                  <Text color={line.startsWith('warning: ') ? 'yellow' : 'red'} dimColor={line.startsWith('warning: ')}>
+                    {truncate(line, inner - 10)}
+                  </Text>
+                ))}
+              </Box>
+            )}
+          </Box>
+        )
+      }
+
+      // One job per line with the worst state of its steps; folded unless a step had a problem.
+      const jobRow = (group: { job: string; steps: { step: BuildStep; index: number }[] }, jobIndex: number) => {
+        const key = stepKey(build.url, `job-${jobIndex}`)
+        const worst = worstState(group.steps.map(one => one.step))
+        const isOpen = unfoldedSteps[key] ?? ['failed', 'issues', 'canceled'].includes(worst)
+        const { mark, color } = STEP_MARKS[worst] ?? { mark: '◌', color: 'yellow' }
+        const count = `${group.steps.length} step${group.steps.length === 1 ? '' : 's'}`
+
+        return (
+          <Box key={`build-job-${build.number}-${jobIndex}`} flexDirection="column">
+            <Box flexDirection="row">
+              <Button
+                key={`build-job-toggle-${build.number}-${jobIndex}`}
+                label={`${isOpen ? '▾' : '▸'} ${truncate(group.job || 'steps', Math.max(8, inner - count.length - 12))}`}
+                plain
+                onPress={() => void toggleStep($, key, isOpen)}
+              />
+              <Text>
+                {' '}
+                <Text color={color}>{mark}</Text>
+                <Text dimColor> {count}</Text>
+              </Text>
+            </Box>
+            {isOpen && (
+              <Box flexDirection="column" paddingLeft={2}>
+                {group.steps.map(({ step, index }) => stepRow(step, index))}
+              </Box>
+            )}
+          </Box>
+        )
+      }
+
+      // The line itself unfolds the run: its actions first (a rerun for any ended run, a diagnosis
+      // when it did not succeed), then its steps by job.
       return (
         <Box key={`build-${build.number}`} flexDirection="column" paddingLeft={2}>
           <Box flexDirection="row" justifyContent="space-between">
-            <Text>
-              <Text color={color}>● </Text>
-              <Link href={build.url} label={`#${build.number}`} />
-              <Text bold> {truncate(build.pipeline, nameWidth)}</Text>
-              <Text dimColor>{branch} · </Text>
-              <Text color={color}>{build.status}</Text>
-              <Text dimColor>{when ? ` ${when}` : ''}</Text>
-            </Text>
-            <Button key={`build-open-${build.number}`} label="open" dimColor onPress={() => void openPr($, build.url)} />
-          </Box>
-          {hasIssues && (
-            <Box flexDirection="row" paddingLeft={4}>
+            <Box flexDirection="row">
               <Button
-                key={`build-details-${build.number}`}
-                label={shownDetails === undefined ? 'details' : 'hide'}
-                dimColor
+                key={`build-toggle-${build.number}`}
+                label={isOpen ? '▾' : '▸'}
+                plain
                 onPress={() => void toggleBuildDetails($, build.url)}
               />
-              <Text> </Text>
-              <Button
-                key={`build-rerun-${build.number}`}
-                label={armedKey === rerunKey ? 'press again to relaunch' : 'rerun'}
-                variant={armedKey === rerunKey ? 'primary' : undefined}
-                dimColor={armedKey !== rerunKey}
-                onPress={() => void rerunBuild($, build)}
-              />
-              <Text> </Text>
-              <Button
-                key={`build-diagnose-${build.number}`}
-                label="diagnose with Claude"
-                variant="primary"
-                onPress={() => void askDiagnose($, build)}
-              />
+              <Text>
+                {' '}
+                <Text color={color}>● </Text>
+                <Link href={build.url} label={`#${build.number}`} />
+                <Text bold> {truncate(build.pipeline, nameWidth)}</Text>
+                <Text dimColor>{branch} · </Text>
+                <Text color={color}>{build.status}</Text>
+                <Text dimColor>{when ? ` ${when}` : ''}</Text>
+              </Text>
             </Box>
-          )}
+            <Button key={`build-open-${build.number}`} label="open" dimColor onPress={() => void openPr($, build.url)} />
+          </Box>
           {shownDetails !== undefined && (
             <Box flexDirection="column" paddingLeft={4}>
+              {isEnded && (
+                <Box flexDirection="row">
+                  <Button
+                    key={`build-rerun-${build.number}`}
+                    label={armedKey === rerunKey ? 'press again to relaunch' : 'rerun'}
+                    variant={armedKey === rerunKey ? 'primary' : undefined}
+                    dimColor={armedKey !== rerunKey}
+                    onPress={() => void rerunBuild($, build)}
+                  />
+                  {hasIssues && <Text> </Text>}
+                  {hasIssues && (
+                    <Button
+                      key={`build-diagnose-${build.number}`}
+                      label="diagnose with Claude"
+                      variant="primary"
+                      onPress={() => void askDiagnose($, build)}
+                    />
+                  )}
+                </Box>
+              )}
               {shownDetails.isLoading && <Text dimColor>Reading the build…</Text>}
-              {shownDetails.lines.map(line => (
-                <Text color={line.startsWith(' ') ? undefined : 'red'} dimColor={line.startsWith(' ')}>
-                  {truncate(line, inner - 4)}
-                </Text>
-              ))}
+              {!shownDetails.isLoading && shownDetails.steps.length === 0 && <Text dimColor>no step recorded</Text>}
+              {byJob(shownDetails.steps).map(jobRow)}
             </Box>
           )}
         </Box>

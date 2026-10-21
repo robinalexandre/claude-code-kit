@@ -63,6 +63,11 @@ export type PrSnapshot = {
 
 export type CheckDetails = { isLoading: boolean; lines: string[] }
 
+/** One step of a pipeline run; `errors` holds its messages when it failed or had issues. */
+export type BuildStep = { name: string; job: string; state: string; errors: string[] }
+
+export type BuildDetails = { isLoading: boolean; steps: BuildStep[] }
+
 declare module 'claude-code' {
   interface PluginState {
     'pr-pane': {
@@ -71,6 +76,10 @@ declare module 'claude-code' {
       problem: string
       ciToggled: Record<string, boolean>
       details: Record<string, CheckDetails>
+      /** By run URL: its steps, once the user asked for them. */
+      buildDetails: Record<string, BuildDetails>
+      /** `<run URL>|<step index>` of the steps whose messages are unfolded. */
+      openSteps: Record<string, boolean>
       armed: string
       /** `approve|<url>` or `merge|<url>` while pr-watch runs it. */
       busy: string

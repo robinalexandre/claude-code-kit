@@ -8,7 +8,8 @@
                                         (--live: fetched now, with the changes; records only the review requests)
     pr_watch.py open URL                open a PR or a build in the default browser
     pr_watch.py details URL             JSON: the PR's failed checks with their failed steps and errors,
-                                        or a build's steps that failed or had issues (a build URL)
+                                        or a build's steps, every one with its job and state, those
+                                        with issues with their error lines (a build URL)
     pr_watch.py rerun URL CHECK         relaunch a check (Azure DevOps: re-queue; GitHub: rerun failed jobs)
     pr_watch.py rerun BUILD_URL         launch the pipeline run again (Azure DevOps: a new run of the same
                                         pipeline, branch and parameters; GitHub: re-run the workflow run)
@@ -427,7 +428,12 @@ def github_manual_runs(owner: str, repo: str) -> list[dict]:
     return rows
 
 
-ADO_ISSUE_RESULTS = {"failed": "failed", "succeededWithIssues": "issues", "canceled": "canceled"}
+ADO_STEP_STATES = {"succeeded": "succeeded", "succeededWithIssues": "issues", "failed": "failed",
+                   "canceled": "canceled", "abandoned": "canceled", "skipped": "skipped"}
+STEP_ISSUES = {"issues", "failed", "canceled"}
+GITHUB_STEP_STATES = {"success": "succeeded", "failure": "failed", "cancelled": "canceled", "timed_out": "failed",
+                      "skipped": "skipped", "neutral": "succeeded", "action_required": "failed"}
+MAX_STEPS = 300
 
 
 class AzureBuild:
@@ -442,24 +448,38 @@ class AzureBuild:
         return _http_json(f"{self.base}/{path}{separator}api-version=7.1", _ado_headers())  # type: ignore[return-value]
 
     def steps(self) -> list[dict]:
-        """The tasks that failed, were canceled or succeeded with issues, in order, with their
-        messages (warnings marked) and the error lines of their log."""
+        """Every task of the run in order, with its job; a task that failed, was canceled or
+        succeeded with issues carries its messages (warnings marked) and its log's error lines."""
         records = self.get(f"build/builds/{self.id}/timeline").get("records") or []
+        by_id = {record["id"]: record for record in records}
+
+        def path(record: dict) -> tuple[int, ...]:
+            """The record's place in the run: its stage's, phase's, job's and own order."""
+            orders, seen = [], set()
+            while record is not None and record["id"] not in seen:
+                seen.add(record["id"])
+                orders.append(record.get("order") or 0)
+                record = by_id.get(record.get("parentId") or "")  # type: ignore[assignment]
+            return tuple(reversed(orders))
+
         steps = []
-        for record in sorted(records, key=lambda one: one.get("order") or 0):
-            state = ADO_ISSUE_RESULTS.get(record.get("result") or "")
-            if record.get("type") != "Task" or state is None:
+        for record in sorted(records, key=path):
+            state = ADO_STEP_STATES.get(record.get("result") or "", "running" if record.get("state") != "completed" else "")
+            if record.get("type") != "Task" or not state:
                 continue
-            messages = [("warning: " if issue.get("type") == "warning" else "") + (issue.get("message") or "")[:EXCERPT]
-                        for issue in record.get("issues") or []]
-            if (record.get("log") or {}).get("url"):
-                try:
-                    tail = log_tail(_http_text(record["log"]["url"], _ado_headers()))
-                except WatchError:
-                    tail = []
-                messages += [line[:EXCERPT] for line in tail if line not in messages]
-            steps.append({"name": record["name"], "state": state, "errors": messages[:8]})
-        return steps[:24]
+            messages = []
+            if state in STEP_ISSUES:
+                messages = [("warning: " if issue.get("type") == "warning" else "") + (issue.get("message") or "")[:EXCERPT]
+                            for issue in record.get("issues") or []]
+                if (record.get("log") or {}).get("url"):
+                    try:
+                        tail = log_tail(_http_text(record["log"]["url"], _ado_headers()))
+                    except WatchError:
+                        tail = []
+                    messages += [line[:EXCERPT] for line in tail if line not in messages]
+            job = (by_id.get(record.get("parentId") or "") or {}).get("name") or ""
+            steps.append({"name": record["name"], "job": job, "state": state, "errors": messages[:8]})
+        return steps[:MAX_STEPS]
 
     def rerun(self) -> str:
         """Queues a new run of the same pipeline on the same branch with the same parameters, as
@@ -490,26 +510,28 @@ class GitHubRun:
         return _http_json(f"{self.base}/{path}", self.headers)  # type: ignore[return-value]
 
     def steps(self) -> list[dict]:
-        """The failed steps of each failed job, with the job's failure annotations."""
+        """Every step of every job in order; the first failed step of a failed job carries the
+        job's failure annotations."""
         steps = []
         for job in self.get(f"actions/runs/{self.id}/jobs?per_page=100").get("jobs", []):
-            if job.get("conclusion") not in {"failure", "cancelled", "timed_out"}:
-                continue
-            state = "canceled" if job["conclusion"] == "cancelled" else "failed"
-            failed = [step["name"] for step in job.get("steps", []) if step.get("conclusion") == "failure"]
             messages = []
-            try:
-                for annotation in self.get(f"check-runs/{job['id']}/annotations")[:10]:  # type: ignore[index]
-                    if annotation.get("annotation_level") == "failure":
-                        where = f"{annotation['path']}: " if annotation.get("path") else ""
-                        messages.append(f"{where}{(annotation.get('message') or '')[:EXCERPT]}")
-            except WatchError:
-                pass
-            for name in failed or [job["name"]]:
-                steps.append({"name": f"{job['name']} / {name}" if failed else job["name"], "state": state,
-                              "errors": messages[:8]})
-                messages = []
-        return steps[:24]
+            if job.get("conclusion") in {"failure", "cancelled", "timed_out"}:
+                try:
+                    for annotation in self.get(f"check-runs/{job['id']}/annotations")[:10]:  # type: ignore[index]
+                        if annotation.get("annotation_level") == "failure":
+                            where = f"{annotation['path']}: " if annotation.get("path") else ""
+                            messages.append(f"{where}{(annotation.get('message') or '')[:EXCERPT]}")
+                except WatchError:
+                    pass
+            for step in job.get("steps", []):
+                state = GITHUB_STEP_STATES.get(step.get("conclusion") or "", "running" if step.get("status") != "completed" else "")
+                if not state:
+                    continue
+                errors = messages[:8] if state == "failed" else []
+                if errors:
+                    messages = []
+                steps.append({"name": step["name"], "job": job["name"], "state": state, "errors": errors})
+        return steps[:MAX_STEPS]
 
     def rerun(self) -> str:
         """Re-runs the whole workflow run (its URL stays the same)."""
@@ -531,10 +553,10 @@ def build_provider(url: str) -> AzureBuild | GitHubRun | None:
 
 
 def build_details(build: AzureBuild | GitHubRun, url: str) -> None:
-    """JSON: the run's steps that failed or had issues, each with its error lines."""
+    """JSON: every step of the run with its job and state; a step with issues has its error lines."""
     steps = build.steps()
     for step in steps:
-        if not step["errors"]:
+        if step["state"] in STEP_ISSUES and not step["errors"]:
             step["errors"] = ["no step details kept: see the build log"]
     print(json.dumps({"url": url, "steps": steps}, ensure_ascii=False))
 

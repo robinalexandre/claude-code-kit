@@ -530,7 +530,10 @@ const BUILDS = {
 }
 const BUILD_DETAILS = {
   url: 'https://dev.azure.com/org/project/_build/results?buildId=70100',
-  steps: [{ name: 'pylint', state: 'issues', errors: ["Bash exited with code '8'.", 'warning: too-many-branches'] }],
+  steps: [
+    { name: 'Checkout', job: 'build', state: 'succeeded', errors: [] },
+    { name: 'pylint', job: 'linting', state: 'issues', errors: ["Bash exited with code '8'.", 'warning: too-many-branches'] },
+  ],
 }
 
 test('the pipeline runs the user launched come first, open while one runs, and refresh every minute', async ($, on) => {
@@ -571,17 +574,47 @@ test('the pipeline runs the user launched come first, open while one runs, and r
   expect(buttons.indexOf('builds')).toBeLessThan(buttons.indexOf('waiting'))
   expect(await pane.find({ text: /#70125 api-packaging · develop · running/ })).toBeDefined()
   expect(await pane.find({ text: /#42 Deploy · main · succeeded .* · 8 min/ })).toBeDefined()
-  // Only a run that did not succeed offers details, a rerun and a diagnosis.
-  expect(await pane.find({ key: 'build-details-42' })).toBeUndefined()
-  expect(await pane.find({ key: 'build-details-70125' })).toBeUndefined()
-  expect(await pane.find({ key: 'build-details-70100', text: 'details' })).toBeDefined()
+  // Every run unfolds from its line; the actions sit inside, a diagnosis only when it did not succeed.
+  expect(await pane.find({ key: 'build-toggle-42', text: '▸' })).toBeDefined()
+  expect(await pane.find({ key: 'build-rerun-70100' })).toBeUndefined()
 
-  await pane.press({ key: 'build-details-70100' })
+  await pane.press({ key: 'build-toggle-42' })
+
+  expect(calls).toContain('details https://github.com/o/shop/actions/runs/42')
+  expect(await pane.find({ key: 'build-rerun-42', text: 'rerun' })).toBeDefined()
+  expect(await pane.find({ key: 'build-diagnose-42' })).toBeUndefined()
+
+  await pane.press({ key: 'build-toggle-42' })
+
+  expect(await pane.find({ key: 'build-rerun-42' })).toBeUndefined()
+
+  await pane.press({ key: 'build-toggle-70100' })
 
   expect(calls).toContain('details https://dev.azure.com/org/project/_build/results?buildId=70100')
-  expect(await pane.find({ text: 'pylint: issues' })).toBeDefined()
-  expect(await pane.find({ text: '  warning: too-many-branches' })).toBeDefined()
-  expect(await pane.find({ key: 'build-details-70100', text: 'hide' })).toBeDefined()
+  expect(await pane.find({ key: 'build-toggle-70100', text: '▾' })).toBeDefined()
+  expect(await pane.find({ key: 'build-diagnose-70100' })).toBeDefined()
+  // Every job is listed, the successful ones folded, the one with issues open; a step's messages
+  // stay folded until asked for.
+  expect(await pane.find({ key: 'build-job-toggle-70100-0', text: '▸ build' })).toBeDefined()
+  expect(await pane.find({ key: 'build-job-toggle-70100-1', text: '▾ linting' })).toBeDefined()
+  expect(await pane.find({ text: /Checkout succeeded$/ })).toBeUndefined()
+  expect(await pane.find({ text: /! pylint issues$/ })).toBeDefined()
+  expect(await pane.find({ key: 'build-step-toggle-70100-1', text: '▸' })).toBeDefined()
+  expect(await pane.find({ text: 'warning: too-many-branches' })).toBeUndefined()
+
+  await pane.press({ key: 'build-job-toggle-70100-0' })
+
+  expect(await pane.find({ text: /✓ Checkout succeeded$/ })).toBeDefined()
+  expect(await pane.find({ key: 'build-step-toggle-70100-0' })).toBeUndefined()
+
+  await pane.press({ key: 'build-step-toggle-70100-1' })
+
+  expect(await pane.find({ text: "Bash exited with code '8'." })).toBeDefined()
+  expect(await pane.find({ text: 'warning: too-many-branches' })).toBeDefined()
+
+  await pane.press({ key: 'build-step-toggle-70100-1' })
+
+  expect(await pane.find({ text: 'warning: too-many-branches' })).toBeUndefined()
 
   await pane.press({ key: 'build-rerun-70100' })
 
