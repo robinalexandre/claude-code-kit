@@ -28,6 +28,7 @@ const armed = atom({ plugin: 'pr-pane', key: 'armed' } as const, '')
 const inFlight = atom({ plugin: 'pr-pane', key: 'busy' } as const, '')
 const isRecentOpen = atom({ plugin: 'pr-pane', key: 'isRecentOpen' } as const, true)
 const openRepos = atom({ plugin: 'pr-pane', key: 'openRepos' } as const, {})
+const openPrs = atom({ plugin: 'pr-pane', key: 'openPrs' } as const, {})
 
 const FAILED = new Set(['failed', 'broken', 'expired'])
 const RECENT_SHOWN = 8
@@ -351,10 +352,17 @@ const recentByRepo = (recent: RecentPr[]) => {
 }
 
 // Every repo block starts collapsed; what the user opens stays open for the session.
-const repoKey = (section: 'open' | 'approved' | 'recent', repo: string) => `${section}|${repo}`
+const repoKey = (section: 'open' | 'waiting' | 'approved' | 'recent', repo: string) => `${section}|${repo}`
 
 const toggleRepo = ($: EngineInterface, key: string) =>
   update($, openRepos, open => ({ ...open, [key]: !(open[key] ?? false) }))
+
+// Each PR is one line until opened: its details (CI, votes, changes) fold under it.
+const togglePr = ($: EngineInterface, url: string) =>
+  update($, openPrs, open => ({ ...open, [url]: !(open[url] ?? false) }))
+
+// Red: the user has to act. Green: only the merge is left. Yellow: someone or something else.
+const statusColor = (pr: PrRow) => (needsAttention(pr) ? 'red' : canMerge(pr) ? 'green' : waitingColor(pr.waiting))
 
 const votesText =(votes: Record<string, string>) =>
   Object.entries(votes)
@@ -451,42 +459,61 @@ export const register: Register = on => {
     const approved = prs.filter(pr => !attention.includes(pr) && (pr.reviewed === true || pr.waiting === 'the merge'))
     const ours = prs.filter(pr => !attention.includes(pr) && !approved.includes(pr))
     const isApprovedOpen = expanded[repoKey('approved', '*')] ?? false
+    const isWaitingOpen = expanded[repoKey('waiting', '*')] ?? false
+    const openDetails = await read($, openPrs)
     const mergeable = approved.filter(canMerge).length
     const summary =
       shown === null
         ? 'Loading…'
         : `${prs.length} PR${prs.length === 1 ? '' : 's'} · ${shown.isLive ? 'live at' : 'last check, read at'} ${shown.at}`
 
-    // One tracked PR: title, what it waits for (with `merge` when that is all it waits for), conflicts,
-    // CI checks and the changes since the last check.
-    const prRow = (pr: PrRow, group: string, index: number, isStacked: boolean, withMerge = false) => (
-      <Box key={`pr-${group}-${pr.number}`} flexDirection="column" paddingLeft={2}>
-        <Box flexDirection="row" justifyContent="space-between">
-          <Text bold>
-            {isStacked ? `${index + 1}. ` : ''}
-            <Link href={pr.url} label={`#${pr.number}`} />
-            <Text> {truncate(pr.title, inner - pr.number.length - 14)}</Text>
-          </Text>
-          <Button key={`open-${group}-${pr.number}`} label="open" dimColor onPress={() => void openPr($, pr.url)} />
-        </Box>
-        <Box flexDirection="row" justifyContent="space-between">
-          <Text>
-            <Text dimColor>waits for </Text>
-            <Text color={waitingColor(pr.waiting)}>{pr.waiting}</Text>
-          </Text>
-          {withMerge && canMerge(pr) && (
-            busyKey === actionKey('merge', pr.url) ? (
-              <Text dimColor>merging…</Text>
-            ) : (
+    // One tracked PR on one line: a colored dot, its number, title and what it waits for, with `merge`
+    // when that is all it waits for. Opened, it shows conflicts, CI checks, votes and the changes
+    // since the last check.
+    const prRow = (pr: PrRow, group: string, index: number, isStacked: boolean, withMerge = false) => {
+      const isOpen = openDetails[pr.url] ?? false
+      const color = statusColor(pr)
+      const titleWidth = Math.max(8, inner - pr.number.length - pr.waiting.length - (withMerge && canMerge(pr) ? 26 : 20))
+
+      return (
+        <Box key={`pr-${group}-${pr.number}`} flexDirection="column" paddingLeft={2}>
+          <Box flexDirection="row" justifyContent="space-between">
+            <Box flexDirection="row">
               <Button
-                key={`merge-${group}-${pr.number}`}
-                label={armedKey === actionKey('merge', pr.url) ? 'press again to merge' : 'merge'}
-                variant="primary"
-                onPress={() => void mergePr($, pr)}
+                key={`pr-toggle-${group}-${pr.number}`}
+                label={isOpen ? '▾' : '▸'}
+                plain
+                onPress={() => void togglePr($, pr.url)}
               />
-            )
-          )}
-        </Box>
+              <Text>
+                {' '}
+                <Text color={color}>● </Text>
+                {isStacked ? `${index + 1}. ` : ''}
+                <Link href={pr.url} label={`#${pr.number}`} />
+                <Text bold> {truncate(pr.title, titleWidth)}</Text>
+                <Text dimColor> · </Text>
+                <Text color={color}>{pr.waiting}</Text>
+              </Text>
+            </Box>
+            <Box flexDirection="row">
+              {withMerge && canMerge(pr) && (
+                busyKey === actionKey('merge', pr.url) ? (
+                  <Text dimColor>merging… </Text>
+                ) : (
+                  <Button
+                    key={`merge-${group}-${pr.number}`}
+                    label={armedKey === actionKey('merge', pr.url) ? 'press again to merge' : 'merge'}
+                    variant="primary"
+                    onPress={() => void mergePr($, pr)}
+                  />
+                )
+              )}
+              {withMerge && canMerge(pr) && <Text> </Text>}
+              <Button key={`open-${group}-${pr.number}`} label="open" dimColor onPress={() => void openPr($, pr.url)} />
+            </Box>
+          </Box>
+          {isOpen && (
+          <Box flexDirection="column" paddingLeft={2}>
         {pr.conflicts === true && (
           <Box flexDirection="row" justifyContent="space-between">
             <Text color="red" bold>
@@ -573,8 +600,11 @@ export const register: Register = on => {
         {pr.changes.map(change => (
           <Text color="cyan">{truncate(`• ${change}`, inner)}</Text>
         ))}
-      </Box>
-    )
+          </Box>
+          )}
+        </Box>
+      )
+    }
 
     return (
       <Box flexDirection="column">
@@ -613,8 +643,9 @@ export const register: Register = on => {
                 <Box key={`review-${id}`} flexDirection="column" paddingLeft={2}>
                   <Box flexDirection="row" justifyContent="space-between">
                     <Text bold>
+                      <Text color="yellow">● </Text>
                       <Link href={pr.url} label={`#${pr.number}`} />
-                      <Text> {truncate(pr.title, width - pr.number.length - 12)}</Text>
+                      <Text> {truncate(pr.title, width - pr.number.length - 14)}</Text>
                     </Text>
                     <Button key={`review-open-${id}`} label="open" dimColor onPress={() => void openPr($, pr.url)} />
                   </Box>
@@ -647,28 +678,43 @@ export const register: Register = on => {
           </Box>
         )}
         {shown !== null && prs.length === 0 && <Text dimColor>No PR tracked. Ask Claude to watch one.</Text>}
-        {byRepo(ours).map(([repo, rows]) => {
-          const isStacked = rows.some(pr => (pr.after ?? '') !== '')
-          const isOpen = expanded[repoKey('open', repo)] ?? false
-
-          return (
-            <Box key={`repo-block-${repo}`} flexDirection="column" marginTop={1}>
-              <Box flexDirection="row">
-                <Button
-                  key={`repo-${repo}`}
-                  label={`${isOpen ? '▾' : '▸'} ${truncate(repo, width - 30)} (${rows.length})`}
-                  plain
-                  onPress={() => void toggleRepo($, repoKey('open', repo))}
-                />
-                {isOpen && isStacked && <Text dimColor> · merge top to bottom</Text>}
-              </Box>
-              {isOpen && rows.map((pr, index) => prRow(pr, repo, index, isStacked))}
+        {ours.length > 0 && (
+          <Box flexDirection="column" marginTop={1}>
+            <Box flexDirection="row">
+              <Text color="yellow">● </Text>
+              <Button
+                key="waiting"
+                label={`${isWaitingOpen ? '▾' : '▸'} Waiting for others (${ours.length})`}
+                plain
+                onPress={() => void toggleRepo($, repoKey('waiting', '*'))}
+              />
             </Box>
-          )
-        })}
+            {isWaitingOpen &&
+              byRepo(ours).map(([repo, rows]) => {
+                const isStacked = rows.some(pr => (pr.after ?? '') !== '')
+                const isOpen = expanded[repoKey('open', repo)] ?? false
+
+                return (
+                  <Box key={`repo-block-${repo}`} flexDirection="column" paddingLeft={2}>
+                    <Box flexDirection="row">
+                      <Button
+                        key={`repo-${repo}`}
+                        label={`${isOpen ? '▾' : '▸'} ${truncate(repo, width - 30)} (${rows.length})`}
+                        plain
+                        onPress={() => void toggleRepo($, repoKey('open', repo))}
+                      />
+                      {isOpen && isStacked && <Text dimColor> · merge top to bottom</Text>}
+                    </Box>
+                    {isOpen && rows.map((pr, index) => prRow(pr, repo, index, isStacked))}
+                  </Box>
+                )
+              })}
+          </Box>
+        )}
         {approved.length > 0 && (
           <Box flexDirection="column" marginTop={1}>
             <Box flexDirection="row">
+              <Text color="green">● </Text>
               <Button
                 key="approved"
                 label={`${isApprovedOpen ? '▾' : '▸'} Approved, waiting for the merge (${approved.length})`}
@@ -684,12 +730,15 @@ export const register: Register = on => {
         )}
         {recentCount > 0 && (
           <Box flexDirection="column" marginTop={1}>
-            <Button
-              key="recent"
-              label={`${isRecentShown ? '▾' : '▸'} Recently merged or closed (${recentCount})`}
-              plain
-              onPress={() => void update($, isRecentOpen, isShown => !isShown)}
-            />
+            <Box flexDirection="row">
+              <Text color="gray">● </Text>
+              <Button
+                key="recent"
+                label={`${isRecentShown ? '▾' : '▸'} Recently merged or closed (${recentCount})`}
+                plain
+                onPress={() => void update($, isRecentOpen, isShown => !isShown)}
+              />
+            </Box>
             {isRecentShown &&
               recent.map(([repo, rows]) => {
                 const isOpen = expanded[repoKey('recent', repo)] ?? false

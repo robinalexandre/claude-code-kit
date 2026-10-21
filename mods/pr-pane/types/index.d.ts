@@ -58,6 +58,8 @@ declare module 'claude-code' {
       busy: string
       isRecentOpen: boolean
       openRepos: Record<string, boolean>
+      /** PR URLs whose details are unfolded. */
+      openPrs: Record<string, boolean>
     }
   }
 }

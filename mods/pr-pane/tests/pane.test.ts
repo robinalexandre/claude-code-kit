@@ -78,13 +78,18 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(await pane.find({ key: 'repo-shop' })).toBeUndefined()
     expect(await pane.find({ key: 'approved', text: '▸ Approved, waiting for the merge (1)' })).toBeDefined()
     expect(await pane.find({ text: /1 ready to merge/ })).toBeDefined()
-    expect(await pane.find({ text: /waits for the merge/ })).toBeUndefined()
+    expect(await pane.find({ key: 'pr-toggle-shop-1' })).toBeUndefined()
 
     await pane.press({ key: 'approved' })
 
-    expect(await pane.find({ text: /waits for the merge/ })).toBeDefined()
-    expect(await pane.find({ text: /Ada Lovelace voted approved/ })).toBeDefined()
+    // One line per PR: the merge button is on it, the changes fold under it.
+    expect(await pane.find({ key: 'pr-toggle-shop-1', text: '▸' })).toBeDefined()
     expect(await pane.find({ key: 'merge-shop-1', text: 'merge' })).toBeDefined()
+    expect(await pane.find({ text: /Ada Lovelace voted approved/ })).toBeUndefined()
+
+    await pane.press({ key: 'pr-toggle-shop-1' })
+
+    expect(await pane.find({ text: /Ada Lovelace voted approved/ })).toBeDefined()
 
     await pane.press({ key: 'open-shop-2' })
 
@@ -131,16 +136,26 @@ test('PRs are grouped per repo in merge order and CI checks show while they run,
   await $.command.run(RUN)
   const pane = await mountPane($, 'terminal')
 
+  // The conflicted PR is listed first, under the red title; the others wait in a closed section.
+  expect(await pane.find({ text: 'Needs your attention (1)' })).toBeDefined()
+  expect(await pane.find({ key: 'waiting', text: '▸ Waiting for others (2)' })).toBeDefined()
+  expect(await pane.find({ key: 'repo-api' })).toBeUndefined()
+  expect(await pane.find({ key: 'repo-web' })).toBeUndefined()
+
+  await pane.press({ key: 'waiting' })
+
   expect(await pane.find({ key: 'repo-api', text: '▸ api (2)' })).toBeDefined()
   expect(await pane.find({ text: ' · merge top to bottom' })).toBeUndefined()
-  // The conflicted PR is listed first, under the red title, not under its repo.
-  expect(await pane.find({ text: 'Needs your attention (1)' })).toBeDefined()
-  expect(await pane.find({ key: 'repo-web' })).toBeUndefined()
 
   await pane.press({ key: 'repo-api' })
 
   expect(await pane.find({ text: ' · merge top to bottom' })).toBeDefined()
   expect(await pane.find({ text: '#10 to merge first' })).toBeDefined()
+  // A PR's details fold under its line.
+  expect(await pane.find({ key: 'ci-web-3' })).toBeUndefined()
+
+  await pane.press({ key: 'pr-toggle-web-3' })
+
   expect(await pane.find({ key: 'ci-web-3', text: '▾ CI 1/2 running' })).toBeDefined()
   expect(await pane.find({ text: ' · optional' })).toBeDefined()
   expect(await pane.find({ text: /⚠ merge conflicts with main/ })).toBeDefined()
@@ -180,6 +195,7 @@ test('a merge conflict marks the band and the pane asks Claude to rebase and fix
 
   expect(await band.find({ key: 'prs', text: 'PRs 1 !' })).toBeDefined()
 
+  await pane.press({ key: 'pr-toggle-shop-9' })
   await pane.press({ key: 'fix-shop-9' })
 
   expect(submitted).toHaveLength(1)
@@ -245,6 +261,7 @@ test('a failed check shows its errors, reruns only on a second press, and merged
   const repos = (await pane.findAll({ type: 'Button' })).map(element => element.key ?? '')
   expect(repos.indexOf('recent-repo-shop')).toBeLessThan(repos.indexOf('recent-repo-api'))
 
+  await pane.press({ key: 'pr-toggle-shop-7' })
   await pane.press({ key: 'details-shop-7-build' })
 
   expect(await pane.find({ text: 'Run tests: failed' })).toBeDefined()
@@ -312,7 +329,7 @@ test('a PR waiting for my review is listed first: approve on a second press, or 
   expect(await pane.find({ text: /api · by grace · 3\/1/ })).toBeDefined()
   const buttons = (await pane.findAll({ type: 'Button' })).map(element => element.key ?? '')
   expect(buttons.indexOf('review-approve-api-873')).toBeGreaterThan(-1)
-  expect(buttons.indexOf('review-approve-api-873')).toBeLessThan(buttons.indexOf('repo-shop'))
+  expect(buttons.indexOf('review-approve-api-873')).toBeLessThan(buttons.indexOf('waiting'))
 
   await pane.press({ key: 'review-claude-api-873' })
 
@@ -370,13 +387,14 @@ test('a PR the user approved stays listed apart, closed, and merges on a second 
 
   expect(await pane.find({ key: 'approved', text: '▸ Approved, waiting for the merge (1)' })).toBeDefined()
   expect(await pane.find({ text: /Grace approved/ })).toBeUndefined()
-  expect(await pane.find({ key: 'repo-shop', text: '▸ shop (1)' })).toBeDefined()
+  expect(await pane.find({ key: 'waiting', text: '▸ Waiting for others (1)' })).toBeDefined()
   expect(await pane.find({ key: 'repo-api' })).toBeUndefined()
   // Our PRs first, the approved block after them, before the recent list.
   const buttons = (await pane.findAll({ type: 'Button' })).map(element => element.key ?? '')
-  expect(buttons.indexOf('repo-shop')).toBeLessThan(buttons.indexOf('approved'))
+  expect(buttons.indexOf('waiting')).toBeLessThan(buttons.indexOf('approved'))
 
   await pane.press({ key: 'approved' })
+  await pane.press({ key: 'pr-toggle-api-884' })
 
   expect(await pane.find({ text: /Grace approved/ })).toBeDefined()
 
