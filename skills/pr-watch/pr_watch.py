@@ -55,6 +55,7 @@ KEEP_DAYS = float(os.environ.get("PR_WATCH_KEEP_DAYS", "7"))
 ADO_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"
 FINAL = {"merged", "completed", "abandoned", "closed"}
 EXCERPT = 400
+DESCRIPTION = 1500
 
 ADO_URL = re.compile(
     r"https://(?:dev\.azure\.com/(?P<org>[^/]+)|(?P<org2>[^./]+)\.visualstudio\.com)"
@@ -175,6 +176,7 @@ class AzureDevOps:
                 }
         return {
             "title": pr["title"],
+            "description": (pr.get("description") or "")[:DESCRIPTION],
             "status": pr["status"],
             "target": pr.get("targetRefName", "").removeprefix("refs/heads/"),
             "source": pr.get("sourceRefName", "").removeprefix("refs/heads/"),
@@ -372,7 +374,8 @@ class GitHub:
         votes = {r["user"]["login"]: r["state"].lower().replace("_", " ") for r in reviews  # type: ignore[union-attr]
                  if r["state"] in {"APPROVED", "CHANGES_REQUESTED"}}
         status = "merged" if pr.get("merged_at") else pr["state"]
-        return {"title": pr["title"], "status": status, "target": pr["base"]["ref"], "source": pr["head"]["ref"],
+        return {"title": pr["title"], "description": (pr.get("body") or "")[:DESCRIPTION], "status": status,
+                "target": pr["base"]["ref"], "source": pr["head"]["ref"],
                 "conflicts": pr.get("mergeable_state") == "dirty", "votes": votes, "comments": comments,
                 "checks": self.checks(pr["head"]["sha"])}
 
@@ -736,6 +739,7 @@ def status(live: bool) -> None:
             "repo": match["repo"] if match else "",
             "number": match["id"] if match else "",
             "title": seen["title"],
+            "description": seen.get("description", ""),
             "status": seen["status"],
             "target": seen.get("target", ""),
             "source": seen.get("source", ""),

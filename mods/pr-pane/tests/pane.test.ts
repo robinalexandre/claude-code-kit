@@ -210,6 +210,7 @@ const FAILING = {
     row('7', {
       ci: 'CI failed',
       waiting: 'a CI fix',
+      description: 'Fixes the nightly build.\n\n\nSee the ticket for the trace.',
       checks: [{ name: 'build', state: 'failed', required: true, link: 'https://ci.example/7' }],
     }),
   ],
@@ -261,7 +262,16 @@ test('a failed check shows its errors, reruns only on a second press, and merged
   const repos = (await pane.findAll({ type: 'Button' })).map(element => element.key ?? '')
   expect(repos.indexOf('recent-repo-shop')).toBeLessThan(repos.indexOf('recent-repo-api'))
 
+  expect(await pane.find({ text: 'Fixes the nightly build.' })).toBeUndefined()
+
   await pane.press({ key: 'pr-toggle-shop-7' })
+
+  // The description sits under the CI block, blank lines dropped.
+  expect(await pane.find({ text: 'Fixes the nightly build.' })).toBeDefined()
+  const texts = (await pane.findAll({ type: 'Text' })).map(element => element.text ?? '')
+  expect(texts.indexOf('Fixes the nightly build.')).toBeGreaterThan(texts.findIndex(text => text.includes('CI 0/1')))
+  expect(texts[texts.indexOf('Fixes the nightly build.') + 1]).toBe('See the ticket for the trace.')
+
   await pane.press({ key: 'details-shop-7-build' })
 
   expect(await pane.find({ text: 'Run tests: failed' })).toBeDefined()

@@ -5,6 +5,8 @@ export type PrRow = {
   repo: string
   number: string
   title: string
+  /** The PR's body, cut by pr-watch; absent from snapshots taken before it was recorded. */
+  description?: string
   status: string
   target: string
   source?: string

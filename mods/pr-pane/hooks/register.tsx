@@ -59,6 +59,19 @@ const endedText = (ended: string, nowMs: number) => {
 const truncate = (text: string, width: number) =>
   text.length > width ? `${text.slice(0, Math.max(0, width - 1))}…` : text
 
+const DESCRIPTION_LINES = 8
+
+// The PR's body as a few plain lines: blank lines out, each cut to the pane's width.
+const descriptionLines = (text: string, width: number) => {
+  const lines = text
+    .split(/\r?\n/)
+    .map(line => line.replace(/[\x00-\x1f\x7f]/g, ' ').trim())
+    .filter(line => line !== '')
+    .map(line => truncate(line, width))
+
+  return lines.length > DESCRIPTION_LINES ? [...lines.slice(0, DESCRIPTION_LINES), '…'] : lines
+}
+
 const clockTime = (milliseconds: number) => {
   const date = new Date(milliseconds)
 
@@ -597,6 +610,13 @@ export const register: Register = on => {
             </Box>
           )
         })()}
+        {(pr.description ?? '').trim() !== '' && (
+          <Box flexDirection="column" marginTop={1}>
+            {descriptionLines(pr.description ?? '', inner - 2).map(line => (
+              <Text dimColor>{line}</Text>
+            ))}
+          </Box>
+        )}
         {pr.changes.map(change => (
           <Text color="cyan">{truncate(`• ${change}`, inner)}</Text>
         ))}
