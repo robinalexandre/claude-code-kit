@@ -45,7 +45,52 @@ printf '![shot](URL:01-shot.png)' > "$T/placeholder.md"
 out=$(DRY_RUN=1 ADO_ORG_URL=https://dev.azure.com/org ADO_PROJECT=proj ADO_REPO=repo bash "$SK/attach.sh" ado-comment 7 "$T/placeholder.md" "$T/01-shot.png" 2>&1)
 check "ado comment uploads its files first" "printf '%s' \"\$out\" | grep -q 'attachments/01-shot.png' && printf '%s' \"\$out\" | grep -q 'threads'"
 check "ado comment refuses a file without placeholder" "! DRY_RUN=1 ADO_ORG_URL=https://dev.azure.com/org ADO_PROJECT=proj ADO_REPO=repo bash '$SK/attach.sh' ado-comment 7 '$T/comment.md' '$T/01-shot.png' 2> /dev/null"
+git init -q "$T/repo"
+ado_from_remote() {
+  git -C "$T/repo" remote remove origin 2> /dev/null
+  git -C "$T/repo" remote add origin "$1"
+  (cd "$T/repo" && DRY_RUN=1 bash "$SK/attach.sh" ado 7 "$T/01-shot.png" 2>&1)
+}
+check "ado target from an https remote" "ado_from_remote https://org@dev.azure.com/org/proj/_git/repo | grep -q 'POST https://dev.azure.com/org/proj/_apis/git/repositories/repo/'"
+check "ado target from a visualstudio.com remote" "ado_from_remote https://org.visualstudio.com/DefaultCollection/proj/_git/repo | grep -q 'POST https://org.visualstudio.com/proj/_apis/git/repositories/repo/'"
+check "ado target from an ssh remote" "ado_from_remote git@ssh.dev.azure.com:v3/org/proj/repo | grep -q 'POST https://dev.azure.com/org/proj/_apis/git/repositories/repo/'"
+check "ado target refuses a look-alike host" "! ado_from_remote https://evil.example/x.visualstudio.com/proj/_git/repo | grep -q 'POST'"
+check "ado target refuses a look-alike ssh host" "! ado_from_remote git@evil.example:ssh.dev.azure.com:v3/org/proj/repo | grep -q 'POST'"
 check "unsafe file names refused" "! JIRA_BASE_URL=https://jira.example.com JIRA_PAT=x bash '$SK/attach.sh' jira ABC-1 '$T/bad name.png' 2> /dev/null"
+
+printf 'x' > "$T/report.md"
+ado_upload() { DRY_RUN=1 ADO_ORG_URL=https://dev.azure.com/org ADO_PROJECT=proj ADO_REPO=repo bash "$SK/attach.sh" ado 7 "$@" 2>&1; }
+check "ado refuses an extension Azure DevOps rejects, before uploading anything" "! ado_upload '$T/01-shot.png' '$T/report.md' | grep -q 'POST'"
+check "ado accepts an upper-case allowed extension" "printf 'x' > '$T/02-SHOT.PNG' && ado_upload '$T/02-SHOT.PNG' | grep -q 'attachments/02-SHOT.PNG'"
+
+# A stand-in for curl: the PR already holds 01-shot.png, any other upload gets a new link.
+cat > "$T/fake-curl" << 'EOF'
+#!/bin/bash
+cat > /dev/null
+out="" method=GET url=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out=$2; shift ;;
+    -X) method=$2; shift ;;
+    -H | -w | -K | --data-binary | -F) shift ;;
+    -*) ;;
+    *) url=$1 ;;
+  esac
+  shift
+done
+echo "$method $url" >> "${FAKE_CURL_LOG:?}"
+case "$method $url" in
+  "GET "*/attachments\?*) echo '{"count":1,"value":[{"displayName":"01-shot.png","url":"https://ado.example/old/01-shot.png"}]}' > "$out" ;;
+  "POST "*/attachments/*) name=${url##*/attachments/}; echo "{\"url\":\"https://ado.example/new/${name%%\?*}\"}" > "$out" ;;
+  *) echo '{}' > "$out" ;;
+esac
+printf 200
+EOF
+printf 'x' > "$T/03-new.png"
+out=$(FAKE_CURL_LOG="$T/curl.log" CURL="$T/fake-curl" AZURE_DEVOPS_PAT=x ADO_ORG_URL=https://dev.azure.com/org ADO_PROJECT=proj ADO_REPO=repo \
+  bash "$SK/attach.sh" ado 7 "$T/01-shot.png" "$T/03-new.png" 2>&1)
+check "ado reuses an attachment already on the PR" "printf '%s' \"\$out\" | grep -q 'https://ado.example/old/01-shot.png' && ! grep -q 'POST .*attachments/01-shot.png' '$T/curl.log'"
+check "ado uploads the files not yet on the PR" "printf '%s' \"\$out\" | grep -q 'https://ado.example/new/03-new.png'"
 
 check "capture needs a target" "! bash '$SK/capture.sh' shot '$T/x.png' 2> /dev/null"
 

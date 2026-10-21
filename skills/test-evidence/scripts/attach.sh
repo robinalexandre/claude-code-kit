@@ -2,7 +2,8 @@
 # Uploads test evidence to a Jira issue or an Azure DevOps pull request.
 #   attach.sh jira <ISSUE-KEY> <file>...         attaches the files to the issue
 #   attach.sh jira-comment <ISSUE-KEY> <text>    posts a comment (Jira wiki markup: !01-login.png|thumbnail!)
-#   attach.sh ado <PR-ID> <file>...              uploads the files to the PR, prints "<file><TAB><url>"
+#   attach.sh ado <PR-ID> <file>...              uploads the files to the PR, prints "<file><TAB><url>"; a file already
+#                                                attached under the same name is reused (rename a file you changed)
 #   attach.sh ado-comment <PR-ID> <markdown> [file...]
 #                                                posts a comment thread on the PR, already resolved so it never blocks
 #                                                the merge; the files are uploaded first and each URL:<file name> in the
@@ -14,7 +15,10 @@
 # Azure DevOps: run it inside the repo (org, project and repo come from the origin remote) or set
 #        ADO_ORG_URL (https://dev.azure.com/<org>), ADO_PROJECT, ADO_REPO.
 #        Auth: AZURE_DEVOPS_PAT, else a token from `az login`.
+#        Azure DevOps only takes these extensions: png gif jpg jpeg docx pptx xlsx txt pdf zip gz lyr mov mp4 csv.
 set -eu -o pipefail
+
+ADO_EXTENSIONS="png gif jpg jpeg docx pptx xlsx txt pdf zip gz lyr mov mp4 csv"
 
 die() {
   echo "$*" >&2
@@ -94,28 +98,21 @@ ado_target() {
   local remote
   if [ -z "${ADO_ORG_URL:-}" ] || [ -z "${ADO_PROJECT:-}" ] || [ -z "${ADO_REPO:-}" ]; then
     remote=$(git remote get-url origin 2> /dev/null) || die "Not in a git repo: set ADO_ORG_URL, ADO_PROJECT and ADO_REPO."
-    remote=$(printf '%s' "$remote" | sed -E 's#^https://[^@/]*@#https://#')
-    case "$remote" in
-      https://dev.azure.com/*/_git/*)
-        remote=${remote#https://dev.azure.com/}
-        ADO_ORG_URL=${ADO_ORG_URL:-https://dev.azure.com/${remote%%/*}}
-        remote=${remote#*/}
-        ;;
-      https://*.visualstudio.com/*/_git/*)
-        remote=${remote#https://}
-        ADO_ORG_URL=${ADO_ORG_URL:-https://${remote%%/*}}
-        remote=${remote#*/}
-        ;;
-      *ssh.dev.azure.com:v3/*)
-        remote=${remote#*:v3/}
-        ADO_ORG_URL=${ADO_ORG_URL:-https://dev.azure.com/${remote%%/*}}
-        remote=${remote#*/}
-        remote="${remote%%/*}/_git/${remote#*/}"
-        ;;
-      *) die "origin is not an Azure DevOps remote: set ADO_ORG_URL, ADO_PROJECT and ADO_REPO." ;;
-    esac
-    ADO_PROJECT=${ADO_PROJECT:-${remote%%/_git/*}}
-    ADO_REPO=${ADO_REPO:-${remote##*/_git/}}
+    # The token goes to the host built here, so the remote must match exactly: a loose
+    # pattern would let https://evil.example/x.visualstudio.com/... receive it.
+    local name='[A-Za-z0-9._~%-]+' org project repo
+    if [[ $remote =~ ^https://([^@/]+@)?dev\.azure\.com/($name)/($name)/_git/($name)/?$ ]]; then
+      org="https://dev.azure.com/${BASH_REMATCH[2]}" project=${BASH_REMATCH[3]} repo=${BASH_REMATCH[4]}
+    elif [[ $remote =~ ^https://([^@/]+@)?([A-Za-z0-9-]+)\.visualstudio\.com/(DefaultCollection/)?($name)/_git/($name)/?$ ]]; then
+      org="https://${BASH_REMATCH[2]}.visualstudio.com" project=${BASH_REMATCH[4]} repo=${BASH_REMATCH[5]}
+    elif [[ $remote =~ ^(ssh://)?[A-Za-z0-9._-]+@ssh\.dev\.azure\.com(:|/)v3/($name)/($name)/($name)/?$ ]]; then
+      org="https://dev.azure.com/${BASH_REMATCH[3]}" project=${BASH_REMATCH[4]} repo=${BASH_REMATCH[5]}
+    else
+      die "origin is not an Azure DevOps remote: set ADO_ORG_URL, ADO_PROJECT and ADO_REPO."
+    fi
+    ADO_ORG_URL=${ADO_ORG_URL:-$org}
+    ADO_PROJECT=${ADO_PROJECT:-$project}
+    ADO_REPO=${ADO_REPO:-$repo}
   fi
   ADO_API="${ADO_ORG_URL%/}/$ADO_PROJECT/_apis/git/repositories/${ADO_REPO%.git}"
 }
@@ -134,17 +131,39 @@ ado_auth() {
   fi
 }
 
+# Checked before any upload, so a refused file never leaves the PR with half of the files attached.
+check_ado_type() {
+  local ext
+  ext=$(printf '%s' "${1##*.}" | tr '[:upper:]' '[:lower:]')
+  case " $ADO_EXTENSIONS " in
+    *" $ext "*) ;;
+    *) die "Azure DevOps refuses ${1##*/}: allowed extensions are $ADO_EXTENSIONS (attach a markdown or log file as .txt)." ;;
+  esac
+}
+
 ado() {
-  local pr=$1 auth f url
+  local pr=$1 auth f name url existing
   shift
   [ $# -gt 0 ] || die "No files given."
-  for f in "$@"; do check_name "$f"; done
+  for f in "$@"; do
+    check_name "$f"
+    check_ado_type "$f"
+  done
   ado_target
   auth=$(ado_auth)
+  # Azure DevOps keeps one attachment per name and refuses a second upload of it.
+  existing=$(request "$auth" GET "$ADO_API/pullRequests/$pr/attachments?api-version=7.1-preview.1" |
+    jq -r '.value[]? | [.displayName, .url] | @tsv' | tr -d '\r')
   for f in "$@"; do
-    url=$(request "$auth" POST "$ADO_API/pullRequests/$pr/attachments/${f##*/}?api-version=7.1-preview.1" \
-      -H "Content-Type: application/octet-stream" --data-binary "@$(native "$f")" | jq -r '.url // empty' | tr -d '\r')
-    printf '%s\t%s\n' "${f##*/}" "${url:-<dry run>}"
+    name=${f##*/}
+    url=$(printf '%s\n' "$existing" | awk -F '\t' -v name="$name" '$1 == name { print $2; exit }')
+    if [ -n "$url" ]; then
+      echo "$name is already attached to PR $pr: reusing it (rename the file to attach a new version)." >&2
+    else
+      url=$(request "$auth" POST "$ADO_API/pullRequests/$pr/attachments/$name?api-version=7.1-preview.1" \
+        -H "Content-Type: application/octet-stream" --data-binary "@$(native "$f")" | jq -r '.url // empty' | tr -d '\r')
+    fi
+    printf '%s\t%s\n' "$name" "${url:-<dry run>}"
   done
 }
 

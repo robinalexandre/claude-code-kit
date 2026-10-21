@@ -93,6 +93,8 @@ bash $SK/attach.sh ado-comment <PR-ID> <dir>/comment.md <dir>/02-flow.gif <dir>/
 
 In `comment.md`, embed images and GIFs with `![login](URL:02-flow.gif)` and link videos with `[video](URL:02-flow.mp4)`: the script uploads each file passed after the markdown, replaces its `URL:<file name>` with the real link and refuses to post while a placeholder is left. `attach.sh ado <PR-ID> <file>...` uploads without commenting and prints the links. The thread is created resolved, so it never blocks a merge policy on open comments. Don't rewrite the PR description unless the user asks.
 
+Azure DevOps only takes png, gif, jpg, jpeg, docx, pptx, xlsx, txt, pdf, zip, gz, mov, mp4 and csv attachments: attach a markdown report or a log as `.txt` (the script refuses other extensions before uploading anything). It keeps one attachment per file name on a PR and refuses a second upload of it, so the script reuses a file already attached under that name: give a changed file a new name (`09-network-v2.txt`) to attach the new version.
+
 **GitHub PR**: there is no API to upload images to a comment. Give the user the folder and the comment text to paste, and let them drag the files in.
 
 Prefix any command with `DRY_RUN=1` to see the requests without sending them. A 404 on Azure DevOps usually means the PR belongs to another repo: run from that repo. If an upload fails (401, 403, 413 too large, 429 rate limited), report the HTTP code and message as they are and don't retry in a loop.
