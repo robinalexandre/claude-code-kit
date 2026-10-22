@@ -7,7 +7,9 @@ const RUN = (args: string) => ({
   presentation: { isFullscreen: false, columns: 120 },
 })
 
-const LEVELS_FILE = '/home/someone/.claude/learn-levels.json'
+// Windows hands the path on in its own spelling: the file is known by its place under the home folder.
+const fileKey = (path: string) => path.replace(/\\/g, '/').replace(/^.*\/\.claude\//, '~/.claude/')
+const LEVELS_FILE = '~/.claude/learn-levels.json'
 
 test('/learn sets the level for the session, writes it for the status line, and keeps a default for new sessions', async ($, on) => {
   const store = new Map<string, unknown>()
@@ -21,12 +23,12 @@ test('/learn sets the level for the session, writes it for the status line, and 
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
   on('session.id', () => ({ value: 'this-session' }))
   on('fs.read', ($, e) => {
-    const text = files.get(e.path)
+    const text = files.get(fileKey(e.path))
 
     return text === undefined ? { deny: 'missing' } : { value: text }
   })
   on('fs.write', ($, e) => {
-    files.set(e.path, e.text)
+    files.set(fileKey(e.path), e.text)
 
     return { value: undefined }
   })
