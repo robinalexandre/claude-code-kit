@@ -35,7 +35,7 @@ To try it first without touching your own setup, `tests/install-sandbox.sh` runs
 /plugin install learn@claude-code-kit
 ```
 
-The sync engine installs differently: see [sync/README.md](sync/README.md).
+The sync engine is a part too (`./install.sh sync`), added on its own when you pick handoff, daily-sync or reminders: the installer asks for the clone URL of an empty private git repo of your own (any host), clones it to `~/.claude-sync` and sets it up; on your next computer, give the same URL. By hand: [sync/README.md](sync/README.md).
 
 ## What's inside
 
@@ -84,7 +84,7 @@ Mods change Claude Code's own interface. The installer loads them through `CLAUD
 
 ### Sync engine
 
-[sync/](sync/README.md): keeps `CLAUDE.md`, skills, mods, hooks, settings, MCP servers (without their secrets), memory and the untracked agent files of your repos the same on every computer, through a private GitHub repo. Secrets are replaced by `__SECRET__` before anything leaves the computer.
+[sync/](sync/README.md): keeps `CLAUDE.md`, skills, mods, hooks, settings, MCP servers (without their secrets), memory and the untracked agent files of your repos the same on every computer, through a private git repo of your own (any host). Secrets are replaced by `__SECRET__` before anything leaves the computer.
 
 ## Projects
 

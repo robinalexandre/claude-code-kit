@@ -196,6 +196,16 @@
       "who": "Anyone who wants to learn from the work; pair it with statusline and recent-prompts."
     },
     {
+      "name": "sync",
+      "kind": "sync",
+      "group": "computers",
+      "tools": ["git"],
+      "what": "The sync engine: keeps your CLAUDE.md, skills, mods, hooks, settings, MCP servers (secrets left out) and memory the same on all your computers, through a private git repo of your own.",
+      "why": "Set Claude up once, and every computer works the same way, with the same memory.",
+      "when": "In the background at each session start, after each reply and at session end.",
+      "who": "People who use Claude Code on two computers or more; handoff, daily-sync and reminders need it."
+    },
+    {
       "name": "handoff",
       "kind": "skill",
       "group": "computers",

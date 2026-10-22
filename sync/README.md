@@ -1,6 +1,6 @@
 # Claude Code config sync
 
-Keeps your global Claude Code config the same on every computer through a private GitHub repo, and carries handoff notes between them. macOS, Linux and Windows (Git Bash).
+Keeps your global Claude Code config the same on every computer through a private git repo of your own (GitHub, GitLab, Azure DevOps, any host), and carries handoff notes between them. macOS, Linux and Windows (Git Bash).
 
 ## What syncs
 
@@ -44,9 +44,11 @@ Safety checks: secrets are replaced by `__SECRET__` in every synced file and eac
 
 ## Install
 
+The kit's installer does all of this: `./install.sh sync` (or pick handoff, daily-sync or reminders) asks for the repo's clone URL, clones it, copies the engine in on the first computer and runs its install. The steps below do the same by hand.
+
 Needs Git, jq and Claude Code.
 
-1. Create an empty **private** repo on GitHub, for example `claude-config`.
+1. Create an empty **private** repo on any git host (GitHub, GitLab, Azure DevOps...), for example `claude-config`. The examples below use GitHub's URL; use your host's.
 2. On your first computer, clone it to `~/.claude-sync`, copy this folder into it and run the install:
 
    ```sh
@@ -76,7 +78,7 @@ Needs Git, jq and Claude Code.
 
 Then open a new Claude Code session.
 
-On a work computer, sign in to GitHub with a [fine-grained token](https://github.com/settings/personal-access-tokens/new) limited to this repo (Contents: read and write) rather than your whole account.
+On a work computer with a GitHub repo, sign in with a [fine-grained token](https://github.com/settings/personal-access-tokens/new) limited to this repo (Contents: read and write) rather than your whole account.
 
 ## Per-computer settings
 

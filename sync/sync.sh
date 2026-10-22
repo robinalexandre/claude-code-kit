@@ -266,8 +266,11 @@ mirror() {
     fail "refusing to delete $count files in $dst at once; run: bash ~/.claude-sync/sync.sh now"
     return 1
   fi
-  # The few files that may hold a secret, found with one search.
-  if [ "$mode" = capture ]; then
+  # The few files that may hold a secret, found with one search. Nothing to search when SRC has
+  # none of the files, which may not even exist yet (a second computer's first memory).
+  if [ -z "$want" ]; then
+    special=""
+  elif [ "$mode" = capture ]; then
     special=$(cd "$src" && printf '%s\n' "$want" | grep . | tr '\n' '\0' | LC_ALL=C xargs -0 grep -laiE -e "$BROAD_RE" -- 2> /dev/null)
   else
     special=$(cd "$src" && printf '%s\n' "$want" | grep . | tr '\n' '\0' | xargs -0 grep -l __SECRET__ -- 2> /dev/null)
@@ -953,7 +956,7 @@ git_setup() {
 remote_sync() {
   local before
   git remote get-url origin > /dev/null 2>&1 || {
-    fail "this repo has no GitHub remote yet"
+    fail "this repo has no remote yet: git -C ~/.claude-sync remote add origin <your private repo's URL>"
     return 1
   }
   if [ "${1:-}" != force ] && ! ahead && [ -f "$STATE/fetched" ] &&
@@ -961,7 +964,7 @@ remote_sync() {
     return 0
   fi
   timed "$NET_TIMEOUT" git fetch -q origin || {
-    fail "could not reach GitHub"
+    fail "could not reach the sync repo ($(git remote get-url origin | sed -E 's#://[^/@]*@#://#'))"
     return 1
   }
   touch "$STATE/fetched"
@@ -981,10 +984,10 @@ remote_sync() {
   fi
   if ahead; then
     timed "$NET_TIMEOUT" git push -q origin HEAD:main || {
-      fail "could not push to GitHub"
+      fail "could not push to the sync repo"
       return 1
     }
-    say "pushed to GitHub"
+    say "pushed to the sync repo"
   fi
   rm -f "$STATE/error"
 }

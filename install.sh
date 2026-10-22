@@ -37,6 +37,7 @@ source_of() {
     mod) echo "mods/$1" ;;
     rules) echo "rules/$1.md" ;;
     statusline) echo statusline-command.sh ;;
+    sync) echo sync ;;
     hook) if [ "$1" = wave-check-hook ]; then echo hooks/wave-check.sh; else echo "hooks/$1.sh"; fi ;;
   esac
 }
@@ -245,11 +246,14 @@ picked=$(grep . <<< "$picked" || true)
   exit 0
 }
 
-# What a picked part needs is picked too, until nothing changes.
+# What a picked part needs is picked too, until nothing changes. A part that keeps its data in the
+# sync repo needs the sync engine.
 while :; do
   added=""
   for p in $picked; do
-    for n in $(field "$p" 6 | tr ',' ' '); do
+    needs=$(field "$p" 6 | tr ',' ' ')
+    if [ "$(field "$p" 8)" = true ] && [ -n "$(field sync 1)" ]; then needs="$needs sync"; fi
+    for n in $needs; do
       grep -qx "$n" <<< "$picked" || { picked="$picked"$'\n'"$n"; added="$added $n"; echo "Adding $n: $p needs it."; }
     done
   done
@@ -275,13 +279,52 @@ put() {
   cp -R "$KIT/$1" "$dest"
 }
 
+# The sync engine lives in a private git repo of the user's own, cloned to ~/.claude-sync: the first
+# computer copies the engine into it, the next ones find it there. Its own install.sh does the rest.
+set_up_sync() {
+  local dir="$HOME/.claude-sync" url machine dev
+  printf '\n== Setting up sync\n'
+  if [ -d "$dir/.git" ]; then
+    echo "The sync engine is already set up in ~/.claude-sync."
+    return 0
+  fi
+  if [ -e "$dir" ]; then
+    echo "~/.claude-sync exists but is not a git repo: move it away, then run ./install.sh sync again."
+    return 0
+  fi
+  kit_has git || return 0
+  echo "It needs an empty private git repo of your own (GitHub, GitLab, Azure DevOps, any host). It will hold"
+  echo "your CLAUDE.md, memory, skills and settings, MCP secrets replaced by __SECRET__. On your next computer,"
+  echo "give the same repo: what the first one saved is installed there."
+  url=$(reply sync.url "Its clone URL (empty to set it up later)?")
+  if [ -z "$url" ]; then
+    echo "Skipped. Later: ./install.sh sync, or by hand as in $KIT/sync/README.md."
+    return 0
+  fi
+  if ! git clone -q "$url" "$dir"; then
+    rm -rf "$dir"
+    echo "Couldn't clone $url: check the URL and that you can read it, then run ./install.sh sync again."
+    return 0
+  fi
+  [ -f "$dir/sync.sh" ] || cp -R "$KIT/sync/." "$dir/"
+  case "$os" in windows) machine=windows ;; darwin) machine=mac ;; *) machine=linux ;; esac
+  machine=$(reply sync.machine "A name for this computer in the sync (e.g. work-pc, home-mac)?" "$machine")
+  dev=$(reply sync.dev "Folder that holds your git repos?" "${CLAUDE_DEV_ROOT:-~/dev}")
+  bash "$dir/install.sh" "$machine" "$dev" || echo "Setting up sync stopped; run it again with: bash ~/.claude-sync/install.sh"
+}
+
 fragments=()
 mods=()
 marker_wanted=""
 zsh_resume=""
+sync_wanted=""
 echo
 for p in $picked; do
   case "$(field "$p" 2)" in
+    sync)
+      sync_wanted=1
+      continue
+      ;;
     skill)
       put "skills/$p" "skills/$p"
       if [ -f "$KIT/settings/$p.json" ]; then fragments+=("$KIT/settings/$p.json"); fi
@@ -361,6 +404,9 @@ if [ -n "$zsh_resume" ] && ! grep -qs claude-resume-here.zsh "$HOME/.zshrc"; the
   fi
 fi
 
+# Before the parts' own setups: some keep their data in the sync repo once it is there.
+if [ -n "$sync_wanted" ]; then set_up_sync; fi
+
 # Each part's own questions, once its files and settings are in place. Run one again any time:
 # bash ~/.claude/<its setup>.
 for p in $picked; do
@@ -369,12 +415,6 @@ for p in $picked; do
   printf '\n== Setting up %s\n' "$p"
   bash "$CLAUDE/$setup" || echo "Setting up $p stopped; run it again with: bash ~/.claude/$setup"
 done
-
-sync_parts=$(for p in $picked; do [ "$(field "$p" 8)" = true ] && printf ' %s' "$p"; done || true)
-if [ -n "$sync_parts" ] && [ ! -d "$HOME/.claude-sync/.git" ]; then
-  printf '\n%s need the sync engine, not set up on this computer yet: see %s/sync/README.md\n' "${sync_parts# }" "$KIT"
-  echo "(a private GitHub repo of your own cloned to ~/.claude-sync, then its install.sh, or install.ps1 on Windows)."
-fi
 
 echo
 echo "Done. Previous files are in $BACKUP. Start a new Claude Code session to load them."
