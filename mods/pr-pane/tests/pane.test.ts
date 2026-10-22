@@ -41,12 +41,11 @@ const LIVE = {
   errors: [],
 }
 
-// The color the band's PRs button is drawn in; none when it is drawn dim.
-const bandColor = async (band: { find: (query: { key: string }) => Promise<{ children: unknown[] } | undefined> }) => {
-  const button = await band.find({ key: 'prs' })
-  const text = button?.children.find(child => typeof child === 'object') as { props?: { color?: string } } | undefined
+// The color of the dot before the band's PRs button; none when the button is drawn dim.
+const bandColor = async (band: { find: (query: { type: string; text: RegExp }) => Promise<{ props?: { color?: string } } | undefined> }) => {
+  const dot = await band.find({ type: 'Text', text: /^●/ })
 
-  return text?.props?.color
+  return dot?.props?.color
 }
 
 const mountPane = ($: Engine, surface: 'terminal' | 'desktop', bodyColumns = PANE_PROPS.bodyColumns) =>

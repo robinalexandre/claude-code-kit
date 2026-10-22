@@ -717,9 +717,10 @@ export const register: Register = on => {
         <Box flexDirection="column" flexShrink={1}>
           {beneath}
         </Box>
-        <Button key="prs" label={text} dimColor={tone === undefined} onPress={() => void openPane($)}>
-          {tone === undefined ? text : <Text color={tone} bold={tone === 'red'}>{text}</Text>}
-        </Button>
+        <Box flexDirection="row" flexShrink={0}>
+          {tone === undefined ? null : <Text color={tone} bold={tone === 'red'}>● </Text>}
+          <Button key="prs" label={text} dimColor={tone === undefined} onPress={() => void openPane($)} />
+        </Box>
       </Box>
     )
   })
