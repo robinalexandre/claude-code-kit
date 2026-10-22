@@ -1,7 +1,7 @@
 #!/bin/bash
 # Keeps the portable part of ~/.claude in sync with this git repo.
 #   start    SessionStart hook: reports open handoffs and sync errors, then syncs in the background
-#   bg       Stop / SessionEnd hook: syncs in the background
+#   bg       Stop / SessionEnd hook: syncs in the background; on Windows, says when syncs keep failing
 #   now      syncs right away and says what happened
 #   fresh    syncs and waits for it, unless a sync already succeeded today
 #   morning  the scheduled daily run: syncs, then runs each ~/.claude/skills/*/morning.sh
@@ -12,16 +12,48 @@ set -u
 
 SYNC=${SYNC_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}
 STATE="$SYNC/.state"
+# Git Bash on Windows sometimes fails to start a process ("add_item ... failed"), which stops a sync
+# halfway or before it begins. There a failed sync is tried again, a background sync that never
+# finishes is noticed, and the user hears of it in the session only when it keeps failing.
+case "${OSTYPE:-}" in msys* | cygwin*) RETRIES=${SYNC_RETRIES:-2} ;; *) RETRIES=${SYNC_RETRIES:-0} ;; esac
+RETRY_SEC=${SYNC_RETRY_SEC:-5}
+PENDING_MIN=15
 
 spawn() {
   mkdir -p "$STATE"
+  [ "$RETRIES" -eq 0 ] || [ -f "$STATE/pending" ] || : > "$STATE/pending"
   (nohup bash "$SYNC/sync.sh" run "${1:-}" >> "$STATE/log" 2>&1 < /dev/null &)
+}
+
+# tell: prints a Stop hook's systemMessage, once per problem, when the last sync failed every try
+# or no background sync has finished for PENDING_MIN minutes.
+tell() {
+  local key msg
+  [ "$RETRIES" -gt 0 ] || return 0
+  if [ -f "$STATE/error" ]; then
+    key=$(cat "$STATE/error")
+    msg="failed $((RETRIES + 1)) times in a row: $key"
+  elif [ -f "$STATE/pending" ] && [ -n "$(find "$STATE/pending" -mmin +"$PENDING_MIN" 2> /dev/null)" ] &&
+    { [ ! -d "$STATE/lock" ] || [ -n "$(find "$STATE/lock" -maxdepth 0 -mmin +3 2> /dev/null)" ]; }; then
+    key=pending
+    msg="has not finished a background sync for $PENDING_MIN minutes (Git Bash may have failed to start it); it keeps trying, see bash ~/.claude-sync/sync.sh status"
+  else
+    rm -f "$STATE/told"
+    return 0
+  fi
+  [ "$(cat "$STATE/told" 2> /dev/null)" = "$key" ] && return 0
+  printf '%s\n' "$key" > "$STATE/told"
+  msg=$(printf '%s' "⚠️ Claude config sync $msg" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr '\n\t' '  ')
+  printf '{"systemMessage": "%s"}\n' "$msg"
 }
 
 case "${1:-}" in
   bg)
     # Runs after every reply, so it hands off before any setup.
-    [ -t 0 ] || cat > /dev/null
+    input=""
+    [ -t 0 ] || input=$(cat)
+    # Only a Stop hook's message reaches the user; at SessionEnd it would be lost.
+    [[ $input =~ \"hook_event_name\"[[:space:]]*:[[:space:]]*\"Stop\" ]] && tell
     spawn
     exit 0
     ;;
@@ -1013,7 +1045,20 @@ run() {
     say "another sync is running"
     return 0
   }
-  sync_once "${1:-}"
+  sync_retry "${1:-}"
+}
+
+# sync_retry [force]: sync_once, tried RETRIES more times when it fails.
+sync_retry() {
+  local try=0
+  until sync_once "${1:-}"; do
+    [ "$try" -lt "$RETRIES" ] || return 1
+    try=$((try + 1))
+    say "trying the sync again ($try of $RETRIES)"
+    sleep $((try * RETRY_SEC))
+    CHANGED=0 MCP_FAILED="" KEPT=""
+  done
+  rm -f "$STATE/error" "$STATE/pending"
 }
 
 # A full sync that callers can wait for (the reminders skill does, in the
@@ -1022,13 +1067,13 @@ run() {
 fresh() {
   lock "${1:-60}" || return 0
   [ "$(cat "$STATE/fresh-day" 2> /dev/null)" = "$(date +%Y-%m-%d)" ] && return 0
-  sync_once force
+  sync_retry force
 }
 
 morning() {
   local f
   lock 60 || return 0
-  sync_once force
+  sync_retry force
   rm -rf "$STATE/lock"
   {
     for f in "$CLAUDE"/skills/*/morning.sh; do printf '%s\n' "$f"; done
@@ -1092,9 +1137,11 @@ start() {
   done
   if [ -f "$STATE/error" ]; then
     err="last failed: $(cat "$STATE/error")"
+    cp "$STATE/error" "$STATE/told"
   elif [ -f "$STATE/warn" ]; then
     err="warning: $(cat "$STATE/warn")"
   fi
+  rm -f "$STATE/pending"
   spawn force
   [ -n "$notes$err" ] || return 0
   jq -n --arg notes "$notes" --arg err "$err" '
@@ -1112,6 +1159,7 @@ status() {
   echo "to push: $(git rev-list --count origin/main..HEAD 2> /dev/null || echo 'all') commit(s)"
   if [ -f "$STATE/error" ]; then echo "error:   $(cat "$STATE/error")"; else echo "error:   none"; fi
   if [ -f "$STATE/warn" ]; then echo "warning: $(cat "$STATE/warn")"; fi
+  if [ -f "$STATE/pending" ]; then echo "pending: a background sync has not finished since $(ls -l "$STATE/pending" | awk '{print $6, $7, $8}')"; fi
   [ -f "$STATE/log" ] && { echo "--- last log lines"; tail -n 8 "$STATE/log"; }
   return 0
 }

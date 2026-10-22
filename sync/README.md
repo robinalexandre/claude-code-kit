@@ -113,6 +113,10 @@ bash ~/.claude-sync/inventory.sh json    # the same, as JSON
 
 Nothing in it is a secret, but it names your computers and folders: it stays in your private repo.
 
+## When a sync fails
+
+On every computer, the next session starts with the last sync error, if there was one. On Windows, Git Bash sometimes fails to start a process (`fatal error - add_item ... failed`), and that can stop a sync halfway or before it begins. So there a failed sync is tried twice more, 5 then 10 seconds later, and the next sync after every reply is one more try. If every try fails, or no background sync has finished for 15 minutes, you see one message in the session right after Claude's reply. You see it again only if the problem changes. `SYNC_RETRIES=<n>` sets how many times a failed sync is tried again on any system (`0` turns it off).
+
 ## Handoff
 
 Install the `handoff` skill from this kit (`skills/handoff`). At the end of a session: "write a handoff". On the other computer: "pick up the handoff".
