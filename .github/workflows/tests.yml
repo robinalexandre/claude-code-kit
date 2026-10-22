@@ -51,3 +51,22 @@ jobs:
       - name: Mods
         working-directory: mods
         run: for m in */; do claude plugin test "${m%/}" || exit 1; done
+
+  # Every mod also runs on the oldest Claude Code the kit supports: a mod using something newer keeps
+  # a fallback (CONTRIBUTING.md, Rules for mods). Raise this only on purpose.
+  mods-oldest:
+    runs-on: ubuntu-latest
+    env:
+      OLDEST_CLAUDE: 2.1.300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Claude Code ${{ env.OLDEST_CLAUDE }}
+        run: |
+          npm install -g "@anthropic-ai/claude-code@$OLDEST_CLAUDE"
+          claude --version
+      - name: Mods
+        working-directory: mods
+        run: for m in */; do claude plugin test "${m%/}" || exit 1; done

@@ -42,7 +42,8 @@ Follow the layout of the kit it may go to (claude-code-kit shown):
 
 ## 5. Test
 
-- A test script in `tests/` with real cases: the ones that must pass, the ones that must be refused, and an edge case or two (paths with spaces, no git remote, an empty config). Hooks: pipe JSON into the script and check its output. Mods: `claude plugin test <mod>`.
+- A test script in `tests/` with real cases: the ones that must pass, the ones that must be refused, and an edge case or two (paths with spaces, no git remote, an empty config). Hooks: pipe JSON into the script and check its output. Mods: `claude plugin test <mod>`, on the latest Claude Code and on the oldest the kit supports (`OLDEST_CLAUDE` in the kit's tests workflow: `npx -y @anthropic-ai/claude-code@<version> plugin test <mod>`).
+- A mod with a pane follows the kit's Rules for mods (CONTRIBUTING.md): folded by default, always grouped (even a lone group), a click on a folded line's text unfolds it unless that part has its own action, long text wraps instead of being cut, and each row fits on one line. Anything a newer build brings gets a fallback for the older ones.
 - `tests/install-sandbox.sh --auto`: installs everything in a throwaway home folder and checks paths, settings and setups. 0 problems before going further.
 - Use it for real on the user's machine once, and show the result.
 

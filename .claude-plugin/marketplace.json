@@ -473,7 +473,7 @@
     {
       "name": "capability-builder",
       "description": "Turns a request you keep making into a skill, hook or mod, with tests, checked on macOS, Linux and Windows.",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "category": "development",
       "source": ".",
       "strict": false,

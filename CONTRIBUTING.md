@@ -20,4 +20,19 @@ A part earns its place when it answers a request people keep making, works on it
 - **Hooks are fast and fail silent**: they run on every event; a broken hook must never block a session.
 - English everywhere; the language Claude speaks to the user is a setting.
 
+## Rules for mods
+
+Every pane looks and behaves the same way, so what someone learned in one works in the others:
+
+- **Folded by default**: sections, groups and rows start folded, a section's only group or row too; what the user unfolds stays so for the session.
+- **Grouped always**: a section files its rows under group titles (a repo, a folder, an organization, "General"), even when there is a single one.
+- **The whole line folds**: clicking a folded line's text unfolds it, as its ▸ does. A part of the line that already has its own action (a link, a button) keeps it.
+- **Nothing cut that can be read**: a body, a description, a reply or an error message wraps to the pane's width instead of ending in "…". Only one-line summaries (a title, a list of rows to pick from) are cut, and the full text is one unfold away.
+- **Fits on one line**: a row's text leaves room for its arrows, icons and buttons, so the line never wraps.
+
+Each mod also works on older Claude Code builds:
+
+- A mod that uses something a newer build brings (for instance styled Text inside a Button, from 2.1.306) checks the running version, keeps a fallback drawn with what the oldest supported build has, and its tests check whichever the running build draws.
+- CI runs every mod's tests on the latest build and on the oldest supported one (`OLDEST_CLAUDE` in [the tests workflow](.github/workflows/tests.yml)). Raise it only on purpose, when the kit no longer supports the builds below.
+
 CI runs the tests on the three systems for every pull request.
