@@ -31,11 +31,30 @@ const whiteBmp = (width: number, height: number) => {
   return btoa(String.fromCharCode(...bytes))
 }
 
-const answerBeneath = (on: On, decoded: string[] = []) => {
-  mock.clock(on)
-  on('env.get', () => ({ value: undefined }))
+const WINDOWS = { OS: 'Windows_NT', TEMP: 'C:\\Temp', TERM_PROGRAM: 'ghostty' }
+
+const answerBeneath = (
+  on: On,
+  decoded: string[] = [],
+  env: Record<string, string> = {},
+  clipboard = CLIPBOARD,
+  boxText = '',
+) => {
+  const clock = mock.clock(on)
+  const filled: string[] = []
+  on('env.get', ($, e) => ({ value: env[e.name] }))
   on('process.run', ($, e) => {
     const [program, ...rest] = e.argv
+
+    if (program === 'powershell.exe') {
+      const script = rest.at(-1) ?? ''
+
+      if (script.includes('GetText')) {
+        return ran(0, btoa(clipboard))
+      }
+
+      return ran(0, script.includes('Width') ? '4 4' : '')
+    }
 
     if (program === '/usr/bin/pbpaste') {
       return ran(0, CLIPBOARD)
@@ -52,7 +71,12 @@ const answerBeneath = (on: On, decoded: string[] = []) => {
     return ran(['/bin/mkdir', '/usr/bin/osascript', '/usr/bin/sips', '/usr/bin/base64'].includes(program ?? '') ? 0 : 1)
   })
   on('fs.read', () => ({ value: { base64: whiteBmp(4, 4) } }))
-  on('prompt.read', () => ({ value: { text: '', cursor: 0 } }))
+  on('prompt.read', () => ({ value: { text: filled.at(-1) ?? boxText, cursor: 0 } }))
+  on('prompt.fill', ($, e) => {
+    filled.push(e.text)
+
+    return { isFilled: true }
+  })
   on('prompt.edit', ($, e) => ({
     text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end),
     cursor: e.start + e.inputText.length,
@@ -63,7 +87,18 @@ const answerBeneath = (on: On, decoded: string[] = []) => {
     return <Text>{e.props.text}</Text>
   })
   on('ui.render', () => Fragment({}))
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+
+  return { clock, filled }
 }
+
+const band = ($: Engine) =>
+  $.ui.mount({
+    plugin: 'paste-preview',
+    surface: 'terminal',
+    component: 'AbovePrompt',
+    props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 80, scroll: SCROLL, view: {} },
+  })
 
 const userRow = ($: Engine, requestId: string, text = PLACEHOLDER_ROW) =>
   $.ui.mount({
@@ -104,6 +139,42 @@ test('a collapsed paste is put back in full from the clipboard', async ($, on) =
 
   expect(box.text).toBe('see: line one\nline two\n')
   expect(box.cursor).toBe(box.text.length)
+})
+
+test('on Windows a paste that reached the box collapsed is put back in full', async ($, on) => {
+  const { clock, filled } = answerBeneath(on, [], WINDOWS, CLIPBOARD, 'see: [Pasted text #1 +2 lines] ok')
+
+  await $.session.start({ cwd: 'C:/work', surface: 'terminal', isInteractive: true })
+  await clock.advance(1000)
+
+  expect(filled).toEqual(['see: line one\nline two\n ok'])
+})
+
+test('on Windows a clipboard that no longer matches the placeholder is not pasted', async ($, on) => {
+  const { clock, filled } = answerBeneath(on, [], WINDOWS, 'something copied later', 'see: [Pasted text #1 +5 lines]')
+
+  await $.session.start({ cwd: 'C:/work', surface: 'terminal', isInteractive: true })
+  await clock.advance(3000)
+
+  expect(filled).toEqual([])
+})
+
+test('on Windows an image is drawn as a raster, even in a terminal named like a kitty one', async ($, on) => {
+  answerBeneath(on, [], WINDOWS)
+
+  const text = 'look '
+  await edit($, {
+    origin: { kind: 'composer' },
+    text,
+    cursor: text.length,
+    start: text.length,
+    end: text.length,
+    inputText: '[Image #1]',
+  })
+  const above = await band($)
+
+  expect(await above.find({ type: 'Raster' })).toBeDefined()
+  expect(await above.find({ type: 'Image' })).toBeUndefined()
 })
 
 test('a typed key is left alone', async ($, on) => {

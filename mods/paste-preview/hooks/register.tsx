@@ -23,6 +23,7 @@ const DEFAULT_COLOR = 0x01000000
 const PASTE_ONLY = /^\[Pasted text #\d+[^\]]*\]$/
 const HAS_PASTE = /\[Pasted text #\d+[^\]]*\]/
 const PASTES = /\[Pasted text #\d+[^\]]*\]/g
+const PASTE_LINES = /\+(\d+) lines?\]$/
 const IMAGES = /\[Image #(\d+)\]/g
 
 const CLIPBOARD_TO_PNG = [
@@ -46,9 +47,11 @@ const sent = atom({ plugin: 'paste-preview', key: 'sent' } as const, [])
 const fullText = atom({ plugin: 'paste-preview', key: 'fullText' } as const, '')
 
 const triedLabels = new Set<string>()
+const triedPastes = new Set<string>()
 let isWindowsHost: Promise<boolean> | undefined
 let workDirectory: Promise<string> | undefined
 let isSyncing = false
+let isExpanding = false
 
 const succeeded = async (run: Promise<Ran>) => (await run).exitCode === 0
 
@@ -163,15 +166,20 @@ const directory = ($: EngineInterface) =>
   (workDirectory ??= (async () => {
     const tmp = ((await isWindows($)) ? await $.env.get('TEMP') : await $.env.get('TMPDIR')) ?? '/tmp'
     const path = `${tmp.replace(/[\\/]+$/, '')}/claude-paste-preview`
-    await makeDirectory($, path)
+
+    if (!(await makeDirectory($, path))) {
+      workDirectory = undefined
+    }
 
     return path
   })())
 
+// The Windows builds of these terminals do not draw kitty graphics: the half-block raster shows everywhere.
 const hasKittyGraphics = async ($: EngineInterface) => {
   const program = (await $.env.get('TERM_PROGRAM')) ?? ''
+  const isKittyWindow = (await $.env.get('KITTY_WINDOW_ID')) !== undefined
 
-  return ['ghostty', 'kitty', 'WezTerm'].includes(program) || (await $.env.get('KITTY_WINDOW_ID')) !== undefined
+  return (await isWindows($)) ? isKittyWindow : ['ghostty', 'kitty', 'WezTerm'].includes(program) || isKittyWindow
 }
 
 const isPerson = (kind: string) => kind === 'composer' || kind === 'bridge'
@@ -339,6 +347,43 @@ const sentPictures = async ($: EngineInterface, uuid: string, text: string, imag
   return pictures
 }
 
+// On Windows a long paste reaches the box already collapsed, with no prompt.edit for it. The clipboard
+// only stands in for it when its line count matches the placeholder's, so a later copy is never pasted.
+const expandInBox = async ($: EngineInterface) => {
+  if (isExpanding) {
+    return
+  }
+
+  const { text } = await $.prompt.read()
+  const fresh = (text.match(PASTES) ?? []).find(one => !triedPastes.has(one))
+
+  if (fresh === undefined) {
+    return
+  }
+
+  isExpanding = true
+
+  try {
+    triedPastes.add(fresh)
+    const clip = (await clipboardText($)).replace(/\r\n?/g, '\n')
+    const lines = Number(PASTE_LINES.exec(fresh)?.[1])
+    const newlines = clip.split('\n').length - 1
+
+    if (clip.trim() === '' || !(Math.abs(newlines - lines) <= 1)) {
+      return
+    }
+
+    const now = await $.prompt.read()
+    const at = now.text.indexOf(fresh)
+
+    if (at !== -1) {
+      await $.prompt.fill({ text: now.text.slice(0, at) + clip + now.text.slice(at + fresh.length) })
+    }
+  } finally {
+    isExpanding = false
+  }
+}
+
 const expandCollapsed = (before: string, box: PromptEditResult, pasted: string): PromptEditResult => {
   if (HAS_PASTE.test(pasted)) {
     return box
@@ -382,6 +427,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     $.clock.every(1000, () => {
       void $.prompt.read().then(box => syncDraft($, box.text))
+      void expandInBox($)
     })
 
     return next(e)
@@ -393,7 +439,8 @@ export const register: Register = on => {
     const pasted = clip.trim() === '' ? e.inputText : clip.replace(/\r\n?/g, '\n')
     const box = await next(pasted === e.inputText ? e : { ...e, inputText: pasted })
     const result = isPaste ? expandCollapsed(e.text, box, pasted) : box
-    await syncDraft($, result.text)
+    // Not awaited: on Windows each image step is a PowerShell call, and typing must not wait for them.
+    void syncDraft($, result.text)
 
     return result
   }).catch(($, e, next) => next(e))
@@ -415,6 +462,7 @@ export const register: Register = on => {
     await update($, memberOf(fullText, { requestId: uuid }), () => text)
     await update($, draft, () => [])
     triedLabels.clear()
+    triedPastes.clear()
 
     if (images.length > 0) {
       const pictures = await sentPictures($, uuid, text, images, drafts)
