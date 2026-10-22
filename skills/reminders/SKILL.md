@@ -47,7 +47,8 @@ Enough for a session in a few days, without this conversation, to help.>
 - `bash $SK/reminders.sh list`: every reminder with its state (`due`, `later`, `expired`), and for a repeating one when it shows next.
 - `bash $SK/reminders.sh due [DIR]`: the files due for a session in DIR.
 - When the user says a reminder is done: `bash $SK/reminders.sh done <id>` (the file name without `.md`); a repeating one is closed for today only. When they no longer want a repeating one: `stop <id>`. Then `bash ~/.claude-sync/sync.sh now`. Offer to close expired ones when you see them.
-- Closed reminders move to `past/` with a `closed:` line and stay there 60 days; `delete <id>` removes one for good.
+- Closed reminders move to `past/` with a `closed:` line and stay there 60 days; `restore <id>` puts one back as it was (its dates and repeat days), `delete <id>` removes one for good.
+- When the user wants to do a reminder now ("let's do the reminder <id> now", the pane's `pick`): read its file and help with it; once it's done, close it with `done`.
 - `bash $SK/reminders.sh json [DIR]`: all of them, past ones included, as JSON. The [reminders-handoffs](../../mods/reminders-handoffs) mod reads it: `/reminders` or the band button above the prompt.
 
 ## Notifications

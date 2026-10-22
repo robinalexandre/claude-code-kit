@@ -483,8 +483,8 @@
     },
     {
       "name": "config-sync",
-      "description": "Keeps your Claude Code config the same on all your computers through a private GitHub repo of your own; sets it up at the first session and keeps the engine current.",
-      "version": "1.0.0",
+      "description": "Keeps your Claude Code config the same on all your computers through a private git repo of your own (any host); sets it up at the first session and keeps the engine current.",
+      "version": "1.0.1",
       "category": "productivity",
       "source": ".",
       "strict": false,
@@ -508,7 +508,7 @@
     {
       "name": "handoff",
       "description": "Handoff notes between your computers: continue on the other one without explaining everything again.",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "category": "productivity",
       "source": ".",
       "strict": false,
@@ -549,7 +549,7 @@
     {
       "name": "reminders",
       "description": "Reminders for a later session, on any of your computers, notified on the desktop and the phone every morning; one-off or repeating, filed by group.",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "category": "productivity",
       "source": ".",
       "strict": false,

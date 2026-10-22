@@ -10,6 +10,7 @@
 #   reminders.sh done ID         closes a reminder; a repeating one only for today
 #   reminders.sh stop ID         closes a reminder, a repeating one for good
 #   reminders.sh delete ID       deletes a reminder, a past one too
+#   reminders.sh restore ID      puts a past reminder back, with its dates and repeat days
 #   reminders.sh notify [TEXT]   sends TEXT to the desktop and the phone (to test)
 # A repeating reminder has `every: friday` (days in English, comma-separated, or `day` or
 # `weekday`) and shows on those days from `on` until `until`, at the time of day `on` gives, else
@@ -180,6 +181,21 @@ close() {
   mkdir -p "$PAST"
   set_field "$DIR/$1.md" closed "$(date '+%Y-%m-%d %H:%M')"
   mv "$DIR/$1.md" "$PAST/$1.md"
+}
+
+drop_field() {
+  awk -v k="$2" '{ sub(/\r$/, "") } NR == 1 { print; next } !end && $0 == "---" { end = 1 } !end && index($0, k ":") == 1 { next } { print }' \
+    "$1" > "$1.tmp" && mv "$1.tmp" "$1"
+}
+
+restore() {
+  [ -n "${1:-}" ] && [ -f "$PAST/$1.md" ] || {
+    echo "no past reminder ${1:-}" >&2
+    exit 1
+  }
+  drop_field "$PAST/$1.md" closed
+  mv "$PAST/$1.md" "$DIR/$1.md"
+  echo "restored: $1 ($(state "$DIR/$1.md"))"
 }
 
 reminder_file() {
@@ -371,9 +387,10 @@ case "${1:-}" in
   done) done_ "${2:-}" ;;
   stop) stop "${2:-}" ;;
   delete) delete "${2:-}" ;;
+  restore) restore "${2:-}" ;;
   notify) notify "Reminder" "${2:-Test from the reminders skill}" ;;
   *)
-    echo "usage: reminders.sh start|prompt|morning|due [DIR]|list|json [DIR]|done ID|stop ID|delete ID|notify [TEXT]" >&2
+    echo "usage: reminders.sh start|prompt|morning|due [DIR]|list|json [DIR]|done ID|stop ID|delete ID|restore ID|notify [TEXT]" >&2
     exit 2
     ;;
 esac

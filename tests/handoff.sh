@@ -37,6 +37,8 @@ check "done moves a note to done/" '[ -f "$CLAUDE_HANDOFFS_DIR/done/from-desk.md
 check "with when it was closed" 'grep -q "^closed: " "$CLAUDE_HANDOFFS_DIR/done/from-desk.md"'
 H cancel from-here > /dev/null
 check "cancel marks it canceled" '[ "$(state_of from-here)" = canceled ]'
+H restore from-here > /dev/null
+check "restore opens a canceled note again" '[ "$(state_of from-here)" = open ] && ! grep -qE "^(closed|canceled):" "$CLAUDE_HANDOFFS_DIR/from-here.md"'
 H delete from-desk > /dev/null
 check "delete removes a done note" '[ ! -f "$CLAUDE_HANDOFFS_DIR/done/from-desk.md" ]'
 check "an unknown note is refused" '! H done nope 2> /dev/null'

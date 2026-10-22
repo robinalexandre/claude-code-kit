@@ -5,7 +5,7 @@ import type { Engine } from 'claude-code/testing'
 const REMINDERS = '/home/someone/.claude/skills/reminders/reminders.sh'
 const HANDOFF = '/home/someone/.claude/skills/handoff/handoff.sh'
 const SCROLL = { offset: 0, bodyRows: 30 }
-const PANE_PROPS = { title: 'Reminders & Handoffs', isFocused: true, bodyColumns: 64, placement: 'dock' as const, scroll: SCROLL, view: {} }
+const PANE_PROPS = { title: 'Reminders & Handoffs', isFocused: true, bodyColumns: 72, placement: 'dock' as const, scroll: SCROLL, view: {} }
 const BAND_PROPS = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 80, scroll: SCROLL, view: {} }
 const START = { cwd: '/home/someone/dev/shop', surface: 'terminal' as const, isInteractive: true }
 const command = (name: string) => ({ command: name, args: '', origin: { kind: 'composer' as const }, presentation: { isFullscreen: true, columns: 160 } })
@@ -83,7 +83,7 @@ test('/reminders lists them by section, done closes a repeating one for today', 
   // Only the reminders skill is installed: no tabs.
   expect(await pane.find({ key: 'tab-reminders' })).toBeUndefined()
   expect(await pane.find({ text: '▾ Now (1)' })).toBeDefined()
-  expect(await pane.find({ text: /now · every friday/ })).toBeDefined()
+  expect(await pane.find({ text: ' · now' })).toBeDefined()
   expect(await pane.find({ text: '▾ Upcoming (1)' })).toBeDefined()
   expect(await pane.find({ text: /02\/11/ })).toBeDefined()
   expect(await pane.find({ text: '▸ Past (1)' })).toBeDefined()
@@ -145,6 +145,28 @@ test('several groups in a section each get a title that folds them', async ($, o
 
   expect(await pane.find({ text: '▸ Covea (1)' })).toBeDefined()
   expect(await pane.find({ text: /Review the plan/ })).toBeUndefined()
+})
+
+test('pick hands a reminder to the session; restore puts a past one back', async ($, on) => {
+  const calls: string[][] = []
+  const submitted: string[] = []
+  const world: World = { reminders: [WEEKLY, PAST], handoffs: [], installed: [REMINDERS] }
+  answerBeneath(on, world, calls, submitted)
+
+  await $.session.start(START)
+  await $.command.run(command('reminders'))
+  const pane = await mountPane($)
+
+  await pane.press({ key: 'pick-timesheet' })
+
+  expect(submitted).toEqual(['Let\'s do the reminder timesheet now: "Fill the timesheet".'])
+
+  await pane.press({ key: 'past' })
+  world.reminders = [WEEKLY, { ...PAST, state: 'due', closed: undefined }]
+  await pane.press({ key: 'restore-old' })
+
+  expect(calls).toContainEqual(['bash', REMINDERS, 'restore', 'old'])
+  expect(await pane.find({ text: '▾ Now (2)' })).toBeDefined()
 })
 
 test('with both skills, a tab each; pick hands the note to the session, cancel asks twice', async ($, on) => {

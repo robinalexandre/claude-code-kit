@@ -60,6 +60,11 @@ check "json lists the past ones" '[ "$(jq -r ".[] | select(.id == \"now-one\") |
 check "json carries the group" '[ "$(jq -r ".[] | select(.id == \"every-other\") | .group" <<< "$json")" = Work ]'
 check "json carries the body and the next time" 'jq -e ".[] | select(.id == \"every-today\") | .body and .next" <<< "$json" > /dev/null'
 
+R restore every-other > /dev/null
+check "restore puts a stopped one back, repeating as before" '[ "$(state_of every-other)" = later ] && R list | grep -q "every-other.*every"'
+check "without its closed line" '! grep -q "^closed:" "$CLAUDE_REMINDERS_DIR/every-other.md"'
+check "restore refuses a reminder that is not past" '! R restore later-one 2> /dev/null'
+
 R delete now-one > /dev/null
 check "delete removes a past one" '[ ! -f "$CLAUDE_REMINDERS_DIR/past/now-one.md" ]'
 check "an unknown id is refused" '! R done nope 2> /dev/null'

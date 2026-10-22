@@ -5,6 +5,7 @@
 #   handoff.sh done ID       moves a note to done/: it was picked up
 #   handoff.sh cancel ID     moves a note to done/, marked canceled: no one will pick it up
 #   handoff.sh delete ID     deletes a note, a done one too
+#   handoff.sh restore ID    opens a done or canceled note again
 # A note moved to done/ gets a `closed:` line; done/ keeps a note DONE_DAYS days.
 set -u
 SK=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -79,6 +80,22 @@ close() {
   mv "$DIR/$1.md" "$DONE/$1.md"
 }
 
+drop_field() {
+  awk -v k="$2" '{ sub(/\r$/, "") } NR == 1 { print; next } !end && $0 == "---" { end = 1 } !end && index($0, k ":") == 1 { next } { print }' \
+    "$1" > "$1.tmp" && mv "$1.tmp" "$1"
+}
+
+restore() {
+  [ -n "${1:-}" ] && [ -f "$DONE/$1.md" ] || {
+    echo "no done handoff ${1:-}" >&2
+    exit 1
+  }
+  drop_field "$DONE/$1.md" closed
+  drop_field "$DONE/$1.md" canceled
+  mv "$DONE/$1.md" "$DIR/$1.md"
+  echo "restored: $1"
+}
+
 delete() {
   local f
   for f in "$DIR/${1:-}.md" "$DONE/${1:-}.md"; do
@@ -97,8 +114,9 @@ case "${1:-}" in
   done) close "${2:-}" && echo "done: $2" ;;
   cancel) close "${2:-}" canceled && echo "canceled: $2" ;;
   delete) delete "${2:-}" ;;
+  restore) restore "${2:-}" ;;
   *)
-    echo "usage: handoff.sh json|done ID|cancel ID|delete ID" >&2
+    echo "usage: handoff.sh json|done ID|cancel ID|delete ID|restore ID" >&2
     exit 2
     ;;
 esac

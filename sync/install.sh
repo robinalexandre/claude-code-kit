@@ -36,14 +36,23 @@ esac
 
 git config core.autocrlf false
 
-# The sync commits under this repo's own git identity, asked once per computer.
+# The sync commits under this repo's own git identity, asked once per computer: by default the
+# email the email guard expects for the repo's host, else the global one. A provider's no-reply
+# address is refused by that guard, so it is never suggested.
 if [ -z "$(git config --local user.email || true)" ]; then
   name=$(git config user.name || true)
   email=$(git config user.email || true)
+  host=$(git remote get-url origin 2> /dev/null | sed -E 's#^[a-z]+://##; s#^[^@/]*@##; s#[:/].*##')
+  host=${host:-its host}
+  guard="$HOME/.claude/hooks/git-identity-guard.sh"
+  if [ -f "$guard" ]; then
+    ruled=$(bash "$guard" check "$SYNC" 2> /dev/null | awk -F'\t' '{ sub(/^expected /, "", $2); print $2; exit }')
+    case "$ruled" in *@*) email=$ruled ;; esac
+  fi
   if [ -t 0 ]; then
     read -r -p "Name for the sync's commits [$name]: " answer || answer=""
     name=${answer:-$name}
-    read -r -p "Email for the sync's commits (a GitHub noreply address works) [$email]: " answer || answer=""
+    read -r -p "Email for the sync's commits, the one you use on $host [$email]: " answer || answer=""
     email=${answer:-$email}
   fi
   if [ -z "$name" ] || [ -z "$email" ]; then

@@ -170,13 +170,15 @@ const shareChange = async ($: EngineInterface) => {
   void $.process.run([await bash($), '-c', `[ -f "${sync}" ] && bash "${sync}" now`], { timeoutMs: 120_000 }).catch(() => undefined)
 }
 
-type Action = 'done' | 'stop' | 'delete' | 'cancel'
+type Action = 'done' | 'stop' | 'delete' | 'cancel' | 'restore'
 
-// done acts at once; the others ask for a second press.
+const CONFIRMED: Action[] = ['stop', 'delete', 'cancel']
+
+// stop, delete and cancel ask for a second press; done and restore act at once.
 const act = async ($: EngineInterface, source: Source, action: Action, id: string) => {
   const key = `${source}|${action}|${id}`
 
-  if (action !== 'done' && (await read($, armed)) !== key) {
+  if (CONFIRMED.includes(action) && (await read($, armed)) !== key) {
     await update($, armed, () => key)
 
     return
@@ -200,8 +202,12 @@ const act = async ($: EngineInterface, source: Source, action: Action, id: strin
 }
 
 // The handoff skill picks the note up in this session, as if the user had asked.
-const pick = async ($: EngineInterface, note: Handoff) => {
-  await $.prompt.submit({ text: `Pick up the handoff ${note.id}: "${note.title}".` })
+const pick = async ($: EngineInterface, source: Source, item: { id: string; title: string }) => {
+  const text =
+    source === 'reminders'
+      ? `Let's do the reminder ${item.id} now: "${item.title}".`
+      : `Pick up the handoff ${item.id}: "${item.title}".`
+  await $.prompt.submit({ text })
 }
 
 const openPane = async ($: EngineInterface, source?: Source) => {
@@ -212,7 +218,7 @@ const openPane = async ($: EngineInterface, source?: Source) => {
     await update($, tab, () => source)
   }
 
-  await $.ui.open({ id: PANE, title, columns: 64 })
+  await $.ui.open({ id: PANE, title, columns: 72 })
   await load($)
 }
 
@@ -237,8 +243,9 @@ const whenText = (one: Reminder) => {
 
   const repeat = isRepeating(one) ? `every ${one.every}` : ''
 
+  // Its repeat days are in its details: the line keeps room for the title beside three buttons.
   if (one.state === 'due') {
-    return repeat !== '' ? `now · ${repeat}` : 'now'
+    return 'now'
   }
 
   const next = one.next ?? one.on ?? ''
@@ -432,17 +439,30 @@ export const register: Register = on => {
       )
     }
 
+    // pick hands the item to this session now; the other actions run the part's script.
+    const buttonsFor = (source: Source, item: { id: string; title: string }, specs: [Action | 'pick', string][]) => ({
+      buttons: specs.map(([action, label]) =>
+        action === 'pick' ? (
+          <Button key={`pick-${item.id}`} label={label} onPress={() => void pick($, source, item)} />
+        ) : (
+          actionButton(source, action, item.id, label)
+        )
+      ),
+      labels: specs.map(([, label]) => label),
+    })
+
     const reminderRow = (one: Reminder, color: string) => {
-      const specs: [Action, string][] =
+      const { buttons, labels } = buttonsFor(
+        'reminders',
+        one,
         one.state === 'past'
-          ? [['delete', 'delete']]
+          ? [['restore', 'restore'], ['delete', 'delete']]
           : one.state === 'due'
             ? isRepeating(one)
-              ? [['done', 'done today'], ['stop', 'stop']]
-              : [['done', 'done']]
-            : [['stop', isRepeating(one) ? 'stop' : one.state === 'expired' ? 'close' : 'cancel']]
-      const buttons = specs.map(([action, label]) => actionButton('reminders', action, one.id, label))
-      const labels = specs.map(([, label]) => label)
+              ? [['pick', 'pick'], ['done', 'done today'], ['stop', 'stop']]
+              : [['pick', 'pick'], ['done', 'done']]
+            : [['pick', 'pick'], ['stop', isRepeating(one) ? 'stop' : one.state === 'expired' ? 'close' : 'cancel']]
+      )
 
       return row(one.id, one.title, whenText(one), color, one.state === 'due', one.state === 'past', buttons, labels, () =>
         textLines(
@@ -466,19 +486,11 @@ export const register: Register = on => {
       const when = [note.from ? (note.isMine ? 'from this computer' : `from ${note.from}`) : '', note.date ? dayText(note.date) : '', note.state === 'canceled' ? 'canceled' : '']
         .filter(part => part !== '')
         .join(' · ')
-      const pickKey = `handoffs|pick|${note.id}`
-      const buttons = isOpenNote
-        ? [
-            busyKey === pickKey ? (
-              <Text key={`pick-${note.id}`} dimColor>picking… </Text>
-            ) : (
-              <Button key={`pick-${note.id}`} label="pick" onPress={() => void pick($, note)} />
-            ),
-            actionButton('handoffs', 'cancel', note.id, 'cancel'),
-          ]
-        : [actionButton('handoffs', 'delete', note.id, 'delete')]
-
-      const labels = isOpenNote ? ['pick', 'cancel'] : ['delete']
+      const { buttons, labels } = buttonsFor(
+        'handoffs',
+        note,
+        isOpenNote ? [['pick', 'pick'], ['cancel', 'cancel']] : [['restore', 'restore'], ['delete', 'delete']]
+      )
 
       return row(note.id, note.title, when, color, isOpenNote && note.isMine !== true, !isOpenNote, buttons, labels, () =>
         textLines(
