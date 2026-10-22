@@ -31,7 +31,9 @@ jobs:
       - name: Email guard
         run: bash tests/git-identity-guard.sh
       - name: Install in a sandbox
-        run: bash tests/install-sandbox.sh --auto
+        run: |
+          bash tests/install-sandbox.sh --auto
+          bash tests/install-sandbox.sh --auto tests/answers-skip-a-group.txt
       - name: Mods
         working-directory: mods
         run: for m in */; do claude plugin test "${m%/}" || exit 1; done

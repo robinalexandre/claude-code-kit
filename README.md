@@ -9,7 +9,8 @@ Skills, mods, hooks and a status line for [Claude Code](https://claude.com/claud
 ```sh
 git clone https://github.com/robinalexandre/claude-code-kit.git
 cd claude-code-kit
-./install.sh            # explains each part (why, what, when, who) and asks
+./install.sh            # a checklist: arrows, Enter to pick, → for what each part does, then Install
+./install.sh --plain    # the same as one question per part
 ./install.sh --list     # lists the parts
 ./install.sh --all      # installs every part offered on this computer
 ./install.sh statusline file-tools-guard   # installs the named parts
@@ -17,7 +18,7 @@ cd claude-code-kit
 
 On Windows, from Git Bash the same, or from PowerShell: `powershell -ExecutionPolicy Bypass -File .\install.ps1` (it installs git and jq with winget when missing, then runs `install.sh` in Git Bash).
 
-The installer goes through the parts by group (every day, development, several computers, not dev), skips those that don't apply to this computer, adds what a picked part needs (pr-pane brings pr-watch, reminders brings daily-sync), then sets up each part it installed: the emails for the email guard, where pr-watch looks for your PRs, the phone for reminders, the browser tool for test-evidence. Run a part's setup again any time with `bash ~/.claude/<part>/setup.sh` (hooks: `bash ~/.claude/hooks/setup/<hook>.sh`). It copies each part into `~/.claude`, adds its hooks to `~/.claude/settings.json` and saves whatever it replaces in `~/.claude/backups/before-kit-<date>/`. Running it again is safe. Start a new Claude Code session afterwards. Needs `jq`.
+The installer shows the parts as a checklist by group (every day, development, several computers, not dev): ↑↓ to move, Enter or Space to pick a part or a whole group, → or Tab to unfold why, what, when and who for a part, `a` for all, then Install at the bottom. It greys out what doesn't apply to this computer, adds what a picked part needs (pr-pane brings pr-watch, reminders brings daily-sync), then sets up each part it installed: the emails for the email guard, where pr-watch looks for your PRs, the phone for reminders, the browser tool for test-evidence. Run a part's setup again any time with `bash ~/.claude/<part>/setup.sh` (hooks: `bash ~/.claude/hooks/setup/<hook>.sh`). It copies each part into `~/.claude`, adds its hooks to `~/.claude/settings.json` and saves whatever it replaces in `~/.claude/backups/before-kit-<date>/`. Running it again is safe. Start a new Claude Code session afterwards. Needs `jq`.
 
 To try it first without touching your own setup, `tests/install-sandbox.sh` runs the installer in a throwaway home folder, shows what it left and checks your files are unchanged; `--claude <sandbox>` then opens a first Claude Code session there.
 

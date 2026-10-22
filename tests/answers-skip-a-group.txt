@@ -1,0 +1,9 @@
+group.*=y
+group.not-dev=n
+part.*=y
+part.ci-review=n
+language=English
+marker=🌊
+marker.rule=y
+zshrc=n
+test-evidence.mcp=n

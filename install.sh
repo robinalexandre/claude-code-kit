@@ -1,6 +1,8 @@
 #!/bin/bash
 # Installs the parts of this kit you pick into ~/.claude, then sets up each one.
-#   ./install.sh            explains each part (why, what, when, who) and asks
+#   ./install.sh            a checklist of the parts: arrows to move, Enter or Space to pick, → for
+#                           what each does (why, what, when, who), then Install
+#   ./install.sh --plain    the same as plain questions, one part at a time
 #   ./install.sh --all      installs every part offered on this computer
 #   ./install.sh PART...    installs the named parts
 #   ./install.sh --list     lists the parts
@@ -47,7 +49,11 @@ PARTS=$(jq -r '.parts[] | [.name, .kind, .group, (.os // [] | join(",")), (.tool
   done)
 
 field() { awk -F'\t' -v p="$1" -v f="$2" '$1 == p { print $f }' <<< "$PARTS"; }
-about() { jq -r --arg p "$1" --arg k "$2" '.parts[] | select(.name == $p) | .[$k] // ""' "$KIT/parts.json"; }
+ABOUT=$(jq -r '.parts[] | [.name, .what, .why, .when, .who] | @tsv' "$KIT/parts.json")
+about() {
+  awk -F'\t' -v p="$1" -v k="$2" 'BEGIN { split("what why when who", n, " "); for (i in n) at[n[i]] = i + 1 }
+    $1 == p { print $at[k] }' <<< "$ABOUT"
+}
 offered() {
   local o
   o=$(field "$1" 4)
@@ -73,9 +79,138 @@ describe() {
   return 0
 }
 
+# pick_parts: a checklist on the terminal, by group, driven by the keyboard; prints the picked
+# parts, one per line. Nothing when the user quits.
+pick_parts() {
+  local -a row=() kind=() what=() details=()
+  local group p i j names rows cols sel="|" open="|" cur=1 top=0 key rest count
+  read -r rows cols < <(stty size < /dev/tty 2> /dev/null || echo "24 80")
+  [ "${rows:-0}" -gt 5 ] || rows=24
+  [ "${cols:-0}" -gt 20 ] || cols=80
+  for group in $(jq -r '.groups[].id' "$KIT/parts.json"); do
+    names=$(awk -F'\t' -v g="$group" '$3 == g { print $1 }' <<< "$PARTS")
+    [ -n "$names" ] || continue
+    row+=("$group") kind+=(g) details+=("")
+    what+=("$(jq -r --arg g "$group" '.groups[] | select(.id == $g) | .title' "$KIT/parts.json")")
+    for p in $names; do
+      row+=("$p") kind+=(p) what+=("$(about "$p" what)")
+      details+=("$(describe "$p" | tail -n +3 | sed 's/^ *//' | fold -s -w $((cols - 10)))")
+    done
+  done
+  row+=(install) kind+=(i) what+=("") details+=("")
+
+  local offer="|"
+  for p in $(cut -f1 <<< "$PARTS"); do if offered "$p"; then offer="$offer$p|"; fi; done
+  is_offered() { [[ "$offer" == *"|$1|"* ]]; }
+  is_on() { [[ "$sel" == *"|$1|"* ]]; }
+  turn_on() {
+    local n
+    offered "$1" || return 0
+    is_on "$1" || sel="$sel$1|"
+    for n in $(field "$1" 6 | tr ',' ' '); do turn_on "$n"; done
+  }
+  turn_off() { sel=${sel//|$1|/|}; }
+  toggle_group() {
+    local k all=1
+    for ((k = $1 + 1; k < ${#row[@]}; k++)); do [ "${kind[k]}" = p ] || break; offered "${row[k]}" && ! is_on "${row[k]}" && all=0; done
+    for ((k = $1 + 1; k < ${#row[@]}; k++)); do [ "${kind[k]}" = p ] || break; if [ "$all" = 1 ]; then turn_off "${row[k]}"; else turn_on "${row[k]}"; fi; done
+  }
+
+  draw() {
+    local -a out=()
+    local line mark first=0 last name height
+    local head
+    printf -v head '\033[1mPick what to install\033[0m  ↑↓ move · Enter/Space pick · → or Tab details · a all · q quit'
+    for ((i = 0; i < ${#row[@]}; i++)); do
+      if [ "${kind[i]}" = g ] && [ "$i" -gt 0 ]; then out+=(""); fi
+      [ "$i" = "$cur" ] && first=${#out[@]}
+      case "${kind[i]}" in
+        g)
+          count=0
+          for ((j = i + 1; j < ${#row[@]}; j++)); do
+            [ "${kind[j]}" = p ] || break
+            if is_on "${row[j]}"; then count=$((count + 1)); fi
+          done
+          line="${what[i]}${count:+ ($count picked)}"
+          [ "$count" = 0 ] && line=${what[i]}
+          line=${line:0:$((cols - 2))}
+          if [ "$i" = "$cur" ]; then printf -v line '\033[7;1m%s\033[0m' "$line"; out+=("$line"); else printf -v line '\033[1m%s\033[0m' "$line"; out+=("$line"); fi
+          ;;
+        p)
+          name=${row[i]}
+          if ! is_offered "$name"; then mark='[-]'; elif is_on "$name"; then mark='[x]'; else mark='[ ]'; fi
+          if [[ "$open" == *"|$name|"* ]]; then line="▾"; else line="▸"; fi
+          line="  $mark $line $name: ${what[i]}"
+          [ "${#line}" -ge "$cols" ] && line="${line:0:$((cols - 2))}…"
+          if [ "$i" = "$cur" ]; then
+            printf -v line '\033[7m%s\033[0m' "$line"; out+=("$line")
+          elif ! is_offered "$name"; then
+            printf -v line '\033[2m%s (not on %s)\033[0m' "${line:0:$((cols - 14))}" "$os"; out+=("$line")
+          elif is_on "$name"; then
+            printf -v line '\033[32m%s\033[0m' "$line"; out+=("$line")
+          else
+            out+=("$line")
+          fi
+          if [[ "$open" == *"|$name|"* ]]; then
+            while IFS= read -r line; do printf -v line '\033[2m        %s\033[0m' "$line"; out+=("$line"); done <<< "${details[i]}"
+          fi
+          ;;
+        i)
+          count=0
+          for ((j = 0; j < ${#row[@]}; j++)); do if [ "${kind[j]}" = p ] && is_on "${row[j]}"; then count=$((count + 1)); fi; done
+          out+=("")
+          [ "$i" = "$cur" ] && first=${#out[@]}
+          line="  [ Install $count part$([ "$count" = 1 ] || echo s) ]"
+          if [ "$i" = "$cur" ]; then printf -v line '\033[7;1m%s\033[0m' "$line"; out+=("$line"); else printf -v line '\033[1m%s\033[0m' "$line"; out+=("$line"); fi
+          ;;
+      esac
+      [ "$i" = "$cur" ] && last=$((${#out[@]} - 1))
+    done
+    height=$((rows - 3))
+    [ "$first" -lt "$top" ] && top=$first
+    [ "$last" -ge $((top + height)) ] && top=$((last - height + 1))
+    [ "$first" -lt "$top" ] && top=$first
+    {
+      printf '\033[H\033[2J%s\033[K\n\033[K\n' "$head"
+      for ((j = top; j < top + height && j < ${#out[@]}; j++)); do printf '%s\033[K\n' "${out[j]}"; done
+    } > /dev/tty
+  }
+
+  printf '\033[?1049h\033[?25l' > /dev/tty
+  trap 'printf "\033[?25h\033[?1049l" > /dev/tty' EXIT
+  trap 'exit 130' INT
+  while :; do
+    draw
+    IFS= read -rsn1 key < /dev/tty || key=q
+    if [ "$key" = $'\e' ]; then
+      IFS= read -rsn2 -t 1 rest < /dev/tty || rest=""
+      key="esc$rest"
+    fi
+    case "$key" in
+      'esc[A' | k) [ "$cur" -gt 0 ] && cur=$((cur - 1)) ;;
+      'esc[B' | j) [ "$cur" -lt $((${#row[@]} - 1)) ] && cur=$((cur + 1)) ;;
+      'esc[C' | l | $'\t') [ "${kind[cur]}" = p ] && { [[ "$open" == *"|${row[cur]}|"* ]] && open=${open//|${row[cur]}|/|} || open="$open${row[cur]}|"; } ;;
+      'esc[D' | h) [ "${kind[cur]}" = p ] && open=${open//|${row[cur]}|/|} ;;
+      '' | ' ')
+        case "${kind[cur]}" in
+          p) if is_on "${row[cur]}"; then turn_off "${row[cur]}"; else turn_on "${row[cur]}"; fi ;;
+          g) toggle_group "$cur" ;;
+          i) break ;;
+        esac
+        ;;
+      a) for ((j = 0; j < ${#row[@]}; j++)); do [ "${kind[j]}" = p ] && turn_on "${row[j]}"; done ;;
+      q | esc) sel="|" && break ;;
+    esac
+  done
+  printf '\033[?25h\033[?1049l' > /dev/tty
+  trap - EXIT INT
+  for ((j = 0; j < ${#row[@]}; j++)); do if [ "${kind[j]}" = p ] && is_on "${row[j]}"; then echo "${row[j]}"; fi; done
+}
+
+[ "${1:-}" = --plain ] && { KIT_INSTALL_PLAIN=1; shift; }
 picked=""
 if [ "${1:-}" = --all ]; then
-  picked=$(while IFS=$'\t' read -r name _; do offered "$name" && echo "$name"; done <<< "$PARTS")
+  picked=$(while IFS=$'\t' read -r name _; do if offered "$name"; then echo "$name"; fi; done <<< "$PARTS")
 elif [ $# -gt 0 ]; then
   for p in "$@"; do
     [ -n "$(field "$p" 1)" ] || {
@@ -84,6 +219,10 @@ elif [ $# -gt 0 ]; then
     }
     picked="$picked$p"$'\n'
   done
+elif [ -z "${KIT_INSTALL_ANSWERS:-}" ] && [ "${KIT_INSTALL_PLAIN:-}" != 1 ] && [ "${TERM:-dumb}" != dumb ] &&
+  (: < /dev/tty) 2> /dev/null; then
+  picked=$(pick_parts)
+  [ -n "$picked" ] && echo "Picked: $(echo $picked)"
 else
   echo "The kit's parts, by group. For each: what it does, why you'd want it, when it acts and who it's for."
   for group in $(jq -r '.groups[].id' "$KIT/parts.json"); do
@@ -96,7 +235,7 @@ else
     ask "group.$group" "Go through this group?" y || continue
     for p in $here; do
       describe "$p"
-      ask "part.$p" "  Install $p?" && picked="$picked$p"$'\n'
+      if ask "part.$p" "  Install $p?"; then picked="$picked$p"$'\n'; fi
     done
   done
 fi
@@ -116,7 +255,7 @@ while :; do
   done
   [ -z "$added" ] && break
 done
-picked=$(while IFS=$'\t' read -r name _; do grep -qx "$name" <<< "$picked" && echo "$name"; done <<< "$PARTS")
+picked=$(while IFS=$'\t' read -r name _; do if grep -qx "$name" <<< "$picked"; then echo "$name"; fi; done <<< "$PARTS")
 
 BACKUP="$CLAUDE/backups/before-kit-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$CLAUDE"
