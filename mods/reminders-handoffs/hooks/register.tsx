@@ -5,7 +5,7 @@ import type { Handoff, Reminder, Source } from '../types'
 
 const PANE = 'reminders-handoffs'
 const RELOAD_EVERY_MS = 60_000
-const BODY_LINES = 12
+const BODY_LINES = 40
 
 const reminders = atom({ plugin: 'reminders-handoffs', key: 'reminders' } as const, null)
 const handoffs = atom({ plugin: 'reminders-handoffs', key: 'handoffs' } as const, null)
@@ -72,6 +72,19 @@ const slashed = (path: string) => path.replace(/\\/g, '/')
 
 const truncate = (text: string, width: number) =>
   text.length > width ? `${text.slice(0, Math.max(0, width - 1))}…` : text
+
+// A line cut into lines of at most WIDTH columns, at a space when one is near the end.
+const wrap = (line: string, width: number): string[] => {
+  const lines: string[] = []
+  let rest = line
+  while (width > 0 && rest.length > width) {
+    const space = rest.lastIndexOf(' ', width)
+    const cut = space > width / 2 ? space : width
+    lines.push(rest.slice(0, cut).trimEnd())
+    rest = rest.slice(cut).trimStart()
+  }
+  return [...lines, rest]
+}
 
 const tail = (path: string) => slashed(path).replace(/\/+$/, '').split('/').pop() ?? path
 
@@ -536,6 +549,7 @@ export const register: Register = on => {
         .split(/\r?\n/)
         .map(line => line.replace(/[\x00-\x1f\x7f]/g, ' ').trimEnd())
         .filter((line, index, all) => line !== '' || (index > 0 && all[index - 1] !== ''))
+        .flatMap(line => wrap(line, width - 4))
       const shown = lines.length > BODY_LINES ? [...lines.slice(0, BODY_LINES), '…'] : lines
 
       return (
@@ -546,7 +560,7 @@ export const register: Register = on => {
             </Text>
           ))}
           {shown.map((line, index) => (
-            <Text key={`body-${id}-${index}`}>{truncate(line, width - 4) || ' '}</Text>
+            <Text key={`body-${id}-${index}`}>{line || ' '}</Text>
           ))}
         </Box>
       )
@@ -659,13 +673,9 @@ export const register: Register = on => {
       )
     }
 
-    // A section's rows, flat when they share one group, else each group under a title that folds.
+    // A section's rows, each group under a title that folds, even a lone one.
     const grouped = <T,>(section: string, rows: T[], groupOf: (row: T) => string, draw: (row: T) => unknown) => {
       const groups = byGroup(rows, groupOf)
-
-      if (groups.length <= 1) {
-        return rows.map(draw)
-      }
 
       return groups.map(([name, members]) => {
         const key = `${section}|${name}`

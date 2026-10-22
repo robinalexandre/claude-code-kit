@@ -151,15 +151,28 @@ const endedText = (ended: string, nowMs: number) => {
 const truncate = (text: string, width: number) =>
   text.length > width ? `${text.slice(0, Math.max(0, width - 1))}…` : text
 
-const DESCRIPTION_LINES = 8
+// A line cut into lines of at most WIDTH columns, at a space when one is near the end.
+const wrap = (line: string, width: number): string[] => {
+  const lines: string[] = []
+  let rest = line
+  while (width > 0 && rest.length > width) {
+    const space = rest.lastIndexOf(' ', width)
+    const cut = space > width / 2 ? space : width
+    lines.push(rest.slice(0, cut).trimEnd())
+    rest = rest.slice(cut).trimStart()
+  }
+  return [...lines, rest]
+}
 
-// The PR's body as a few plain lines: blank lines out, each cut to the pane's width.
+const DESCRIPTION_LINES = 40
+
+// The PR's body as plain lines: blank lines out, each wrapped to the pane's width.
 const descriptionLines = (text: string, width: number) => {
   const lines = text
     .split(/\r?\n/)
     .map(line => line.replace(/[\x00-\x1f\x7f]/g, ' ').trim())
     .filter(line => line !== '')
-    .map(line => truncate(line, width))
+    .flatMap(line => wrap(line, width))
 
   return lines.length > DESCRIPTION_LINES ? [...lines.slice(0, DESCRIPTION_LINES), '…'] : lines
 }
@@ -1141,8 +1154,8 @@ export const register: Register = on => {
             ))}
           </Box>
         )}
-        {pr.changes.map(change => (
-          <Text color="cyan">{truncate(`• ${change}`, inner)}</Text>
+        {pr.changes.flatMap(change => wrap(`• ${change}`, inner)).map(line => (
+          <Text color="cyan">{line}</Text>
         ))}
           </Box>
           )}
@@ -1200,11 +1213,13 @@ export const register: Register = on => {
             </Box>
             {isOpen && (
               <Box flexDirection="column" paddingLeft={4}>
-                {step.errors.map(line => (
-                  <Text color={line.startsWith('warning: ') ? 'yellow' : 'red'} dimColor={line.startsWith('warning: ')}>
-                    {truncate(line, inner - 10)}
-                  </Text>
-                ))}
+                {step.errors.flatMap(line =>
+                  wrap(line, inner - 10).map(part => (
+                    <Text color={line.startsWith('warning: ') ? 'yellow' : 'red'} dimColor={line.startsWith('warning: ')}>
+                      {part}
+                    </Text>
+                  ))
+                )}
               </Box>
             )}
           </Box>

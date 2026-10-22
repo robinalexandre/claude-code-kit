@@ -94,6 +94,13 @@ test('/reminders lists them by section, done closes a repeating one for today', 
   await pane.press({ key: 'now' })
   await pane.press({ key: 'upcoming' })
 
+  // Even a lone group keeps its title, folded.
+  expect(await pane.find({ text: '▸ General (1)' })).toBeDefined()
+  expect(await pane.find({ text: ' · now' })).toBeUndefined()
+
+  await pane.press({ key: 'group-now-General' })
+  await pane.press({ key: 'group-upcoming-General' })
+
   expect(await pane.find({ text: ' · now' })).toBeDefined()
   expect(await pane.find({ text: /02\/11/ })).toBeDefined()
   expect(await pane.find({ text: /Old one/ })).toBeUndefined()
@@ -120,6 +127,7 @@ test('stop and delete ask for a second press', async ($, on) => {
   const pane = await mountPane($)
 
   await pane.press({ key: 'now' })
+  await pane.press({ key: 'group-now-General' })
   await pane.press({ key: 'stop-timesheet' })
 
   expect(calls.some(argv => argv[2] === 'stop')).toBe(false)
@@ -130,6 +138,7 @@ test('stop and delete ask for a second press', async ($, on) => {
   expect(calls).toContainEqual(['bash', REMINDERS, 'stop', 'timesheet'])
 
   await pane.press({ key: 'past' })
+  await pane.press({ key: 'group-past-General' })
   await pane.press({ key: 'delete-old' })
   await pane.press({ key: 'delete-old' })
 
@@ -159,6 +168,26 @@ test('several groups in a section each get a title that folds them', async ($, o
   expect(await pane.find({ text: '▾ Work (1)' })).toBeDefined()
   expect(await pane.find({ text: /Review the plan/ })).toBeDefined()
   expect(await pane.find({ text: /only in shop on mac/ })).toBeDefined()
+})
+
+test('a lone row still shows its group, and a long body wraps instead of being cut', async ($, on) => {
+  const words = Array.from({ length: 60 }, (_, index) => `word${index}`).join(' ')
+  const shop = { ...WEEKLY, where: 'dev/shop', body: `${words} the end.` }
+  answerBeneath(on, { reminders: [shop], handoffs: [], installed: [REMINDERS] }, [])
+
+  await $.session.start(START)
+  await $.command.run(command('reminders-pane'))
+  const pane = await mountPane($)
+
+  await pane.press({ key: 'now' })
+
+  expect(await pane.find({ text: '▸ shop (1)' })).toBeDefined()
+
+  await pane.press({ key: 'group-now-shop' })
+  await pane.press({ key: 'toggle-timesheet' })
+
+  expect(await pane.find({ text: /word0 word1/ })).toBeDefined()
+  expect(await pane.find({ text: /the end\.$/ })).toBeDefined()
 })
 
 test("an assistant's task is filed under its name, with cancel only", async ($, on) => {
@@ -194,11 +223,13 @@ test('pick hands a reminder to the session; restore puts a past one back', async
   const pane = await mountPane($)
 
   await pane.press({ key: 'now' })
+  await pane.press({ key: 'group-now-General' })
   await pane.press({ key: 'pick-timesheet' })
 
   expect(submitted).toEqual(['Let\'s do the reminder timesheet now: "Fill the timesheet".'])
 
   await pane.press({ key: 'past' })
+  await pane.press({ key: 'group-past-General' })
   world.reminders = [WEEKLY, { ...PAST, state: 'due', closed: undefined }]
   await pane.press({ key: 'restore-old' })
 
@@ -218,6 +249,7 @@ test('with both skills, a tab each; pick hands the note to the session, cancel a
   expect(await pane.find({ text: '▸ Open (1)' })).toBeDefined()
 
   await pane.press({ key: 'open-notes' })
+  await pane.press({ key: 'group-open-notes-app' })
 
   const found = [
     await pane.find({ key: 'tab-reminders', text: 'Reminders (1)' }),
@@ -244,6 +276,7 @@ test('with both skills, a tab each; pick hands the note to the session, cancel a
 
   await pane.press({ key: 'tab-reminders' })
   await pane.press({ key: 'upcoming' })
+  await pane.press({ key: 'group-upcoming-General' })
 
   expect(await pane.find({ text: /Dentist/ })).toBeDefined()
 })

@@ -279,7 +279,7 @@ const FAILING = {
     row('7', {
       ci: 'CI failed',
       waiting: 'a CI fix',
-      description: 'Fixes the nightly build.\n\n\nSee the ticket for the trace.',
+      description: `Fixes the nightly build.\n\n\nSee the ticket for the trace.\n${Array.from({ length: 50 }, (_, i) => `word${i}`).join(' ')} the end.`,
       checks: [{ name: 'build', state: 'failed', required: true, link: 'https://ci.example/7' }],
     }),
   ],
@@ -346,6 +346,8 @@ test('a failed check shows its errors, reruns only on a second press, and merged
   const texts = (await pane.findAll({ type: 'Text' })).map(element => element.text ?? '')
   expect(texts.indexOf('Fixes the nightly build.')).toBeGreaterThan(texts.findIndex(text => text.includes('CI 0/1')))
   expect(texts[texts.indexOf('Fixes the nightly build.') + 1]).toBe('See the ticket for the trace.')
+  // A long line wraps instead of being cut.
+  expect(await pane.find({ text: /the end\.$/ })).toBeDefined()
 
   await pane.press({ key: 'details-shop-7-build' })
 
