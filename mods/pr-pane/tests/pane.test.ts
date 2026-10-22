@@ -190,7 +190,8 @@ test('PRs are grouped per repo in merge order and CI checks show while they run,
 
   expect(await pane.find({ key: 'ci-web-3' })).toBeUndefined()
 
-  await pane.press({ key: 'pr-toggle-web-3' })
+  // The PR's own line folds it as its arrow does; its number stays the link to the PR.
+  await pane.press({ key: 'pr-title-web-3' })
 
   expect(await pane.find({ key: 'ci-web-3', text: '▾ CI 1/2 running' })).toBeDefined()
   expect(await pane.find({ text: ' · optional' })).toBeDefined()
@@ -716,7 +717,8 @@ test('the pipeline runs the user launched come first, folded with what runs on t
   expect(await pane.find({ key: 'build-rerun-42', text: 'rerun' })).toBeDefined()
   expect(await pane.find({ key: 'build-diagnose-42' })).toBeUndefined()
 
-  await pane.press({ key: 'build-toggle-42' })
+  // The run's own line folds it too.
+  await pane.press({ key: 'build-title-42' })
 
   expect(await pane.find({ key: 'build-rerun-42' })).toBeUndefined()
 

@@ -574,24 +574,31 @@ export const register: Register = on => {
       const when = room - fullWhen.length - 3 >= Math.min(title.length, 12) ? fullWhen : ''
       const titleWidth = Math.max(8, room - (when === '' ? 0 : when.length + 3))
 
+      const toggle = () => void update($, openIds, all => ({ ...all, [id]: !isOpen }))
+      const shownTitle = truncate(title, titleWidth)
+
+      // The whole line folds and unfolds the row, not only its arrow.
       return (
         <Box key={`row-${id}`} flexDirection="column" paddingLeft={2}>
           <Box flexDirection="row" justifyContent="space-between">
             <Box flexDirection="row" flexShrink={1}>
-              <Button
-                key={`toggle-${id}`}
-                label={isOpen ? '▾' : '▸'}
-                plain
-                onPress={() => void update($, openIds, all => ({ ...all, [id]: !isOpen }))}
-              />
+              <Button key={`toggle-${id}`} label={isOpen ? '▾' : '▸'} plain onPress={toggle} />
               <Text>
                 {' '}
                 <Text color={color}>● </Text>
-                <Text bold={isStrong} dimColor={isFaded}>
-                  {truncate(title, titleWidth)}
-                </Text>
-                {when !== '' && <Text dimColor>{` · ${when}`}</Text>}
               </Text>
+              {styled ? (
+                <Button key={`title-${id}`} plain onPress={toggle}>
+                  <Text>
+                    <Text bold={isStrong} dimColor={isFaded}>
+                      {shownTitle}
+                    </Text>
+                    {when !== '' && <Text dimColor>{` · ${when}`}</Text>}
+                  </Text>
+                </Button>
+              ) : (
+                <Button key={`title-${id}`} label={`${shownTitle}${when !== '' ? ` · ${when}` : ''}`} plain dimColor={isFaded} onPress={toggle} />
+              )}
             </Box>
             <Box flexDirection="row" flexShrink={0} gap={1}>
               {buttons as never}

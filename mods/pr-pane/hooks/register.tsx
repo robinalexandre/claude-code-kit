@@ -984,6 +984,17 @@ export const register: Register = on => {
         ? 'Loading…'
         : `${prs.length} PR${prs.length === 1 ? '' : 's'} · ${shown.isLive ? 'live at' : 'last check, read at'} ${shown.at}`
 
+    // A row's own text folds and unfolds it, as its arrow does; a build that draws no styled button
+    // gets the plain label.
+    const foldText = (key: string, plainLabel: string, styledText: RenderChildren, onPress: () => void) =>
+      styled ? (
+        <Button key={key} plain onPress={onPress}>
+          <Text>{styledText}</Text>
+        </Button>
+      ) : (
+        <Button key={key} label={plainLabel} plain onPress={onPress} />
+      )
+
     // One tracked PR on one line: a colored dot, its number, title and what it waits for, with `merge`
     // when that is all it waits for. Opened, it shows conflicts, CI checks, votes and the changes
     // since the last check.
@@ -1009,12 +1020,19 @@ export const register: Register = on => {
                 {' '}
                 <Text color={color}>● </Text>
                 {isStacked ? `${index + 1}. ` : ''}
-                <Link href={pr.url} label={`#${pr.number}`} />
-                <Text bold> {truncate(pr.title, titleWidth)}</Text>
-                <Text dimColor> · </Text>
-                <Text color={color}>{pr.waiting}</Text>
-                {acked !== '' && <Text color="blue">{acked}</Text>}
               </Text>
+              <Link href={pr.url} label={`#${pr.number}`} />
+              {foldText(
+                `pr-title-${group}-${pr.number}`,
+                ` ${truncate(pr.title, titleWidth)} · ${pr.waiting}${acked}`,
+                [
+                  <Text bold> {truncate(pr.title, titleWidth)}</Text>,
+                  <Text dimColor> · </Text>,
+                  <Text color={color}>{pr.waiting}</Text>,
+                  acked !== '' && <Text color="blue">{acked}</Text>,
+                ],
+                () => void togglePr($, pr, isOpen)
+              )}
             </Box>
             <Box flexDirection="row">
               {withMerge && canMerge(pr) && (
@@ -1104,15 +1122,21 @@ export const register: Register = on => {
 
                   return (
                     <Box key={`check-${id}`} flexDirection="column">
-                      <Text>
+                      <Box flexDirection="row">
                         <Text color={color}>  {mark} </Text>
-                        {check.link === null ? name : <Link href={check.link} label={name} />}
+                        {check.link !== null ? (
+                          <Link href={check.link} label={name} />
+                        ) : FAILED.has(check.state) ? (
+                          <Button key={`check-title-${id}`} label={name} plain onPress={() => void toggleDetails($, pr.url, check.name)} />
+                        ) : (
+                          <Text>{name}</Text>
+                        )}
                         <Text dimColor>
                           {' '}
                           {check.state}
                           {check.required === false ? ' · optional' : ''}
                         </Text>
-                      </Text>
+                      </Box>
                       {FAILED.has(check.state) && (
                         <Box flexDirection="row" paddingLeft={4}>
                           <Button
@@ -1191,6 +1215,7 @@ export const register: Register = on => {
         const isOpen = unfoldedSteps[key] ?? false
         const { mark, color } = STEP_MARKS[step.state] ?? { mark: '◌', color: 'yellow' }
         const hasLines = step.errors.length > 0
+        const stepName = truncate(step.name, Math.max(8, inner - step.state.length - 14))
 
         return (
           <Box key={`build-step-${build.number}-${index}`} flexDirection="column">
@@ -1207,9 +1232,21 @@ export const register: Register = on => {
               )}
               <Text>
                 {' '}
-                <Text color={color}>{mark}</Text> {truncate(step.name, Math.max(8, inner - step.state.length - 14))}
-                <Text dimColor> {step.state}</Text>
+                <Text color={color}>{mark}</Text>{' '}
               </Text>
+              {hasLines ? (
+                foldText(
+                  `build-step-title-${build.number}-${index}`,
+                  `${stepName} ${step.state}`,
+                  [stepName, <Text dimColor> {step.state}</Text>],
+                  () => void toggleStep($, key, isOpen)
+                )
+              ) : (
+                <Text>
+                  {stepName}
+                  <Text dimColor> {step.state}</Text>
+                </Text>
+              )}
             </Box>
             {isOpen && (
               <Box flexDirection="column" paddingLeft={4}>
@@ -1273,13 +1310,20 @@ export const register: Register = on => {
               <Text>
                 {' '}
                 <Text color={color}>● </Text>
-                <Link href={build.url} label={`#${build.number}`} />
-                <Text bold> {truncate(build.pipeline, nameWidth)}</Text>
-                <Text dimColor>{branch} · </Text>
-                <Text color={color}>{build.status}</Text>
-                <Text dimColor>{when ? ` ${when}` : ''}{staleMark}</Text>
-                {acked !== '' && <Text color="blue">{acked}</Text>}
               </Text>
+              <Link href={build.url} label={`#${build.number}`} />
+              {foldText(
+                `build-title-${build.number}`,
+                ` ${truncate(build.pipeline, nameWidth)}${branch} · ${build.status}${when ? ` ${when}` : ''}${staleMark}${acked}`,
+                [
+                  <Text bold> {truncate(build.pipeline, nameWidth)}</Text>,
+                  <Text dimColor>{branch} · </Text>,
+                  <Text color={color}>{build.status}</Text>,
+                  <Text dimColor>{when ? ` ${when}` : ''}{staleMark}</Text>,
+                  acked !== '' && <Text color="blue">{acked}</Text>,
+                ],
+                () => void toggleBuildDetails($, build.url)
+              )}
             </Box>
             <Button key={`build-open-${build.number}`} label="open" dimColor onPress={() => void openPr($, build.url)} />
           </Box>

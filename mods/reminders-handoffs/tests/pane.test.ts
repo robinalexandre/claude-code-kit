@@ -105,6 +105,15 @@ test('/reminders lists them by section, done closes a repeating one for today', 
   expect(await pane.find({ text: /02\/11/ })).toBeDefined()
   expect(await pane.find({ text: /Old one/ })).toBeUndefined()
 
+  // The title folds and unfolds the row as its arrow does.
+  await pane.press({ key: 'title-timesheet' })
+
+  expect(await pane.find({ text: /Repeats: every friday/ })).toBeDefined()
+
+  await pane.press({ key: 'title-timesheet' })
+
+  expect(await pane.find({ text: /Repeats: every friday/ })).toBeUndefined()
+
   await pane.press({ key: 'toggle-timesheet' })
 
   expect(await pane.find({ text: /Repeats: every friday/ })).toBeDefined()

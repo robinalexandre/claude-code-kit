@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { RecentPrompt } from '../types'
+import type { Answer, RecentPrompt } from '../types'
 
 const PANE = 'my-messages'
 const TITLE = 'My messages'
@@ -9,6 +9,8 @@ const COMMAND = 'prompts'
 const BAND_COUNT = 2
 const KEPT = 1000
 const WAITING_KEPT = 20
+const ANSWERS_KEPT = 40
+const ANSWER_CHARS = 20_000
 const JUMP_ICON = '↗'
 
 // The band's buttons share one row under everything above the prompt, whatever order the mods
@@ -58,6 +60,7 @@ const takeBandRow = (tree: unknown): { rest: unknown; buttons: unknown[] } => {
 const prompts = atom({ plugin: 'recent-prompts', key: 'prompts' } as const, [])
 const query = atom({ plugin: 'recent-prompts', key: 'query' } as const, '')
 const waiting = atom({ plugin: 'recent-prompts', key: 'waiting' } as const, [])
+const unfolded = atom({ plugin: 'recent-prompts', key: 'unfolded' } as const, {})
 
 type Block = { type: string; [field: string]: unknown }
 type Shown = { before: string; match: string; after: string }
@@ -83,6 +86,44 @@ const remember = async ($: EngineInterface, id: string, text: string, kind?: 'le
 const LEARN = /💡\s*\**\s*Learn\b\s*:?\**\s*([\s\S]+)$/
 
 const isMessage = (prompt: RecentPrompt) => prompt.kind !== 'learn'
+
+// A reply goes under the person's last message: the replies of a turn all answer it.
+const keepAnswer = async ($: EngineInterface, id: string, text: string) => {
+  const answer: Answer = { id, text: text.slice(0, ANSWER_CHARS), time: clockTime(await $.clock.now()) }
+  await update($, prompts, list => {
+    const at = list.map(isMessage).lastIndexOf(true)
+    const prompt = list[at]
+
+    if (prompt === undefined) {
+      return list
+    }
+
+    const answers = [...(prompt.answers ?? []), answer].slice(-ANSWERS_KEPT)
+
+    return [...list.slice(0, at), { ...prompt, answers }, ...list.slice(at + 1)]
+  })
+}
+
+// A line cut into lines of at most WIDTH columns, at a space when one is near the end.
+const wrap = (line: string, width: number): string[] => {
+  const lines: string[] = []
+  let rest = line
+  while (width > 0 && rest.length > width) {
+    const space = rest.lastIndexOf(' ', width)
+    const cut = space > width / 2 ? space : width
+    lines.push(rest.slice(0, cut).trimEnd())
+    rest = rest.slice(cut).trimStart()
+  }
+  return [...lines, rest]
+}
+
+// A text as the pane's lines: its own line breaks kept, runs of blank lines made one, long lines wrapped.
+const paragraphs = (text: string, width: number) =>
+  text
+    .split(/\r?\n/)
+    .map(line => line.replace(/[\x00-\x1f\x7f]/g, ' ').trimEnd())
+    .filter((line, index, all) => line !== '' || (index > 0 && all[index - 1] !== ''))
+    .flatMap(line => wrap(line, width))
 
 const withoutFirst = (list: string[], text: string) => {
   const at = list.indexOf(text)
@@ -128,6 +169,27 @@ const shownLine = (text: string, search: string, width: number): Shown | null =>
   }
 }
 
+// Buttons holding styled Text draw from 2.1.306 on; an older build, or a version that cannot be
+// read, gets plain labels.
+const STYLED_SINCE = [2, 1, 306]
+
+let styledFound: boolean | undefined
+
+const isStyled = async ($: EngineInterface) => {
+  if (styledFound === undefined) {
+    try {
+      const parts = ((await $.session.version()).base ?? '').replace(/-.*$/, '').split('.').map(Number)
+      const at = parts.findIndex((part, index) => part !== STYLED_SINCE[index])
+
+      styledFound = parts.length === 3 && parts.every(Number.isInteger) && (at === -1 || (parts[at] ?? 0) > (STYLED_SINCE[at] ?? 0))
+    } catch {
+      styledFound = false
+    }
+  }
+
+  return styledFound
+}
+
 const jump = async ($: EngineInterface, id: string) => {
   const { deny } = await $.ui.scroll({ to: { requestId: id }, block: 'start' })
 
@@ -156,6 +218,7 @@ const registerCommand = ($: EngineInterface) =>
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
+    styledFound = undefined
     await registerCommand($)
 
     return next(e)
@@ -169,6 +232,7 @@ export const register: Register = on => {
       $.clock.after(0, () => {
         void update($, prompts, () => [])
         void update($, waiting, () => [])
+        void update($, unfolded, () => ({}))
         void registerCommand($)
       })
     }
@@ -216,7 +280,14 @@ export const register: Register = on => {
       return stored
     }
 
-    const lesson = textOf(stored.message.content).match(LEARN)?.[1]?.trim() ?? ''
+    // Only the text Claude wrote to the person: tool calls, their results and thinking are left out.
+    const text = textOf(stored.message.content.filter((block: Block) => block.type === 'text')).trim()
+
+    if (text !== '') {
+      await keepAnswer($, stored.uuid, text)
+    }
+
+    const lesson = text.match(LEARN)?.[1]?.trim() ?? ''
 
     if (lesson !== '') {
       await remember($, stored.uuid, lesson, 'learn')
@@ -293,9 +364,14 @@ export const register: Register = on => {
     const { Box, Button, Input, Text } = $.ui.resolve(e)
     const list = await read($, prompts)
     const search = await read($, query)
-    const width = Math.max(10, e.props.bodyColumns - 8)
+    const open = await read($, unfolded)
+    const toggle = (id: string) => void update($, unfolded, all => ({ ...all, [id]: !(all[id] ?? false) }))
+    const styled = await isStyled($)
+    // What a line leaves for its text: the jump arrow, the fold arrow and the time take 10 columns,
+    // a lesson's 💡 three more.
+    const width = Math.max(10, e.props.bodyColumns - 12)
     const rows = list.flatMap(prompt => {
-      const shown = shownLine(prompt.text, search, width)
+      const shown = shownLine(prompt.text, search, width - (isMessage(prompt) ? 0 : 3))
 
       return shown === null ? [] : [{ prompt, shown }]
     })
@@ -304,6 +380,50 @@ export const register: Register = on => {
     const lessons = list.length - messages
     const counted = `${messages} messages${lessons > 0 ? `, ${lessons} 💡` : ''}`
     const summary = search.trim() === '' ? counted : `${rows.length} of ${list.length} match`
+
+    // A line's text folds and unfolds it, as its arrow does; a build that draws no styled button
+    // gets the plain label.
+    const foldText = (key: string, plainLabel: string, styledText: unknown, onPress: () => void, dimColor = false) =>
+      styled ? (
+        <Button key={key} plain onPress={onPress}>
+          <Text dimColor={dimColor}>{styledText as never}</Text>
+        </Button>
+      ) : (
+        <Button key={key} label={plainLabel} plain dimColor={dimColor} onPress={onPress} />
+      )
+
+    // An unfolded line: the full message (or lesson), then each reply, folded to its first line
+    // until opened.
+    const details = (prompt: RecentPrompt) => (
+      <Box key={`details-${prompt.id}`} flexDirection="column" paddingLeft={4}>
+        {paragraphs(prompt.text, width - 2).map((line, index) => (
+          <Text key={`text-${prompt.id}-${index}`} color={isMessage(prompt) ? 'cyan' : 'yellow'}>
+            {line || ' '}
+          </Text>
+        ))}
+        {isMessage(prompt) && (prompt.answers ?? []).length === 0 && <Text dimColor>No reply yet.</Text>}
+        {(prompt.answers ?? []).map(answer => {
+          const isAnswerOpen = open[answer.id] ?? false
+          const label = `${answer.time ?? '--:--'} ${isAnswerOpen ? 'Claude' : truncate(flatten(answer.text), width - 6)}`
+
+          return (
+            <Box key={`answer-${answer.id}`} flexDirection="column">
+              <Box flexDirection="row">
+                <Button key={`answer-toggle-${answer.id}`} label={isAnswerOpen ? '▾' : '▸'} plain onPress={() => toggle(answer.id)} />
+                <Text> </Text>
+                {foldText(`answer-text-${answer.id}`, label, label, () => toggle(answer.id), true)}
+              </Box>
+              {isAnswerOpen &&
+                paragraphs(answer.text, width - 6).map((line, index) => (
+                  <Box key={`reply-${answer.id}-${index}`} paddingLeft={2}>
+                    <Text>{line || ' '}</Text>
+                  </Box>
+                ))}
+            </Box>
+          )
+        })}
+      </Box>
+    )
 
     return (
       <Box flexDirection="column">
@@ -318,22 +438,40 @@ export const register: Register = on => {
           onSubmit={setQuery}
         />
         <Text dimColor>{summary}</Text>
-        {rows.map(({ prompt, shown }) => (
-          <Box key={`line-${prompt.id}`} flexDirection="row">
-            <Button key={`row-${prompt.id}`} label={JUMP_ICON} plain dimColor onPress={() => void jump($, prompt.id)} />
-            <Text color={prompt.kind === 'learn' ? 'yellow' : undefined} dimColor={prompt.kind === 'learn'}>
-              <Text dimColor> {prompt.time ?? '--:--'} </Text>
-              {prompt.kind === 'learn' ? '💡 ' : ''}
-              {shown.before}
-              {shown.match !== '' && (
-                <Text color="yellow" bold>
-                  {shown.match}
-                </Text>
-              )}
-              {shown.after}
-            </Text>
-          </Box>
-        ))}
+        {rows.map(({ prompt, shown }) => {
+          const isOpen = open[prompt.id] ?? false
+          const isLesson = prompt.kind === 'learn'
+
+          return (
+            <Box key={`entry-${prompt.id}`} flexDirection="column">
+              <Box key={`line-${prompt.id}`} flexDirection="row">
+                <Button key={`row-${prompt.id}`} label={JUMP_ICON} plain dimColor onPress={() => void jump($, prompt.id)} />
+                <Button key={`toggle-${prompt.id}`} label={isOpen ? ' ▾' : ' ▸'} plain onPress={() => toggle(prompt.id)} />
+                <Text dimColor> {prompt.time ?? '--:--'} </Text>
+                {foldText(
+                  `text-${prompt.id}`,
+                  `${isLesson ? '💡 ' : ''}${shown.before}${shown.match}${shown.after}`,
+                  [
+                    isLesson && <Text color="yellow">💡 </Text>,
+                    <Text color={isLesson ? 'yellow' : undefined} dimColor={isLesson}>
+                      {shown.before}
+                    </Text>,
+                    shown.match !== '' && (
+                      <Text color="yellow" bold>
+                        {shown.match}
+                      </Text>
+                    ),
+                    <Text color={isLesson ? 'yellow' : undefined} dimColor={isLesson}>
+                      {shown.after}
+                    </Text>,
+                  ],
+                  () => toggle(prompt.id)
+                )}
+              </Box>
+              {isOpen && details(prompt)}
+            </Box>
+          )
+        })}
       </Box>
     )
   })

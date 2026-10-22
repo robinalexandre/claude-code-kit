@@ -45,7 +45,7 @@ test('the band shows the last two messages and the pane finds one by an accent-f
   await pane.input({ key: 'search', text: 'creme', kind: 'change' })
 
   expect(await pane.find({ text: '1 of 3 match' })).toBeDefined()
-  expect(await pane.find({ type: 'Text', text: 'crème' })).toBeDefined()
+  expect(await pane.find({ key: 'text-second', text: /café crème/ })).toBeDefined()
   expect(await pane.find({ key: 'row-second' })).toBeDefined()
   expect(await pane.find({ key: 'row-third' })).toBeUndefined()
 })
@@ -120,6 +120,50 @@ test('a message absorbed into the running turn is listed as typed once its deliv
   expect(await band.find({ key: 'prompt-1', text: /^And the code-kit \?$/ })).toBeDefined()
 })
 
+test('an unfolded message shows it whole, then each reply folded until opened, tool calls left out', async ($, on) => {
+  mock.clock(on)
+  on('ui.render', () => Fragment({}))
+  const reply = (uuid: string, content: { type: string; [field: string]: unknown }[]) =>
+    $.session.append({ message: { type: 'assistant', role: 'assistant', content: content as never }, door: 'response', origin: { kind: 'composer' }, uuid })
+  const long = `${Array.from({ length: 30 }, (_, i) => `word${i}`).join(' ')} the end of my message.`
+
+  await say($, 'ask', long)
+  await reply('look', [{ type: 'text', text: 'Looking at the sync first.' }, { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'git status' } }])
+  await reply('tool-only', [{ type: 'tool_use', id: 't2', name: 'Read', input: { file_path: '/x' } }])
+  await reply('done', [{ type: 'text', text: 'It works.\n\nThe sync pushed every change, and nothing was left behind on this computer.' }])
+  await say($, 'next', 'Thanks')
+
+  const pane = await $.ui.mount({
+    plugin: 'recent-prompts',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'my-messages',
+    props: { title: 'My messages', isFocused: true, bodyColumns: 50, placement: 'dock', scroll: SCROLL, view: {} },
+  })
+
+  const details = async () => (await pane.find({ key: 'details-ask' }))?.text ?? ''
+
+  expect(await details()).toBe('')
+
+  // The line's own text unfolds it, as its arrow does.
+  await pane.press({ key: 'text-ask' })
+
+  // Wrapped to the pane, every word there.
+  expect(await details()).toContain('word29 the end')
+  expect(await details()).toContain('my message.▸')
+  expect(await pane.find({ key: 'answer-toggle-look' })).toBeDefined()
+  expect(await pane.find({ key: 'answer-toggle-tool-only' })).toBeUndefined()
+  expect(await details()).not.toContain('git status')
+  expect(await details()).not.toContain('left behind')
+
+  await pane.press({ key: 'answer-text-done' })
+
+  expect(await details()).toContain('left behind')
+  expect(await pane.find({ type: 'Text', text: 'computer.' })).toBeDefined()
+  expect(await pane.find({ key: 'toggle-next' })).toBeDefined()
+  expect(await pane.find({ text: 'No reply yet.' })).toBeUndefined()
+})
+
 test('a 💡 Learn block Claude ended a reply with is listed in the history between the messages, never in the band', async ($, on) => {
   mock.clock(on)
   on('ui.render', () => Fragment({}))
@@ -148,6 +192,10 @@ test('a 💡 Learn block Claude ended a reply with is listed in the history betw
 
   expect(await pane.find({ text: '2 messages, 1 💡' })).toBeDefined()
   expect(await pane.find({ text: /parameterized query keeps user input/ })).toBeDefined()
+
+  await pane.press({ key: 'text-answer' })
+
+  expect(await pane.find({ key: 'details-answer', text: /keeps user input out of the SQL text\./ })).toBeDefined()
   const keys = (await pane.findAll({ type: 'Button' })).map(button => button.key ?? '')
   expect(keys.indexOf('row-answer')).toBeGreaterThan(keys.indexOf('row-first'))
   expect(keys.indexOf('row-answer')).toBeLessThan(keys.indexOf('row-second'))
