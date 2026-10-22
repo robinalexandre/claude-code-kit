@@ -549,7 +549,7 @@
     {
       "name": "reminders",
       "description": "Reminders for a later session, on any of your computers, notified on the desktop and the phone every morning; one-off or repeating, filed by group; and tasks your own assistant runs by itself at a set time.",
-      "version": "1.4.1",
+      "version": "1.4.2",
       "category": "productivity",
       "source": ".",
       "strict": false,
