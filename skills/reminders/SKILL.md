@@ -22,7 +22,8 @@ Write `~/.claude-sync/reminders/<YYYY-MM-DD>-<short-slug>.md`:
 title: <one line the user will read in a notification, in their language>
 on: <YYYY-MM-DD, or YYYY-MM-DD HH:MM: when it starts showing>
 until: <YYYY-MM-DD: last day it shows (optional)>
-every: <repeating only: friday, or several days "monday, thursday", or day, or weekday (optional)>
+every: <repeating only: friday, or several days "monday, thursday", or day, or weekday, or "3 days", or month (optional)>
+times: <repeating only: several times a day, "08:00, 14:00" (optional)>
 group: <what the reminders pane files it under: an organization, a client, a project (optional)>
 where: <repo-specific only: the folder the session must be in, as a path or its tail like "dev/shop"; leave out for a global reminder>
 machine: <a name from ~/.claude-sync/machines/ (optional: every computer)>
@@ -36,6 +37,8 @@ Enough for a session in a few days, without this conversation, to help.>
 - **Always ask whether the reminder is global or for one repo/folder**, unless the user already said it: "Global (every session, any repo, any computer) or only in <the folder/repo in question>?", and say which you'd pick and why (work on this repo's code fits the repo; a call, a meeting or an errand is global). Global leaves `where` out. Opening a session in a folder is not a reason to tie the reminder to it. A repo-specific reminder sets `where` to that repo or folder.
 - **Ask whether they want it at a set time**, unless they gave one: "At a set time, or with the morning notification?". A day alone ("tomorrow", "Thursday") means `on:` that day, shown from the start of the day and notified with the morning run. A time means `on: YYYY-MM-DD HH:MM`; when the phone notification goes through a dedicated session (below), also schedule a one-shot wake-up of that session at that time (`create_trigger` with `persistent_session_id` and `run_once_at`) so the push lands then.
 - **Repeating** ("every Friday", "each morning"): `every:` with the days, in English. `on:` is when the series starts, and its time of day, if any, is the time it shows each of those days, else 09:00 (`REMINDERS_AT`), when the morning sync notifies; `until:` ends the series.
+  - "Every 3 days" is `every: 3 days`, counted from `on:`. "Every month" is `every: month`, on the day of `on:` (the last day of a shorter month when that day is missing).
+  - Several times a day ("at 8 and at 2") is `times: 08:00, 14:00`, which takes the place of the time in `on:`.
 - **Group**: when the reminder clearly belongs to an organization, a client or a project the user works for (their employer, a customer), set `group:` to its name, the same spelling each time, so the pane files them together. Otherwise leave it out: the pane files it by folder, then computer, then "General". Closing it for the day (`done`) brings it back on its next day; `stop` ends it.
 - Ask only these and what you can't infer. "Tomorrow" means `on:` the next day; a meeting on a date means `until:` that date. When the user says "this morning" or "now", use today.
 - Every new session gets each due reminder (global ones everywhere, repo-specific ones in their folder) until it's done or past `until`.
