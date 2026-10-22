@@ -87,24 +87,59 @@ weekdays() {
 # GNU date first, then BSD date (macOS).
 shift_day() { date -d "$1 +$2 days" +%Y-%m-%d 2> /dev/null || date -j -v+"$2"d -f %Y-%m-%d "$1" +%Y-%m-%d; }
 weekday_of() { date -d "$1" +%u 2> /dev/null || date -j -f %Y-%m-%d "$1" +%u; }
+epoch_of() { date -d "$1 12:00" +%s 2> /dev/null || date -j -f '%Y-%m-%d %H:%M' "$1 12:00" +%s; }
 
-# next_time FILE: "YYYY-MM-DD HH:MM" a repeating reminder shows next, today's while it isn't closed.
+# repeats_on EVERY ON DAY: whether a series with this `every` (weekdays, "3 days" counted
+# from ON, or "month" on ON's day or the last day of a shorter month) falls on DAY.
+repeats_on() {
+  local every on=$2 day=$3 n days
+  every=$(printf '%s' "$1" | lower | tr -s ' ')
+  case "$every" in
+    [0-9]*day | [0-9]*days)
+      n=${every%% *}
+      n=${n%day*}
+      [ -n "$on" ] && [ "$n" -gt 0 ] 2> /dev/null || return 1
+      [ $((($(epoch_of "$day") - $(epoch_of "${on:0:10}")) / 86400 % n)) -eq 0 ]
+      return
+      ;;
+    month | monthly)
+      [ -n "$on" ] || return 1
+      [ "${day:8:2}" = "${on:8:2}" ] && return 0
+      [[ "${on:8:2}" > "${day:8:2}" ]] && [ "$(shift_day "$day" 1 | cut -c9-10)" = "01" ]
+      return
+      ;;
+  esac
+  days=$(weekdays "$every")
+  case " $days " in *" $(weekday_of "$day") "*) return 0 ;; esac
+  return 1
+}
+
+# next_time FILE: "YYYY-MM-DD HH:MM" a repeating reminder shows next, today's while it isn't
+# closed. With `times: 08:00, 14:00`, the next of those times.
 next_time() {
-  local f=$1 days on at closed base first k day
-  days=$(weekdays "$(frontmatter "$f" every)")
-  [ -n "$days" ] || return 0
+  local f=$1 every on at times closed base k day now t
+  every=$(frontmatter "$f" every)
+  [ -n "$every" ] || return 0
   on=$(frontmatter "$f" on)
   at=$DEFAULT_AT
   [ ${#on} -gt 10 ] && at=${on:11:5}
+  times=$(frontmatter "$f" times | tr ',' ' ')
   closed=$(frontmatter "$f" done)
   base=$(date +%Y-%m-%d)
+  now=$(date +%H:%M)
   [ -n "$on" ] && [[ "$base" < "${on:0:10}" ]] && base=${on:0:10}
-  first=$(weekday_of "$base")
-  for k in 0 1 2 3 4 5 6 7; do
-    case " $days " in *" $(((first + k - 1) % 7 + 1)) "*) ;; *) continue ;; esac
+  for k in $(seq 0 62); do
     day=$base
     [ "$k" -gt 0 ] && day=$(shift_day "$base" "$k")
     [ "$day" = "$closed" ] && continue
+    repeats_on "$every" "$on" "$day" || continue
+    if [ -n "$times" ]; then
+      at=""
+      for t in $times; do
+        { [ "$day" != "$(date +%Y-%m-%d)" ] || [[ ! "$t" < "$now" ]]; } && { at=$t; break; }
+      done
+      [ -n "$at" ] || continue
+    fi
     printf '%s %s' "$day" "$at"
     return 0
   done

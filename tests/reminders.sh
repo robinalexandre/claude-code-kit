@@ -35,6 +35,9 @@ reminder old-one "title: old" "on: $(plus -5)" "until: $(plus -1)"
 reminder every-today "title: each $(day_name 0)" "every: $(day_name 0 | tr 'A-Z' 'a-z')" "on: $(plus -14) 00:00"
 reminder every-other "title: each $(day_name 2)" "every: $(day_name 2)" "group: Work"
 reminder every-later-today "title: later today" "every: day" "on: $today 23:59"
+reminder every-3-days "title: every 3 days" "every: 3 days" "on: $(plus -1)"
+reminder every-month "title: each month" "every: month" "on: $(plus -1)"
+reminder twice-a-day "title: twice a day" "every: day" "times: 00:00, 23:59" "on: $(plus -3)"
 
 check "a one-off reminder of today is due" '[ "$(state_of now-one)" = due ]'
 check "a future one is later" '[ "$(state_of later-one)" = later ]'
@@ -43,6 +46,9 @@ check "a repeating one on the weekday of today is due" '[ "$(state_of every-toda
 check "a repeating one on another day is later" '[ "$(state_of every-other)" = later ]'
 check "with no time of day it shows at 09:00" 'R list | grep -q "every-other.*next $(plus 2) 09:00"'
 check "a repeating one before its time of day is later" '[ "$(state_of every-later-today)" = later ]'
+check "every 3 days counts from its start" 'R list | grep -q "every-3-days.*next $(plus 2) 09:00"'
+check "every month comes back a month later" '[[ "$(R list | awk -F"\t" "\$1 == \"every-month\"" | grep -o "next [0-9-]*" | cut -c6-)" > "$(plus 27)" ]]'
+check "with times it shows the next of them today" 'R list | grep -q "twice-a-day.*next $today 23:59"'
 
 R done every-today > /dev/null
 check "done on a repeating one closes today only" '[ "$(state_of every-today)" = later ]'
