@@ -440,12 +440,13 @@ export const register: Register = on => {
         return <Text key={`${action}-${id}`} dimColor>{`${action}… `}</Text>
       }
 
-      return armedKey === key ? (
-        <Button key={`${action}-${id}`} onPress={() => void act($, source, action, id)}>
-          <Text color="red">{`${label}? press again`}</Text>
-        </Button>
-      ) : (
-        <Button key={`${action}-${id}`} label={label} onPress={() => void act($, source, action, id)} />
+      return (
+        <Button
+          key={`${action}-${id}`}
+          label={armedKey === key ? `${label}? press again` : label}
+          variant={armedKey === key ? 'primary' : undefined}
+          onPress={() => void act($, source, action, id)}
+        />
       )
     }
 
@@ -588,9 +589,12 @@ export const register: Register = on => {
 
         return (
           <Box key={`group-${key}`} flexDirection="column" paddingLeft={2}>
-            <Button key={`group-${section}-${name}`} plain onPress={() => void update($, openSections, all => ({ ...all, [key]: !isOpen }))}>
-              <Text>{`${isOpen ? '▾' : '▸'} ${name} (${members.length})`}</Text>
-            </Button>
+            <Button
+              key={`group-${section}-${name}`}
+              label={`${isOpen ? '▾' : '▸'} ${name} (${members.length})`}
+              plain
+              onPress={() => void update($, openSections, all => ({ ...all, [key]: !isOpen }))}
+            />
             {isOpen && (members.map(draw) as never)}
           </Box>
         )
@@ -603,9 +607,12 @@ export const register: Register = on => {
 
       return (
         <Box key={`section-${id}`} flexDirection="column" marginTop={1}>
-          <Button key={id} plain onPress={() => void update($, openSections, all => ({ ...all, [id]: !isOpen }))}>
-            <Text bold>{`${isOpen ? '▾' : '▸'} ${title} (${rows.length})`}</Text>
-          </Button>
+          <Button
+            key={id}
+            label={`${isOpen ? '▾' : '▸'} ${title} (${rows.length})`}
+            plain
+            onPress={() => void update($, openSections, all => ({ ...all, [id]: !isOpen }))}
+          />
           {isOpen && rows.length === 0 && (
             <Box paddingLeft={2}>
               <Text dimColor>nothing</Text>
@@ -648,9 +655,13 @@ export const register: Register = on => {
         {found.length > 1 && (
           <Box flexDirection="row" gap={2}>
             {found.map(source => (
-              <Button key={`tab-${source}`} plain onPress={() => void update($, tab, () => source)}>
-                {source === current ? <Text bold underline>{tabLabel(source)}</Text> : <Text dimColor>{tabLabel(source)}</Text>}
-              </Button>
+              <Button
+                key={`tab-${source}`}
+                label={tabLabel(source)}
+                plain
+                dimColor={source !== current}
+                onPress={() => void update($, tab, () => source)}
+              />
             ))}
           </Box>
         )}

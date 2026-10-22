@@ -1428,11 +1428,13 @@ export const register: Register = on => {
         {attention.length > 0 && (
           <Box flexDirection="column" marginTop={1}>
             <Box flexDirection="row">
-              <Button key="attention" plain onPress={() => void toggleRepo($, repoKey('attention', '*'), isAttentionOpen)}>
-                <Text bold color="red">
-                  {`${isAttentionOpen ? '▾' : '▸'} Needs your attention (${attention.length})`}
-                </Text>
-              </Button>
+              <Text color="red">● </Text>
+              <Button
+                key="attention"
+                label={`${isAttentionOpen ? '▾' : '▸'} Needs your attention (${attention.length})`}
+                plain
+                onPress={() => void toggleRepo($, repoKey('attention', '*'), isAttentionOpen)}
+              />
               {!isAttentionOpen && hasRunningCi(attention) && <Text color="yellow"> · CI running</Text>}
             </Box>
             {isAttentionOpen && repoBlocks('attention', attention, false)}
@@ -1440,11 +1442,15 @@ export const register: Register = on => {
         )}
         {reviews.length > 0 && (
           <Box flexDirection="column" marginTop={1}>
-            <Button key="reviews" plain onPress={() => void toggleRepo($, repoKey('reviews', '*'), isReviewsOpen)}>
-              <Text bold color="yellow">
-                {`${isReviewsOpen ? '▾' : '▸'} Waiting for my review (${reviews.length})`}
-              </Text>
-            </Button>
+            <Box flexDirection="row">
+              <Text color="yellow">● </Text>
+              <Button
+                key="reviews"
+                label={`${isReviewsOpen ? '▾' : '▸'} Waiting for my review (${reviews.length})`}
+                plain
+                onPress={() => void toggleRepo($, repoKey('reviews', '*'), isReviewsOpen)}
+              />
+            </Box>
             {isReviewsOpen &&
               byRepo(reviews).map(([repo, requests]) => {
                 const key = repoKey('reviews', repo)
