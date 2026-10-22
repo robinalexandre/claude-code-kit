@@ -6,8 +6,10 @@ import type { Handoff, Reminder, Source } from '../types'
 const PANE = 'reminders-handoffs'
 const RELOAD_EVERY_MS = 60_000
 const BODY_LINES = 40
-// The line under the pointer lights up, its arrow included.
-const LIT = { backgroundColor: 'gray' }
+// Under the pointer, what folds turns to the theme's suggestion color with the text drawn on it in
+// the theme's inverse text color: readable in a light and a dark theme alike.
+const LIT_BOX = { backgroundColor: 'suggestion' }
+const LIT_TEXT = { color: 'inverseText', dimColor: false }
 
 const reminders = atom({ plugin: 'reminders-handoffs', key: 'reminders' } as const, null)
 const handoffs = atom({ plugin: 'reminders-handoffs', key: 'handoffs' } as const, null)
@@ -582,24 +584,31 @@ export const register: Register = on => {
       // The whole line folds and unfolds the row, not only its arrow.
       return (
         <Box key={`row-${id}`} flexDirection="column" paddingLeft={2}>
-          <Box key={`line-${id}`} flexDirection="row" justifyContent="space-between" hover={LIT}>
-            <Box flexDirection="row" flexShrink={1}>
-              <Button key={`toggle-${id}`} label={isOpen ? '▾' : '▸'} plain onPress={toggle} />
-              <Text>
+          <Box flexDirection="row" justifyContent="space-between">
+            {/* What folds lights up under the pointer; the buttons beside it do something else. */}
+            <Box key={`line-${id}`} flexDirection="row" flexShrink={1} hover={LIT_BOX}>
+              <Button key={`toggle-${id}`} label={isOpen ? '▾' : '▸'} plain hover={LIT_TEXT} onPress={toggle} />
+              <Text hover={LIT_TEXT}>
                 {' '}
-                <Text color={color}>● </Text>
+                <Text color={color} hover={LIT_TEXT}>
+                  ●{' '}
+                </Text>
               </Text>
               {styled ? (
-                <Button key={`title-${id}`} plain onPress={toggle}>
-                  <Text>
-                    <Text bold={isStrong} dimColor={isFaded}>
+                <Button key={`title-${id}`} plain hover={LIT_TEXT} onPress={toggle}>
+                  <Text hover={LIT_TEXT}>
+                    <Text bold={isStrong} dimColor={isFaded} hover={LIT_TEXT}>
                       {shownTitle}
                     </Text>
-                    {when !== '' && <Text dimColor>{` · ${when}`}</Text>}
+                    {when !== '' && (
+                      <Text dimColor hover={LIT_TEXT}>
+                        {` · ${when}`}
+                      </Text>
+                    )}
                   </Text>
                 </Button>
               ) : (
-                <Button key={`title-${id}`} label={`${shownTitle}${when !== '' ? ` · ${when}` : ''}`} plain dimColor={isFaded} onPress={toggle} />
+                <Button key={`title-${id}`} label={`${shownTitle}${when !== '' ? ` · ${when}` : ''}`} plain dimColor={isFaded} hover={LIT_TEXT} onPress={toggle} />
               )}
             </Box>
             <Box flexDirection="row" flexShrink={0} gap={1}>

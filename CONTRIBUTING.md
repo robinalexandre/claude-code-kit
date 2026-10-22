@@ -29,7 +29,7 @@ Every pane looks and behaves the same way, so what someone learned in one works 
 - **Folded by default**: sections, groups and rows start folded, a section's only group or row too; what the user unfolds stays so for the session.
 - **Grouped always**: a section files its rows under group titles (a repo, a folder, an organization, "General"), even when there is a single one.
 - **The whole line folds**: clicking a folded line's text unfolds it, as its ▸ does. A part of the line that already has its own action (a link, a button) keeps it.
-- **Lit under the pointer**: a line that folds lights up while the pointer is over it, from its first arrow to the end of its text (a keyed `Box` with a `hover` background).
+- **Lit under the pointer**: what folds a line (its ▸, its dot, its text) lights up while the pointer is over it. What does something else stays as it is: the ↗ to the conversation, a link, an action button. Light it with the theme's colors, never fixed ones, so it reads in light and dark themes alike: a `suggestion` background, each text drawn `inverseText` (`hover` on the `Box` and on every `Text` and `Button` inside it); parts split by a link share one hover `scope`.
 - **A way back to the conversation**: every entry that comes from the transcript (a message, a reply, a lesson) has its ↗ that scrolls the conversation to it.
 - **Nothing cut that can be read**: a body, a description, a reply or an error message wraps to the pane's width instead of ending in "…". Only one-line summaries (a title, a list of rows to pick from) are cut, and the full text is one unfold away.
 - **Fits on one line**: a row's text leaves room for its arrows, icons and buttons, so the line never wraps.

@@ -165,8 +165,16 @@ const wrap = (line: string, width: number): string[] => {
 }
 
 const DESCRIPTION_LINES = 40
-// A line that folds lights up under the pointer, its arrow included.
-const LIT = { backgroundColor: 'gray' }
+// Under the pointer, what folds turns to the theme's suggestion color with the text drawn on it in
+// the theme's inverse text color: readable in a light and a dark theme alike. Each line is a hover
+// group, so the parts around a link light up together and the link stays as it is.
+type TextLit = { scope?: string; color?: string; dimColor?: boolean }
+const litGroup = (name: string) => {
+  const scope = name.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 64)
+
+  return { box: { scope, backgroundColor: 'suggestion' }, text: { scope, color: 'inverseText', dimColor: false } as TextLit }
+}
+const NOT_LIT: { box: undefined; text: TextLit | undefined } = { box: undefined, text: undefined }
 
 // The PR's body as plain lines: blank lines out, each wrapped to the pane's width.
 const descriptionLines = (text: string, width: number) => {
@@ -988,13 +996,13 @@ export const register: Register = on => {
 
     // A row's own text folds and unfolds it, as its arrow does; a build that draws no styled button
     // gets the plain label.
-    const foldText = (key: string, plainLabel: string, styledText: RenderChildren, onPress: () => void) =>
+    const foldText = (key: string, plainLabel: string, styledText: RenderChildren, onPress: () => void, hover: TextLit | undefined) =>
       styled ? (
-        <Button key={key} plain onPress={onPress}>
-          <Text>{styledText}</Text>
+        <Button key={key} plain hover={hover} onPress={onPress}>
+          <Text hover={hover}>{styledText}</Text>
         </Button>
       ) : (
-        <Button key={key} label={plainLabel} plain onPress={onPress} />
+        <Button key={key} label={plainLabel} plain hover={hover} onPress={onPress} />
       )
 
     // One tracked PR on one line: a colored dot, its number, title and what it waits for, with `merge`
@@ -1008,33 +1016,55 @@ export const register: Register = on => {
       const what = `${plainName(pr.repo)} #${plainName(String(pr.number))}`
       const titleWidth = Math.max(8, inner - pr.number.length - pr.waiting.length - acked.length - (withMerge && canMerge(pr) ? 26 : 20))
 
+      // The parts that fold light up together under the pointer; the PR's link between them doesn't.
+      const lit = litGroup(`pr-${group}-${pr.number}`)
+
       return (
         <Box key={`pr-${group}-${pr.number}`} flexDirection="column" paddingLeft={2}>
-          <Box key={`pr-line-${group}-${pr.number}`} flexDirection="row" justifyContent="space-between" hover={LIT}>
+          <Box flexDirection="row" justifyContent="space-between">
             <Box flexDirection="row">
-              <Button
-                key={`pr-toggle-${group}-${pr.number}`}
-                label={isOpen ? '▾' : '▸'}
-                plain
-                onPress={() => void togglePr($, pr, isOpen)}
-              />
-              <Text>
-                {' '}
-                <Text color={color}>● </Text>
-                {isStacked ? `${index + 1}. ` : ''}
-              </Text>
+              <Box flexDirection="row" hover={lit.box}>
+                <Button
+                  key={`pr-toggle-${group}-${pr.number}`}
+                  label={isOpen ? '▾' : '▸'}
+                  plain
+                  hover={lit.text}
+                  onPress={() => void togglePr($, pr, isOpen)}
+                />
+                <Text hover={lit.text}>
+                  {' '}
+                  <Text color={color} hover={lit.text}>
+                    ●{' '}
+                  </Text>
+                  {isStacked ? `${index + 1}. ` : ''}
+                </Text>
+              </Box>
               <Link href={pr.url} label={`#${pr.number}`} />
-              {foldText(
-                `pr-title-${group}-${pr.number}`,
-                ` ${truncate(pr.title, titleWidth)} · ${pr.waiting}${acked}`,
-                [
-                  <Text bold> {truncate(pr.title, titleWidth)}</Text>,
-                  <Text dimColor> · </Text>,
-                  <Text color={color}>{pr.waiting}</Text>,
-                  acked !== '' && <Text color="blue">{acked}</Text>,
-                ],
-                () => void togglePr($, pr, isOpen)
-              )}
+              <Box flexDirection="row" hover={lit.box}>
+                {foldText(
+                  `pr-title-${group}-${pr.number}`,
+                  ` ${truncate(pr.title, titleWidth)} · ${pr.waiting}${acked}`,
+                  [
+                    <Text bold hover={lit.text}>
+                      {' '}
+                      {truncate(pr.title, titleWidth)}
+                    </Text>,
+                    <Text dimColor hover={lit.text}>
+                      {' · '}
+                    </Text>,
+                    <Text color={color} hover={lit.text}>
+                      {pr.waiting}
+                    </Text>,
+                    acked !== '' && (
+                      <Text color="blue" hover={lit.text}>
+                        {acked}
+                      </Text>
+                    ),
+                  ],
+                  () => void togglePr($, pr, isOpen),
+                  lit.text
+                )}
+              </Box>
             </Box>
             <Box flexDirection="row">
               {withMerge && canMerge(pr) && (
@@ -1210,6 +1240,8 @@ export const register: Register = on => {
       const shownDetails = allBuildDetails[build.url]
       const isOpen = shownDetails !== undefined
       const rerunKey = actionKey('rerun', build.url)
+      // The parts that fold light up together under the pointer; the run's link between them doesn't.
+      const buildLit = litGroup(`build-${build.number}`)
 
       // One step per line; its messages fold under a toggle, closed at first.
       const stepRow = (step: BuildStep, index: number) => {
@@ -1218,30 +1250,42 @@ export const register: Register = on => {
         const { mark, color } = STEP_MARKS[step.state] ?? { mark: '◌', color: 'yellow' }
         const hasLines = step.errors.length > 0
         const stepName = truncate(step.name, Math.max(8, inner - step.state.length - 14))
+        // Only a step with messages folds, so only it lights up.
+        const lit = hasLines ? litGroup(`step-${build.number}-${index}`) : NOT_LIT
 
         return (
           <Box key={`build-step-${build.number}-${index}`} flexDirection="column">
-            <Box key={`build-step-line-${build.number}-${index}`} flexDirection="row" hover={hasLines ? LIT : undefined}>
+            <Box flexDirection="row" hover={lit.box}>
               {hasLines ? (
                 <Button
                   key={`build-step-toggle-${build.number}-${index}`}
                   label={isOpen ? '▾' : '▸'}
                   plain
+                  hover={lit.text}
                   onPress={() => void toggleStep($, key, isOpen)}
                 />
               ) : (
                 <Text> </Text>
               )}
-              <Text>
+              <Text hover={lit.text}>
                 {' '}
-                <Text color={color}>{mark}</Text>{' '}
+                <Text color={color} hover={lit.text}>
+                  {mark}
+                </Text>{' '}
               </Text>
               {hasLines ? (
                 foldText(
                   `build-step-title-${build.number}-${index}`,
                   `${stepName} ${step.state}`,
-                  [stepName, <Text dimColor> {step.state}</Text>],
-                  () => void toggleStep($, key, isOpen)
+                  [
+                    stepName,
+                    <Text dimColor hover={lit.text}>
+                      {' '}
+                      {step.state}
+                    </Text>,
+                  ],
+                  () => void toggleStep($, key, isOpen),
+                  lit.text
                 )
               ) : (
                 <Text>
@@ -1272,20 +1316,27 @@ export const register: Register = on => {
         const isOpen = unfoldedSteps[key] ?? ['failed', 'issues', 'canceled'].includes(worst)
         const { mark, color } = STEP_MARKS[worst] ?? { mark: '◌', color: 'yellow' }
         const count = `${group.steps.length} step${group.steps.length === 1 ? '' : 's'}`
+        const lit = litGroup(`job-${build.number}-${jobIndex}`)
 
         return (
           <Box key={`build-job-${build.number}-${jobIndex}`} flexDirection="column">
-            <Box key={`build-job-line-${build.number}-${jobIndex}`} flexDirection="row" hover={LIT}>
+            <Box flexDirection="row" hover={lit.box}>
               <Button
                 key={`build-job-toggle-${build.number}-${jobIndex}`}
                 label={`${isOpen ? '▾' : '▸'} ${truncate(group.job || 'steps', Math.max(8, inner - count.length - 12))}`}
                 plain
+                hover={lit.text}
                 onPress={() => void toggleStep($, key, isOpen)}
               />
-              <Text>
+              <Text hover={lit.text}>
                 {' '}
-                <Text color={color}>{mark}</Text>
-                <Text dimColor> {count}</Text>
+                <Text color={color} hover={lit.text}>
+                  {mark}
+                </Text>
+                <Text dimColor hover={lit.text}>
+                  {' '}
+                  {count}
+                </Text>
               </Text>
             </Box>
             {isOpen && (
@@ -1301,31 +1352,53 @@ export const register: Register = on => {
       // when it did not succeed), then its steps by job.
       return (
         <Box key={`build-${build.number}`} flexDirection="column" paddingLeft={2}>
-          <Box key={`build-line-${build.number}`} flexDirection="row" justifyContent="space-between" hover={LIT}>
+          <Box flexDirection="row" justifyContent="space-between">
             <Box flexDirection="row">
-              <Button
-                key={`build-toggle-${build.number}`}
-                label={isOpen ? '▾' : '▸'}
-                plain
-                onPress={() => void toggleBuildDetails($, build.url)}
-              />
-              <Text>
-                {' '}
-                <Text color={color}>● </Text>
-              </Text>
+              <Box flexDirection="row" hover={buildLit.box}>
+                <Button
+                  key={`build-toggle-${build.number}`}
+                  label={isOpen ? '▾' : '▸'}
+                  plain
+                  hover={buildLit.text}
+                  onPress={() => void toggleBuildDetails($, build.url)}
+                />
+                <Text hover={buildLit.text}>
+                  {' '}
+                  <Text color={color} hover={buildLit.text}>
+                    ●{' '}
+                  </Text>
+                </Text>
+              </Box>
               <Link href={build.url} label={`#${build.number}`} />
-              {foldText(
-                `build-title-${build.number}`,
-                ` ${truncate(build.pipeline, nameWidth)}${branch} · ${build.status}${when ? ` ${when}` : ''}${staleMark}${acked}`,
-                [
-                  <Text bold> {truncate(build.pipeline, nameWidth)}</Text>,
-                  <Text dimColor>{branch} · </Text>,
-                  <Text color={color}>{build.status}</Text>,
-                  <Text dimColor>{when ? ` ${when}` : ''}{staleMark}</Text>,
-                  acked !== '' && <Text color="blue">{acked}</Text>,
-                ],
-                () => void toggleBuildDetails($, build.url)
-              )}
+              <Box flexDirection="row" hover={buildLit.box}>
+                {foldText(
+                  `build-title-${build.number}`,
+                  ` ${truncate(build.pipeline, nameWidth)}${branch} · ${build.status}${when ? ` ${when}` : ''}${staleMark}${acked}`,
+                  [
+                    <Text bold hover={buildLit.text}>
+                      {' '}
+                      {truncate(build.pipeline, nameWidth)}
+                    </Text>,
+                    <Text dimColor hover={buildLit.text}>
+                      {branch} ·{' '}
+                    </Text>,
+                    <Text color={color} hover={buildLit.text}>
+                      {build.status}
+                    </Text>,
+                    <Text dimColor hover={buildLit.text}>
+                      {when ? ` ${when}` : ''}
+                      {staleMark}
+                    </Text>,
+                    acked !== '' && (
+                      <Text color="blue" hover={buildLit.text}>
+                        {acked}
+                      </Text>
+                    ),
+                  ],
+                  () => void toggleBuildDetails($, build.url),
+                  buildLit.text
+                )}
+              </Box>
             </Box>
             <Button key={`build-open-${build.number}`} label="open" dimColor onPress={() => void openPr($, build.url)} />
           </Box>
@@ -1382,14 +1455,19 @@ export const register: Register = on => {
     // One block per repo, in the order its rows come; `hint` is said beside a folded one.
     const repoBlock = (key: string, buttonKey: string, repo: string, count: number, isOpen: boolean, hint: RenderChildren, body: () => RenderChildren, color = 'gray') => (
       <Box key={`block-${key}`} flexDirection="column" paddingLeft={2}>
-        <Box key={`block-line-${key}`} flexDirection="row" hover={LIT}>
-          <Text color={color}>● </Text>
-          <Button
-            key={buttonKey}
-            label={`${isOpen ? '▾' : '▸'} ${truncate(repo, width - 30)} (${count})`}
-            plain
-            onPress={() => void toggleRepo($, key, isOpen)}
-          />
+        <Box flexDirection="row">
+          <Box flexDirection="row" hover={litGroup(`block-${key}`).box}>
+            <Text color={color} hover={litGroup(`block-${key}`).text}>
+              ●{' '}
+            </Text>
+            <Button
+              key={buttonKey}
+              label={`${isOpen ? '▾' : '▸'} ${truncate(repo, width - 30)} (${count})`}
+              plain
+              hover={litGroup(`block-${key}`).text}
+              onPress={() => void toggleRepo($, key, isOpen)}
+            />
+          </Box>
           {hint}
         </Box>
         {isOpen && body()}
