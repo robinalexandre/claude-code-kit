@@ -21,6 +21,8 @@
                                         and track it as reviewed until it is merged
     pr_watch.py merge URL               merge a PR (GitHub: squash if the repo allows it; Azure DevOps: complete)
     pr_watch.py remove URL              stop tracking a PR (and never track it again on its own)
+    pr_watch.py park URL [--note WHY]   keep tracking a PR without reporting its changes
+    pr_watch.py unpark URL              report them again
 
 Tracked PRs live in $PR_WATCH_DIR (default ~/.claude-sync/pr-watch), one JSON file per PR, so the
 config sync carries them to every computer. A merged, abandoned or closed PR is reported once, then
@@ -36,10 +38,11 @@ by default): those they opened, those assigned to them (GitHub), and those they 
 reviewer (tracked as reviewed). Same places as the review requests. A PR the user removed is not
 tracked again on its own (dismissed.txt).
 
-They also look up the pipeline runs the user launched by hand (Azure DevOps: manual builds requested
-by them in the projects of the tracked and recent PRs and of `azureProjects` in config.json; GitHub:
-workflow runs they dispatched in the repos of the tracked and recent PRs and of `githubRepos`):
-running ones and those ended in the last PR_WATCH_BUILD_HOURS (default 24) hours. `check` reports a
+They also look up the user's pipeline runs: those they launched by hand, and the CI their pushes
+started on a branch with no open PR (Azure DevOps: builds requested by them in the projects of the
+tracked and recent PRs and of `azureProjects` in config.json; GitHub: in the repos of the tracked and
+recent PRs, those they pushed to lately, and `githubRepos`): running ones and those ended in the last
+PR_WATCH_BUILD_HOURS (default 24) hours. `check` reports a
 run that ended since the last check, and `status` lists them as `builds`.
 """
 
@@ -438,12 +441,36 @@ BUILD_RUNNING = {"queued", "running"}
 BUILDS_PER_PLACE = 20
 
 
-def ado_manual_builds(org: str, project: str) -> list[dict]:
-    """The project's latest builds queued by hand by the person checking (PR builds stay with their PR)."""
+def ado_my_builds(org: str, project: str) -> list[dict]:
+    """The project's latest builds the person checking queued by hand, and the CI their pushes
+    started on a branch with no open PR (a PR's builds stay with the PR)."""
     base = f"https://dev.azure.com/{org}/{urllib.parse.quote(project)}"
-    found = _http_json(f"{base}/_apis/build/builds?requestedFor={_ado_me(org)}&reasonFilter=manual"
-                       f"&$top={BUILDS_PER_PLACE}&queryOrder=queueTimeDescending&api-version=7.1",
-                       _ado_headers())["value"]  # type: ignore[index]
+
+    def builds(reason: str) -> list[dict]:
+        return _http_json(f"{base}/_apis/build/builds?requestedFor={_ado_me(org)}&reasonFilter={reason}"
+                          f"&$top={BUILDS_PER_PLACE}&queryOrder=queueTimeDescending&api-version=7.1",
+                          _ado_headers())["value"]  # type: ignore[index]
+
+    found = builds("manual")
+    has_pr: dict[tuple[str, str], bool] = {}
+    for reason in ("individualCI", "batchedCI"):
+        try:
+            pushed = builds(reason)
+        except WatchError:
+            continue
+        for build in pushed:
+            repo, ref = (build.get("repository") or {}).get("id", ""), build.get("sourceBranch") or ""
+            if (repo, ref) not in has_pr:
+                try:
+                    has_pr[(repo, ref)] = bool(_http_json(
+                        f"{base}/_apis/git/pullrequests?searchCriteria.repositoryId={repo}"
+                        f"&searchCriteria.sourceRefName={urllib.parse.quote(ref)}&searchCriteria.status=active"
+                        f"&$top=1&api-version=7.1", _ado_headers())["value"])  # type: ignore[index]
+                except WatchError:
+                    has_pr[(repo, ref)] = False
+            if not has_pr[(repo, ref)]:
+                found.append(build)
+    found = sorted(found, key=lambda build: build.get("queueTime") or "", reverse=True)[:BUILDS_PER_PLACE]
     rows = []
     for build in found:
         status = ADO_BUILD_STATES.get(build["status"]) or ADO_BUILD_RESULTS.get(build.get("result") or "", "failed")
@@ -457,6 +484,7 @@ def ado_manual_builds(org: str, project: str) -> list[dict]:
             "branch": (build.get("sourceBranch") or "").removeprefix("refs/heads/"),
             "status": status,
             "requestedBy": (build.get("requestedFor") or {}).get("displayName", ""),
+            "trigger": "manual" if build.get("reason") == "manual" else "push",
             "queued": _stamp(build.get("queueTime") or ""),
             "started": _stamp(build.get("startTime") or ""),
             "ended": _stamp(build.get("finishTime") or "") if status not in BUILD_RUNNING else "",
@@ -474,14 +502,32 @@ def _github_me(headers: dict[str, str]) -> str:
         return _GITHUB_ME[0]
 
 
-def github_manual_runs(owner: str, repo: str) -> list[dict]:
-    """The repo's latest workflow runs the person checking dispatched by hand (none anonymously)."""
+def _github_headers() -> dict[str, str]:
     token = _github_token()
-    if not token:
+    return {"Authorization": f"Bearer {token}", "X-GitHub-Api-Version": "2022-11-28"} if token else {}
+
+
+def github_pushed_repos() -> set[str]:
+    """`owner/repo` of the repos the person checking pushed to in the last BUILD_HOURS hours, from
+    their GitHub activity (private repos included with their token)."""
+    headers = _github_headers()
+    if not headers:
+        return set()
+    events = _http_json(f"https://api.github.com/users/{_github_me(headers)}/events?per_page=100", headers)
+    return {event["repo"]["name"] for event in events  # type: ignore[union-attr]
+            if event.get("type") == "PushEvent" and _recent_enough((event.get("created_at") or "")[:16] + "Z")}
+
+
+def github_my_runs(owner: str, repo: str) -> list[dict]:
+    """The repo's latest workflow runs the person checking dispatched by hand, and those their pushes
+    started on a branch with no open PR (a PR's runs stay with the PR). None anonymously."""
+    headers = _github_headers()
+    if not headers:
         return []
-    headers = {"Authorization": f"Bearer {token}", "X-GitHub-Api-Version": "2022-11-28"}
     found = _http_json(f"https://api.github.com/repos/{owner}/{repo}/actions/runs?actor={_github_me(headers)}"
-                       f"&event=workflow_dispatch&per_page={BUILDS_PER_PLACE}", headers)["workflow_runs"]  # type: ignore[index]
+                       f"&per_page={2 * BUILDS_PER_PLACE}", headers)["workflow_runs"]  # type: ignore[index]
+    found = [run for run in found if run.get("event") == "workflow_dispatch"
+             or (run.get("event") == "push" and not run.get("pull_requests"))][:BUILDS_PER_PLACE]
     rows = []
     for run in found:
         status = GITHUB_RUN_STATES.get(run["status"]) or GITHUB_RUN_RESULTS.get(run.get("conclusion") or "", "failed")
@@ -493,6 +539,7 @@ def github_manual_runs(owner: str, repo: str) -> list[dict]:
             "branch": run.get("head_branch") or "",
             "status": status,
             "requestedBy": (run.get("actor") or {}).get("login", ""),
+            "trigger": "push" if run.get("event") == "push" else "manual",
             "queued": _stamp(run.get("created_at") or ""),
             "started": _stamp(run.get("run_started_at") or ""),
             "ended": _stamp(run.get("updated_at") or "") if status not in BUILD_RUNNING else "",
@@ -647,11 +694,12 @@ def _recent_enough(stamp: str) -> bool:
 
 
 def fetch_builds(entries: list[tuple[Path, dict]]) -> tuple[list[dict], list[str]]:
-    """The user's manual pipeline runs, running ones first (newest queued first), then those ended
-    in the last BUILD_HOURS hours (newest first): (rows, errors).
+    """The user's pipeline runs (by hand, or from their pushes outside a PR), running ones first
+    (newest queued first), then those ended in the last BUILD_HOURS hours (newest first): (rows, errors).
 
-    Asked in the Azure DevOps projects and GitHub repos of the tracked and recent PRs, plus
-    `azureProjects` (`org/project`) and `githubRepos` (`owner/repo`) in config.json.
+    Asked in the Azure DevOps projects and GitHub repos of the tracked and recent PRs, the GitHub
+    repos the user pushed to lately, plus `azureProjects` (`org/project`) and `githubRepos`
+    (`owner/repo`) in config.json.
     """
     projects, repos = config("azureProjects"), config("githubRepos")
     for entry in [entry for _, entry in entries] + done_entries():
@@ -659,9 +707,13 @@ def fetch_builds(entries: list[tuple[Path, dict]]) -> tuple[list[dict], list[str
             projects.add(f"{match['org'] or match['org2']}/{urllib.parse.unquote(match['project'])}")
         elif match := GITHUB_URL.match(entry["url"]):
             repos.add(f"{match['owner']}/{match['repo']}")
+    try:
+        repos |= github_pushed_repos()
+    except (WatchError, KeyError, TypeError):
+        pass
     jobs: list[tuple[str, Callable[[], list[dict]]]] = [
-        (place, partial(ado_manual_builds, *place.split("/", 1))) for place in sorted(projects)]
-    jobs += [(place, partial(github_manual_runs, *place.split("/", 1))) for place in sorted(repos)]
+        (place, partial(ado_my_builds, *place.split("/", 1))) for place in sorted(projects)]
+    jobs += [(place, partial(github_my_runs, *place.split("/", 1))) for place in sorted(repos)]
 
     def one(item: tuple[str, Callable[[], list[dict]]]) -> tuple[str, list[dict], str]:
         place, job = item
@@ -1172,6 +1224,8 @@ def check(peek: bool, quiet: bool = False) -> None:
             errors.append(f"{entry['url']}: {error}")
             continue
         found = changes(entry, now, ignore | {me} - {""}, bots)
+        if entry.get("parked"):
+            found = []
         report += found
         if peek:
             continue
@@ -1286,7 +1340,7 @@ def status(live: bool) -> None:
         match = ADO_URL.match(entry["url"]) or GITHUB_URL.match(entry["url"])
         prefix = f"{label(entry)}: "
         news = [line.removeprefix(prefix) for line in changes(entry, now, ignore | {me} - {""}, bots)] if now else []
-        news = list(dict.fromkeys(entry.get("unread", []) + news))
+        news = [] if entry.get("parked") else list(dict.fromkeys(entry.get("unread", []) + news))
         prs.append({
             "url": entry["url"],
             "repo": match["repo"] if match else "",
@@ -1304,6 +1358,8 @@ def status(live: bool) -> None:
             "waiting": waiting_for(seen),
             "note": entry.get("note", ""),
             "reviewed": bool(entry.get("reviewed")),
+            "parked": bool(entry.get("parked")),
+            "parkedWhy": entry.get("parkedWhy", ""),
             "changes": news,
             "checked": _now() if now else entry.get("checked", ""),
         })
@@ -1433,6 +1489,28 @@ def remove(url: str) -> None:
     print(f"stopped tracking {normalize(url)} (not tracked again on its own; `add` it to track it again)")
 
 
+def park(url: str, why: str) -> None:
+    """Kept and tracked, but quiet: its changes are recorded without being reported, until it is
+    merged or closed (reported once, as usual) or `unpark`ed."""
+    path = entry_path(normalize(url))
+    if not path.exists():
+        raise WatchError(f"not tracked: {url}")
+    entry = json.loads(path.read_text(encoding="utf-8"))
+    save(path, {**entry, "parked": _now(), "parkedWhy": why, "unread": []})
+    print(f"parked {label(entry)}: changes are no longer reported (`unpark` to bring it back)")
+
+
+def unpark(url: str) -> None:
+    path = entry_path(normalize(url))
+    if not path.exists():
+        raise WatchError(f"not tracked: {url}")
+    entry = json.loads(path.read_text(encoding="utf-8"))
+    entry.pop("parked", None)
+    entry.pop("parkedWhy", None)
+    save(path, entry)
+    print(f"unparked {label(entry)}")
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
 
@@ -1468,6 +1546,10 @@ def main(argv: list[str]) -> int:
             merge(args[0])
         elif command == "remove" and args:
             remove(args[0])
+        elif command == "park" and args:
+            park(args[0], args[args.index("--note") + 1] if "--note" in args[1:-1] else "")
+        elif command == "unpark" and args:
+            unpark(args[0])
         else:
             print(__doc__, file=sys.stderr)
             return 2

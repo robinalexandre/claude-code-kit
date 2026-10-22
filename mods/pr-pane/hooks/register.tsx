@@ -421,6 +421,24 @@ const approvePr = ($: EngineInterface, pr: ReviewPr) => actOnPr($, 'approve', pr
 
 const mergePr = ($: EngineInterface, pr: PrRow) => actOnPr($, 'merge', pr, 'Merged')
 
+// Parking only quiets the PR in pr-watch, so one press is enough, and unpark undoes it.
+const setParked = async ($: EngineInterface, pr: PrRow, isParked: boolean) => {
+  const ran = await prWatch($, [isParked ? 'park' : 'unpark', pr.url], 60_000).catch(error => ({
+    exitCode: 1,
+    stdout: '',
+    stderr: String(error),
+  }))
+
+  if (ran.exitCode !== 0) {
+    $.ui.toast(`Could not ${isParked ? 'park' : 'unpark'} #${pr.number}: ${ran.stderr.trim().split('\n')[0]}`)
+
+    return
+  }
+
+  $.ui.toast(`${isParked ? 'Parked' : 'Unparked'} ${pr.repo} #${pr.number}`)
+  await load($, false)
+}
+
 // What the user has to act on: a failing or expired CI, a conflict, a rejection, or a new comment
 // since the last check.
 const needsAttention = (pr: PrRow) =>
@@ -494,7 +512,7 @@ const recentByRepo = (recent: RecentPr[]) => {
 
 // Sections and repo blocks start collapsed, except around a CI that runs: what the user toggles
 // stays that way for the session.
-const repoKey = (section: 'builds' | 'attention' | 'reviews' | 'waiting' | 'approved' | 'recent', repo: string) =>
+const repoKey = (section: 'builds' | 'attention' | 'reviews' | 'waiting' | 'approved' | 'parked' | 'recent', repo: string) =>
   `${section}|${repo}`
 
 const toggleRepo = ($: EngineInterface, key: string, isOpen: boolean) =>
@@ -521,7 +539,7 @@ const togglePr = async ($: EngineInterface, pr: PrRow, isOpen: boolean) => {
 // What the band says the user has to do, most urgent first: red, act on a PR; yellow, a review to
 // give, a run in progress or pr-watch not running; green, a PR to merge; nothing, all waits for others.
 const bandTone = (shown: PrSnapshot | null, isBroken: boolean) => {
-  const prs = shown?.prs ?? []
+  const prs = (shown?.prs ?? []).filter(pr => pr.parked !== true)
 
   if (prs.some(pr => pr.reviewed !== true && needsAttention(pr))) {
     return 'red'
@@ -578,7 +596,7 @@ export const register: Register = on => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const beneath = await next(e)
     const shown = await read($, snapshot)
-    const prs = shown?.prs ?? []
+    const prs = (shown?.prs ?? []).filter(pr => pr.parked !== true)
     const reviews = shown?.reviews?.length ?? 0
     const running = (shown?.builds ?? []).filter(isBuildWatched).length
     const isBroken = (await read($, problem)) !== ''
@@ -643,9 +661,12 @@ export const register: Register = on => {
     const runningBuilds = builds.filter(isBuildWatched).length
     const isBuildsOpen = expanded[repoKey('builds', '*')] ?? runningBuilds > 0
     // By priority: what needs the user, then what waits for others, then what is ready to merge.
-    const attention = prs.filter(pr => pr.reviewed !== true && needsAttention(pr))
-    const approved = prs.filter(pr => !attention.includes(pr) && (pr.reviewed === true || pr.waiting === 'the merge'))
-    const ours = prs.filter(pr => !attention.includes(pr) && !approved.includes(pr))
+    const parked = prs.filter(pr => pr.parked === true)
+    const active = prs.filter(pr => pr.parked !== true)
+    const attention = active.filter(pr => pr.reviewed !== true && needsAttention(pr))
+    const approved = active.filter(pr => !attention.includes(pr) && (pr.reviewed === true || pr.waiting === 'the merge'))
+    const ours = active.filter(pr => !attention.includes(pr) && !approved.includes(pr))
+    const isParkedOpen = expanded[repoKey('parked', '*')] ?? false
     const isApprovedOpen = expanded[repoKey('approved', '*')] ?? hasRunningCi(approved)
     const isWaitingOpen = expanded[repoKey('waiting', '*')] ?? hasRunningCi(ours)
     const openDetails = await read($, openPrs)
@@ -660,7 +681,7 @@ export const register: Register = on => {
     // since the last check.
     const prRow = (pr: PrRow, group: string, index: number, isStacked: boolean, withMerge = false) => {
       const isOpen = openDetails[pr.url] ?? isRunning(pr.checks ?? [])
-      const color = statusColor(pr)
+      const color = pr.parked === true ? 'gray' : statusColor(pr)
       const titleWidth = Math.max(8, inner - pr.number.length - pr.waiting.length - (withMerge && canMerge(pr) ? 26 : 20))
 
       return (
@@ -697,6 +718,10 @@ export const register: Register = on => {
                 )
               )}
               {withMerge && canMerge(pr) && <Text> </Text>}
+              {pr.parked === true && (
+                <Button key={`unpark-${group}-${pr.number}`} label="unpark" dimColor onPress={() => void setParked($, pr, false)} />
+              )}
+              {pr.parked === true && <Text> </Text>}
               <Button key={`open-${group}-${pr.number}`} label="open" dimColor onPress={() => void openPr($, pr.url)} />
             </Box>
           </Box>
@@ -715,9 +740,19 @@ export const register: Register = on => {
             />
           </Box>
         )}
-        <Text dimColor>
-          {truncate([pr.status, pr.ci, votesText(pr.votes), pr.note].filter(part => part !== '').join(' · '), inner)}
-        </Text>
+        <Box flexDirection="row" justifyContent="space-between">
+          <Text dimColor>
+            {truncate(
+              [pr.status, pr.ci, votesText(pr.votes), pr.note, pr.parked === true ? `parked${pr.parkedWhy ? `: ${pr.parkedWhy}` : ''}` : '']
+                .filter(part => part !== '')
+                .join(' · '),
+              inner - 8
+            )}
+          </Text>
+          {pr.parked !== true && (
+            <Button key={`park-${group}-${pr.number}`} label="park" dimColor onPress={() => void setParked($, pr, true)} />
+          )}
+        </Box>
         {(pr.checks ?? []).length > 0 && (() => {
           const checks = pr.checks ?? []
           const isOpen = toggled[pr.url] ?? (isRunning(checks) || hasRequiredFailure(checks))
@@ -809,7 +844,7 @@ export const register: Register = on => {
       const isEnded = !isBuildRunning(build)
       const at = build.status === 'queued' ? endedText(build.queued, nowMs) : isEnded ? endedText(build.ended, nowMs) : ''
       const duration = build.status === 'running' ? minutesText(startedMs, nowMs) : isEnded ? minutesText(startedMs, endedMs(build.ended)) : ''
-      const branch = build.branch ? ` · ${build.branch}` : ''
+      const branch = build.branch ? ` · ${build.trigger === 'push' ? 'push to ' : ''}${build.branch}` : ''
       const staleMark = build.stale === true ? ' · cached' : ''
       const room = inner - build.number.length - branch.length - build.status.length - staleMark.length - 14
       // The pipeline's name comes first: on a narrow pane the duration, then the time, give way.
@@ -964,7 +999,7 @@ export const register: Register = on => {
 
     // A section's PRs, one block per repo in pr-watch's order, each in merge order. The PRs that need
     // the user show open; the others fold unless a CI runs.
-    const repoBlocks = (section: 'attention' | 'waiting' | 'approved', rows: PrRow[], withMerge: boolean) =>
+    const repoBlocks = (section: 'attention' | 'waiting' | 'approved' | 'parked', rows: PrRow[], withMerge: boolean) =>
       byRepo(rows).map(([repo, prsOfRepo]) => {
         const isStacked = prsOfRepo.some(pr => (pr.after ?? '') !== '')
         const key = repoKey(section, repo)
@@ -1128,6 +1163,20 @@ export const register: Register = on => {
               {!isApprovedOpen && hasRunningCi(approved) && <Text color="yellow"> · CI running</Text>}
             </Box>
             {isApprovedOpen && repoBlocks('approved', approved, true)}
+          </Box>
+        )}
+        {parked.length > 0 && (
+          <Box flexDirection="column" marginTop={1}>
+            <Box flexDirection="row">
+              <Text color="gray">● </Text>
+              <Button
+                key="parked"
+                label={`${isParkedOpen ? '▾' : '▸'} Parked, kept but quiet (${parked.length})`}
+                plain
+                onPress={() => void toggleRepo($, repoKey('parked', '*'), isParkedOpen)}
+              />
+            </Box>
+            {isParkedOpen && repoBlocks('parked', parked, false)}
           </Box>
         )}
         {recentCount > 0 && (

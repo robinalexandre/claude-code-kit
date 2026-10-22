@@ -846,3 +846,65 @@ test('no Git Bash anywhere is said in the pane and the band shows PRs ?', async 
   expect(await pane.find({ text: /Git Bash not found: set CLAUDE_CODE_GIT_BASH_PATH/ })).toBeDefined()
   expect(await band.find({ key: 'prs', text: 'PRs ?' })).toBeDefined()
 })
+
+test('a parked PR leaves the attention list and the band, and is unparked from its own section', async ($, on) => {
+  mock.clock(on)
+  const calls: string[][] = []
+  const PARKED = {
+    live: false,
+    prs: [
+      row('3', { ci: 'CI failed', waiting: 'a CI fix', parked: true, parkedWhy: 'kept for reference' }),
+      row('4', { ci: 'CI failed', waiting: 'a CI fix' }),
+    ],
+    errors: [],
+  }
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
+  on('process.run', ($, e) => {
+    calls.push(e.argv.slice(2))
+
+    return ran(0, e.argv[2] === 'status' ? JSON.stringify(PARKED) : '')
+  })
+  on('ui.render', () => Fragment({}))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+
+  await $.command.run(RUN)
+  const band = await $.ui.mount({ plugin: 'pr-pane', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
+  const pane = await mountPane($, 'terminal', 100)
+
+  expect(await band.find({ key: 'prs', text: 'PRs 1 !' })).toBeDefined()
+  expect(await pane.find({ text: 'Needs your attention (1)' })).toBeDefined()
+  expect(await pane.find({ key: 'parked', text: '▸ Parked, kept but quiet (1)' })).toBeDefined()
+
+  await pane.press({ key: 'pr-toggle-shop-4' })
+  await pane.press({ key: 'park-shop-4' })
+
+  expect(calls).toContainEqual(['park', 'https://dev.azure.com/org/project/_git/shop/pullrequest/4'])
+
+  await pane.press({ key: 'parked' })
+  await pane.press({ key: 'parked-repo-shop' })
+  await pane.press({ key: 'pr-toggle-shop-3' })
+
+  expect(await pane.find({ text: /parked: kept for reference/ })).toBeDefined()
+
+  await pane.press({ key: 'unpark-shop-3' })
+
+  expect(calls).toContainEqual(['unpark', 'https://dev.azure.com/org/project/_git/shop/pullrequest/3'])
+})
+
+test('the CI of a push of the user is listed with the runs, marked as a push', async ($, on) => {
+  mock.clock(on)
+  const pushed = {
+    ...BUILDS,
+    builds: [{ ...BUILDS.builds[0], url: 'https://github.com/o/kit/actions/runs/71', repo: 'kit', pipeline: 'tests',
+      number: '71', branch: 'main', trigger: 'push' }],
+  }
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
+  on('process.run', () => ran(0, JSON.stringify(pushed)))
+  on('ui.render', () => Fragment({}))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+
+  await $.command.run(RUN)
+  const pane = await mountPane($, 'terminal', 100)
+
+  expect(await pane.find({ text: /#71 tests · push to main · running/ })).toBeDefined()
+})

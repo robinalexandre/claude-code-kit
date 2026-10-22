@@ -19,6 +19,9 @@ export type PrRow = {
   note: string
   /** Tracked because the user approved it: listed apart until it is merged. */
   reviewed?: boolean
+  /** Kept but quiet (pr-watch park): never in "needs your attention", its changes not reported. */
+  parked?: boolean
+  parkedWhy?: string
   changes: string[]
   checked: string
 }
@@ -51,6 +54,8 @@ export type BuildRow = {
   ended: string
   /** The run's host did not answer: this is the run as last found there. */
   stale?: boolean
+  /** What started it: the user by hand, or a push of theirs; absent on runs recorded before. */
+  trigger?: 'manual' | 'push' | null
 }
 
 export type PrSnapshot = {
