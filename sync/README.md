@@ -102,6 +102,17 @@ On a work computer with a GitHub repo, sign in with a [fine-grained token](https
 
 Edits to `~/.claude/settings.json` (from `/config`, permission prompts, by hand) are saved to `settings.shared.json`, so they reach every computer. To keep one on a single computer, move it to that computer's file. Paths under the home folder are stored as `__HOME__`.
 
+## What each computer runs
+
+Every sync (at most every 30 minutes) writes `inventory/<computer>.json` in the repo: the system and its version, the architecture, Claude Code, git, node, jq, gh, python and bash versions, the plugins and mods installed with their versions, each kit cloned in the dev folder (any repo with a `.claude-plugin/marketplace.json`: branch, last commit, how far from its upstream, files changed) and the last sync commit. So any computer can tell what the others run and when each last synced:
+
+```sh
+bash ~/.claude-sync/inventory.sh show    # one block per computer, then what differs between them
+bash ~/.claude-sync/inventory.sh json    # the same, as JSON
+```
+
+Nothing in it is a secret, but it names your computers and folders: it stays in your private repo.
+
 ## Handoff
 
 Install the `handoff` skill from this kit (`skills/handoff`). At the end of a session: "write a handoff". On the other computer: "pick up the handoff".
@@ -111,4 +122,5 @@ Install the `handoff` skill from this kit (`skills/handoff`). At the end of a se
 ```sh
 bash ~/.claude-sync/sync.sh now      # sync right away
 bash ~/.claude-sync/sync.sh status   # computer, last commit, last error, log
+bash ~/.claude-sync/inventory.sh show   # what every computer runs
 ```

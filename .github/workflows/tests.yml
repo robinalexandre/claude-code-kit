@@ -36,10 +36,11 @@ jobs:
         run: bash tests/plugin-versions.sh "${BASE:-origin/main}"
       - name: Every plugin installed and run
         run: bash tests/plugins.sh
-      - name: Reminders and handoffs
+      - name: Reminders, handoffs and inventory
         run: |
           bash tests/reminders.sh
           bash tests/handoff.sh
+          bash tests/inventory.sh
       - name: Email guard
         run: bash tests/git-identity-guard.sh
       - name: Install in a sandbox

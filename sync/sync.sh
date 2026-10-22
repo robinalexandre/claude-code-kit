@@ -819,6 +819,8 @@ capture() {
     capture_folders || return 1
     capture_memories || return 1
   fi
+  # What this computer runs, for the others to see (inventory.sh); never stops a sync.
+  [ ! -f "$SYNC/inventory.sh" ] || SYNC_DIR="$SYNC" bash "$SYNC/inventory.sh" write > /dev/null 2>&1 || true
 }
 
 apply() {

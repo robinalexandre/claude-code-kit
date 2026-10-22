@@ -13,7 +13,7 @@ LIB="$HERE/../hooks/lib"
 . "$LIB/ask.sh"
 . "$LIB/kit.sh"
 SYNC="$HOME/.claude-sync"
-ENGINE=".gitattributes .gitignore README.md install.ps1 install.sh jq.sh json-merge.sh sync.sh"
+ENGINE=".gitattributes .gitignore README.md install.ps1 install.sh inventory.sh jq.sh json-merge.sh sync.sh"
 MANIFEST="$SYNC/kit-engine.json"
 
 version() { jq -r '.plugins[] | select(.name == "config-sync") | .version // empty' "$HERE/../.claude-plugin/marketplace.json" 2> /dev/null; }
@@ -35,7 +35,7 @@ hashes() {
 put_engine() {
   local f
   for f in $ENGINE; do cp "$HERE/$f" "$SYNC/$f"; done
-  chmod +x "$SYNC/install.sh" "$SYNC/sync.sh"
+  chmod +x "$SYNC/install.sh" "$SYNC/sync.sh" "$SYNC/inventory.sh"
   hashes "$SYNC" | jq -R -s --arg v "$1" '{version: $v, files: (split("\n") | map(select(. != "") | split("\t") | {(.[0]): .[1]}) | add)}' > "$MANIFEST"
 }
 
