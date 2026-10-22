@@ -1,6 +1,6 @@
 # Sets up the Claude Code config sync on Windows. Run it from the cloned repo:
-#   powershell -ExecutionPolicy Bypass -File $HOME\.claude-sync\install.ps1 [-Machine windows] [-DevDir C:\path\to\repos]
-param([string]$Machine = 'windows', [string]$DevDir = '')
+#   powershell -ExecutionPolicy Bypass -File $HOME\.claude-sync\install.ps1 [-Machine work-pc] [-DevDir C:\path\to\repos]
+param([string]$Machine = '', [string]$DevDir = '')
 $ErrorActionPreference = 'Stop'
 
 foreach ($tool in @(@{ Cmd = 'git'; Id = 'Git.Git' }, @{ Cmd = 'jq'; Id = 'jqlang.jq' })) {
@@ -18,6 +18,14 @@ $bash = @(
   'C:\Program Files\Git\bin\bash.exe'
 ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $bash) { throw 'Git Bash (bash.exe) not found. Install Git for Windows.' }
+
+if (-not $Machine) {
+  $Machine = 'windows'
+  $saved = Join-Path $PSScriptRoot '.machine'
+  if (Test-Path $saved) { $Machine = (Get-Content $saved -Raw).Trim() }
+  $answer = Read-Host "Name for this computer in the sync, e.g. home-pc, work-pc [$Machine]"
+  if ($answer) { $Machine = $answer }
+}
 
 if (-not $DevDir) {
   $current = '~/dev'

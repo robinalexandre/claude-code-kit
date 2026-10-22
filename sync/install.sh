@@ -1,7 +1,8 @@
 #!/bin/bash
 # Sets up the Claude Code config sync on this computer. Run it from the cloned repo:
 #   ~/.claude-sync/install.sh [machine-name [dev-folder]]
-# The machine name picks machines/<name>.json (default: mac, windows or linux).
+# The machine name picks machines/<name>.json (default: mac, windows or linux; asked when
+# there is a terminal). A name another computer already uses is refused.
 # The dev folder holds your git repos; without it, the install asks.
 # On the first computer (the repo holds no config yet) it saves this computer's
 # config in the repo; on the next ones it installs the saved config.
@@ -35,6 +36,44 @@ case "$(uname -s)" in
 esac
 
 git config core.autocrlf false
+
+# The computer's name picks its machines/<name>.json and names it everywhere in the sync (reports,
+# reminders, handoffs): two computers must never share one. A name another computer's last report
+# (inventory/<name>.json) claims is refused, unless it is this computer under a hostname that changed.
+this_host=$(hostname 2> /dev/null | tr -d '\r' | head -1)
+mine=$(tr -d '[:space:]' 2> /dev/null < .machine || true)
+host_of() { jq -r '.host // empty' "inventory/$1.json" 2> /dev/null || true; }
+refuse() {
+  echo "$1" >&2
+  [ -t 0 ] || exit 1
+  read -r -p "Another name for this computer: " machine || exit 1
+}
+if [ $# -eq 0 ] && [ -t 0 ]; then
+  machine=${mine:-$machine}
+  for f in machines/*.json; do
+    [ -f "$f" ] || continue
+    name=$(basename "$f" .json)
+    host=$(host_of "$name")
+    echo "  in the sync already: $name${host:+ ($host)}"
+  done
+  read -r -p "Name for this computer in the sync, e.g. home-mac, work-pc [$machine]: " answer || answer=""
+  machine=${answer:-$machine}
+fi
+while :; do
+  case "$machine" in
+    "" | .* | *[!A-Za-z0-9._-]*)
+      refuse "A computer's name takes letters, digits, '.', '_' and '-' only: \"$machine\" won't do."
+      continue
+      ;;
+  esac
+  owner=$(host_of "$machine")
+  [ -z "$owner" ] || [ "$owner" = "$this_host" ] || [ "$machine" = "$mine" ] && break
+  if [ -t 0 ]; then
+    read -r -p "The computer $owner already goes by $machine in the sync. Is $owner this computer? [y/N] " answer || answer=""
+    case "$answer" in [yY]*) break ;; esac
+  fi
+  refuse "The computer $owner already goes by $machine in the sync: pick another name (install.sh <name>)."
+done
 
 # The sync commits under this repo's own git identity, asked once per computer: by default the
 # email the email guard expects for the repo's host, else the global one. A provider's no-reply
