@@ -30,7 +30,7 @@ const readSteps = atom({ plugin: 'pr-pane', key: 'readSteps' } as const, {})
 const openSteps = atom({ plugin: 'pr-pane', key: 'openSteps' } as const, {})
 const armed = atom({ plugin: 'pr-pane', key: 'armed' } as const, '')
 const inFlight = atom({ plugin: 'pr-pane', key: 'busy' } as const, '')
-const isRecentOpen = atom({ plugin: 'pr-pane', key: 'isRecentOpen' } as const, true)
+const isRecentOpen = atom({ plugin: 'pr-pane', key: 'isRecentOpen' } as const, false)
 const openRepos = atom({ plugin: 'pr-pane', key: 'openRepos' } as const, {})
 const openPrs = atom({ plugin: 'pr-pane', key: 'openPrs' } as const, {})
 const readChanges = atom({ plugin: 'pr-pane', key: 'readChanges' } as const, {})
@@ -743,8 +743,7 @@ const recentByRepo = (recent: RecentPr[]) => {
   return byRepo(sorted).map(([repo, rows]) => [repo, rows.slice(0, RECENT_SHOWN)] as const)
 }
 
-// Sections and repo blocks start collapsed, except around a CI that runs: what the user toggles
-// stays that way for the session.
+// Sections and repo blocks start collapsed: what the user toggles stays that way for the session.
 const repoKey = (section: 'builds' | 'attention' | 'reviews' | 'waiting' | 'approved' | 'parked' | 'recent', repo: string) =>
   `${section}|${repo}`
 
@@ -930,16 +929,18 @@ export const register: Register = on => {
     const reviews = shown?.reviews ?? []
     const builds = shown?.builds ?? []
     const runningBuilds = builds.filter(isBuildWatched).length
-    const isBuildsOpen = expanded[repoKey('builds', '*')] ?? (runningBuilds > 0 || builds.some(isRedRun))
+    const isBuildsOpen = expanded[repoKey('builds', '*')] ?? false
     // By priority: what needs the user, then what waits for others, then what is ready to merge.
     const parked = prs.filter(pr => pr.parked === true)
     const active = prs.filter(pr => pr.parked !== true)
     const attention = active.filter(isRedPr)
     const approved = active.filter(pr => !attention.includes(pr) && (pr.reviewed === true || pr.waiting === 'the merge'))
     const ours = active.filter(pr => !attention.includes(pr) && !approved.includes(pr))
+    const isAttentionOpen = expanded[repoKey('attention', '*')] ?? false
+    const isReviewsOpen = expanded[repoKey('reviews', '*')] ?? false
     const isParkedOpen = expanded[repoKey('parked', '*')] ?? false
-    const isApprovedOpen = expanded[repoKey('approved', '*')] ?? hasRunningCi(approved)
-    const isWaitingOpen = expanded[repoKey('waiting', '*')] ?? hasRunningCi(ours)
+    const isApprovedOpen = expanded[repoKey('approved', '*')] ?? false
+    const isWaitingOpen = expanded[repoKey('waiting', '*')] ?? false
     const openDetails = await read($, openPrs)
     const mergeable = approved.filter(canMerge).length
     const summary =
@@ -1311,13 +1312,12 @@ export const register: Register = on => {
       </Box>
     )
 
-    // A section's PRs, one block per repo in pr-watch's order, each in merge order. The PRs that need
-    // the user show open; the others fold unless a CI runs.
+    // A section's PRs, one block per repo in pr-watch's order, each in merge order.
     const repoBlocks = (section: 'attention' | 'waiting' | 'approved' | 'parked', rows: PrRow[], withMerge: boolean) =>
       byRepo(rows).map(([repo, prsOfRepo]) => {
         const isStacked = prsOfRepo.some(pr => (pr.after ?? '') !== '')
         const key = repoKey(section, repo)
-        const isOpen = expanded[key] ?? (section === 'attention' || hasRunningCi(prsOfRepo))
+        const isOpen = expanded[key] ?? false
         const hint = isOpen
           ? isStacked && <Text dimColor> · merge top to bottom</Text>
           : hasRunningCi(prsOfRepo) && <Text color="yellow"> · CI running</Text>
@@ -1370,11 +1370,11 @@ export const register: Register = on => {
       )
     }
 
-    // The runs of each repo, open unless folded by hand; a folded one says what it is doing.
+    // The runs of each repo; a folded one says what it is doing.
     const buildBlocks = () =>
       byRepo(builds).map(([repo, runs]) => {
         const key = repoKey('builds', repo)
-        const isOpen = expanded[key] ?? true
+        const isOpen = expanded[key] ?? false
         const running = runs.filter(isBuildWatched).length
         const hint = isOpen ? null : running > 0 ? (
           <Text color="yellow"> · {running} running</Text>
@@ -1427,23 +1427,31 @@ export const register: Register = on => {
         )}
         {attention.length > 0 && (
           <Box flexDirection="column" marginTop={1}>
-            <Text bold color="red">
-              Needs your attention ({attention.length})
-            </Text>
-            {repoBlocks('attention', attention, false)}
+            <Box flexDirection="row">
+              <Button key="attention" plain onPress={() => void toggleRepo($, repoKey('attention', '*'), isAttentionOpen)}>
+                <Text bold color="red">
+                  {`${isAttentionOpen ? '▾' : '▸'} Needs your attention (${attention.length})`}
+                </Text>
+              </Button>
+              {!isAttentionOpen && hasRunningCi(attention) && <Text color="yellow"> · CI running</Text>}
+            </Box>
+            {isAttentionOpen && repoBlocks('attention', attention, false)}
           </Box>
         )}
         {reviews.length > 0 && (
           <Box flexDirection="column" marginTop={1}>
-            <Text bold color="yellow">
-              Waiting for my review ({reviews.length})
-            </Text>
-            {byRepo(reviews).map(([repo, requests]) => {
-              const key = repoKey('reviews', repo)
-              const isOpen = expanded[key] ?? true
+            <Button key="reviews" plain onPress={() => void toggleRepo($, repoKey('reviews', '*'), isReviewsOpen)}>
+              <Text bold color="yellow">
+                {`${isReviewsOpen ? '▾' : '▸'} Waiting for my review (${reviews.length})`}
+              </Text>
+            </Button>
+            {isReviewsOpen &&
+              byRepo(reviews).map(([repo, requests]) => {
+                const key = repoKey('reviews', repo)
+                const isOpen = expanded[key] ?? false
 
-              return repoBlock(key, `reviews-repo-${repo}`, repo, requests.length, isOpen, null, () => requests.map(reviewRow), 'yellow')
-            })}
+                return repoBlock(key, `reviews-repo-${repo}`, repo, requests.length, isOpen, null, () => requests.map(reviewRow), 'yellow')
+              })}
           </Box>
         )}
         {shown !== null && prs.length === 0 && <Text dimColor>No PR tracked. Ask Claude to watch one.</Text>}

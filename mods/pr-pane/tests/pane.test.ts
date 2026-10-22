@@ -78,8 +78,13 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(calls[0]).toEqual(['bash', '-c', 'exit 0'])
     expect(calls[1]).toEqual(['bash', '/home/someone/.claude/skills/pr-watch/pr-watch.sh', 'status'])
     expect(await pane.find({ text: /^2 PRs/ })).toBeDefined()
-    // The failing one is listed first, always open; the other, closed under its repo.
-    expect(await pane.find({ text: 'Needs your attention (1)' })).toBeDefined()
+    // The failing one is listed first; every section starts folded.
+    expect(await pane.find({ key: 'attention', text: '▸ Needs your attention (1)' })).toBeDefined()
+    expect(await pane.find({ text: 'a CI fix' })).toBeUndefined()
+
+    await pane.press({ key: 'attention' })
+    await pane.press({ key: 'attention-repo-shop' })
+
     expect(await pane.find({ text: 'a CI fix' })).toBeDefined()
     expect(await pane.find({ text: 'a review' })).toBeUndefined()
 
@@ -156,9 +161,15 @@ test('PRs are grouped per repo in merge order and CI checks show while they run,
   const pane = await mountPane($, 'terminal')
 
   // The conflicted PR is listed first, under the red title; the others wait in a closed section.
-  expect(await pane.find({ text: 'Needs your attention (1)' })).toBeDefined()
-  // Grouped per repo too, open: these are the PRs to act on.
-  expect(await pane.find({ key: 'attention-repo-web', text: '▾ web (1)' })).toBeDefined()
+  expect(await pane.find({ key: 'attention', text: '▸ Needs your attention (1)' })).toBeDefined()
+
+  await pane.press({ key: 'attention' })
+
+  // Grouped per repo too, folded like every block.
+  expect(await pane.find({ key: 'attention-repo-web', text: '▸ web (1)' })).toBeDefined()
+
+  await pane.press({ key: 'attention-repo-web' })
+
   expect(await pane.find({ key: 'waiting', text: '▸ Waiting for others (2)' })).toBeDefined()
   expect(await pane.find({ key: 'repo-api' })).toBeUndefined()
   expect(await pane.find({ key: 'repo-web' })).toBeUndefined()
@@ -221,6 +232,8 @@ test('a merge conflict marks the band and the pane asks Claude to rebase and fix
   expect(await band.find({ key: 'prs', text: 'PRs & CI 1 !' })).toBeDefined()
   expect(await bandColor(band)).toBe('red')
 
+  await pane.press({ key: 'attention' })
+  await pane.press({ key: 'attention-repo-shop' })
   await pane.press({ key: 'pr-toggle-shop-9' })
   await pane.press({ key: 'fix-shop-9' })
 
@@ -251,6 +264,8 @@ test('a branch named to give orders reaches the prompt as a plain ref', async ($
 
   await $.command.run(RUN)
   const pane = await mountPane($, 'terminal')
+  await pane.press({ key: 'attention' })
+  await pane.press({ key: 'attention-repo-shop' })
   await pane.press({ key: 'pr-toggle-shop-9' })
   await pane.press({ key: 'fix-shop-9' })
 
@@ -299,7 +314,11 @@ test('a failed check shows its errors, reruns only on a second press, and merged
   await $.command.run(RUN)
   const pane = await mountPane($, 'terminal')
 
-  expect(await pane.find({ key: 'recent', text: '▾ Recently merged or closed (4)' })).toBeDefined()
+  expect(await pane.find({ key: 'recent', text: '▸ Recently merged or closed (4)' })).toBeDefined()
+  expect(await pane.find({ key: 'recent-repo-shop' })).toBeUndefined()
+
+  await pane.press({ key: 'recent' })
+
   expect(await pane.find({ key: 'recent-repo-shop', text: '▸ shop (2)' })).toBeDefined()
   expect(await pane.find({ key: 'recent-repo-api', text: '▸ api (2)' })).toBeDefined()
   expect(await pane.find({ text: /last closed 3\/1/ })).toBeDefined()
@@ -318,6 +337,8 @@ test('a failed check shows its errors, reruns only on a second press, and merged
 
   expect(await pane.find({ text: 'Fixes the nightly build.' })).toBeUndefined()
 
+  await pane.press({ key: 'attention' })
+  await pane.press({ key: 'attention-repo-shop' })
   await pane.press({ key: 'pr-toggle-shop-7' })
 
   // The description sits under the CI block, blank lines dropped.
@@ -391,8 +412,15 @@ test('a PR waiting for my review is listed first: approve on a second press, or 
   // A review to give is something to do, not a problem: yellow, no `!`.
   expect(await band.find({ key: 'prs', text: 'PRs & CI · 1 to review' })).toBeDefined()
   expect(await bandColor(band)).toBe('yellow')
-  expect(await pane.find({ text: 'Waiting for my review (1)' })).toBeDefined()
-  expect(await pane.find({ key: 'reviews-repo-api', text: '▾ api (1)' })).toBeDefined()
+  expect(await pane.find({ key: 'reviews', text: '▸ Waiting for my review (1)' })).toBeDefined()
+  expect(await pane.find({ key: 'reviews-repo-api' })).toBeUndefined()
+
+  await pane.press({ key: 'reviews' })
+
+  expect(await pane.find({ key: 'reviews-repo-api', text: '▸ api (1)' })).toBeDefined()
+
+  await pane.press({ key: 'reviews-repo-api' })
+
   expect(await pane.find({ text: /^by grace · 3\/1/ })).toBeDefined()
   const buttons = (await pane.findAll({ type: 'Button' })).map(element => element.key ?? '')
   expect(buttons.indexOf('review-approve-api-873')).toBeGreaterThan(-1)
@@ -496,7 +524,7 @@ const RUNNING = {
   errors: [],
 }
 
-test('a CI that runs opens the section, the repo block and the PR around it until the user folds them', async ($, on) => {
+test('a CI that runs leaves its section and repo block folded, says so on their title, and shows on the PR', async ($, on) => {
   mock.clock(on)
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
   on('process.run', ($, e) => ran(0, e.argv[2] === 'status' ? JSON.stringify(RUNNING) : ''))
@@ -506,24 +534,23 @@ test('a CI that runs opens the section, the repo block and the PR around it unti
   await $.command.run(RUN)
   const pane = await mountPane($, 'terminal')
 
-  // Nothing to press: the running checks are on screen, the other repo stays closed.
-  expect(await pane.find({ key: 'waiting', text: '▾ Waiting for others (2)' })).toBeDefined()
-  expect(await pane.find({ key: 'repo-api', text: '▾ api (1)' })).toBeDefined()
-  expect(await pane.find({ key: 'repo-web', text: '▸ web (1)' })).toBeDefined()
-  expect(await pane.find({ key: 'ci-api-5', text: '▾ CI 1/2 running' })).toBeDefined()
-  expect(await pane.find({ text: /^ · CI running$/ })).toBeUndefined()
-
-  await pane.press({ key: 'repo-api' })
-
-  expect(await pane.find({ key: 'repo-api', text: '▸ api (1)' })).toBeDefined()
-  expect(await pane.find({ key: 'ci-api-5' })).toBeUndefined()
+  expect(await pane.find({ key: 'waiting', text: '▸ Waiting for others (2)' })).toBeDefined()
+  expect(await pane.find({ key: 'repo-api' })).toBeUndefined()
   expect(await pane.find({ text: /^ · CI running$/ })).toBeDefined()
 
   await pane.press({ key: 'waiting' })
 
-  expect(await pane.find({ key: 'waiting', text: '▸ Waiting for others (2)' })).toBeDefined()
-  expect(await pane.find({ key: 'repo-api' })).toBeUndefined()
+  expect(await pane.find({ key: 'repo-api', text: '▸ api (1)' })).toBeDefined()
+  expect(await pane.find({ key: 'repo-web', text: '▸ web (1)' })).toBeDefined()
+  expect(await pane.find({ key: 'ci-api-5' })).toBeUndefined()
   expect(await pane.find({ text: /^ · CI running$/ })).toBeDefined()
+
+  await pane.press({ key: 'repo-api' })
+
+  // The running checks unfold under the PR at once.
+  expect(await pane.find({ key: 'repo-api', text: '▾ api (1)' })).toBeDefined()
+  expect(await pane.find({ key: 'ci-api-5', text: '▾ CI 1/2 running' })).toBeDefined()
+  expect(await pane.find({ text: /^ · CI running$/ })).toBeUndefined()
 })
 
 const BUILDS = {
@@ -577,7 +604,7 @@ const BUILD_DETAILS = {
   ],
 }
 
-test('the pipeline runs the user launched come first, open while one runs, and refresh every minute', async ($, on) => {
+test('the pipeline runs the user launched come first, folded with what runs on the title, and refresh every minute', async ($, on) => {
   const clock = mock.clock(on)
   const calls: string[] = []
   const submitted: string[] = []
@@ -611,23 +638,25 @@ test('the pipeline runs the user launched come first, open while one runs, and r
   // The failed run counts: it needs the user.
   expect(await band.find({ key: 'prs', text: 'PRs & CI 1 ! · 1 running' })).toBeDefined()
   expect(await bandColor(band)).toBe('red')
-  // The section sits above the PRs, open because a run is in progress.
-  expect(await pane.find({ key: 'builds', text: '▾ Pipeline runs (3)' })).toBeDefined()
+  // The section sits above the PRs, folded, its title saying a run is in progress.
+  expect(await pane.find({ key: 'builds', text: '▸ Pipeline runs (3)' })).toBeDefined()
+  expect(await pane.find({ text: /^ · 1 running$/ })).toBeDefined()
+
+  await pane.press({ key: 'builds' })
+
   const buttons = (await pane.findAll({ type: 'Button' })).map(element => element.key ?? '')
   expect(buttons.indexOf('builds')).toBeLessThan(buttons.indexOf('waiting'))
   // One block per repo, the one with a running run first.
   expect(buttons.indexOf('builds-repo-project')).toBeLessThan(buttons.indexOf('builds-repo-shop'))
-  expect(await pane.find({ key: 'builds-repo-project', text: '▾ project (2)' })).toBeDefined()
-  expect(await pane.find({ text: /#70125 api-packaging · develop · running/ })).toBeDefined()
-
-  await pane.press({ key: 'builds-repo-shop' })
-
+  expect(await pane.find({ key: 'builds-repo-project', text: '▸ project (2)' })).toBeDefined()
   expect(await pane.find({ key: 'builds-repo-shop', text: '▸ shop (1)' })).toBeDefined()
   expect(await pane.find({ text: /^ · last succeeded / })).toBeDefined()
   expect(await pane.find({ key: 'build-toggle-42' })).toBeUndefined()
 
+  await pane.press({ key: 'builds-repo-project' })
   await pane.press({ key: 'builds-repo-shop' })
 
+  expect(await pane.find({ text: /#70125 api-packaging · develop · running/ })).toBeDefined()
   expect(await pane.find({ text: /#42 Deploy · main · succeeded .* · 8 min/ })).toBeDefined()
   // Every run unfolds from its line; the actions sit inside, a diagnosis only when it did not succeed.
   expect(await pane.find({ key: 'build-toggle-42', text: '▸' })).toBeDefined()
@@ -734,6 +763,7 @@ test('a run whose host did not answer is shown as cached and not watched', async
   expect(await pane.find({ key: 'builds', text: '▸ Pipeline runs (2)' })).toBeDefined()
 
   await pane.press({ key: 'builds' })
+  await pane.press({ key: 'builds-repo-project' })
 
   expect(await pane.find({ text: /#70125 api-packaging · develop · running · cached$/ })).toBeDefined()
 
@@ -841,6 +871,10 @@ test('opening a PR with a new comment reads it: pr-watch clears it, the pane kee
   const pane = await mountPane($, 'terminal')
 
   expect(await bandColor(band)).toBe('red')
+
+  await pane.press({ key: 'attention' })
+  await pane.press({ key: 'attention-repo-shop' })
+
   expect(await pane.find({ key: 'pr-toggle-shop-4' })).toBeDefined()
 
   await pane.press({ key: 'pr-toggle-shop-4' })
@@ -947,9 +981,11 @@ test('a parked PR leaves the attention list and the band, and is unparked from i
   const pane = await mountPane($, 'terminal', 100)
 
   expect(await band.find({ key: 'prs', text: 'PRs & CI 1 !' })).toBeDefined()
-  expect(await pane.find({ text: 'Needs your attention (1)' })).toBeDefined()
+  expect(await pane.find({ key: 'attention', text: '▸ Needs your attention (1)' })).toBeDefined()
   expect(await pane.find({ key: 'parked', text: '▸ Parked, kept but quiet (1)' })).toBeDefined()
 
+  await pane.press({ key: 'attention' })
+  await pane.press({ key: 'attention-repo-shop' })
   await pane.press({ key: 'pr-toggle-shop-4' })
   await pane.press({ key: 'park-shop-4' })
 
@@ -1005,7 +1041,7 @@ test('an acknowledged alert turns blue, leaves the count and the colors above it
 
   // #6 and the failed run need the user; #5 was acknowledged.
   expect(await band.find({ key: 'prs', text: 'PRs & CI 2 !' })).toBeDefined()
-  expect(await pane.find({ text: 'Needs your attention (1)' })).toBeDefined()
+  expect(await pane.find({ key: 'attention', text: '▸ Needs your attention (1)' })).toBeDefined()
 
   // Folded, "Waiting for others" holds the acknowledged #5 (blue) and #7 (yellow): it is yellow.
   const waiting = await pane.find({ key: 'waiting' })
@@ -1024,6 +1060,8 @@ test('an acknowledged alert turns blue, leaves the count and the colors above it
 
   expect(calls).toContainEqual(['unack', 'https://dev.azure.com/org/project/_git/shop/pullrequest/5'])
 
+  await pane.press({ key: 'attention' })
+  await pane.press({ key: 'attention-repo-shop' })
   await pane.press({ key: 'pr-toggle-shop-6' })
   await pane.press({ key: 'remind-shop-6' })
 
@@ -1034,7 +1072,8 @@ test('an acknowledged alert turns blue, leaves the count and the colors above it
 
   expect(calls.some(call => call[0] === 'ack' && call[1] === 'https://dev.azure.com/org/project/_git/shop/pullrequest/6' && call[2] === '--alert')).toBe(true)
 
-
+  await pane.press({ key: 'builds' })
+  await pane.press({ key: 'builds-repo-project' })
   await pane.press({ key: 'build-toggle-70125' })
   await pane.press({ key: 'build-ack-70125' })
 
@@ -1080,6 +1119,8 @@ test('the CI of a push of the user is listed with the runs, marked as a push', a
 
   await $.command.run(RUN)
   const pane = await mountPane($, 'terminal', 100)
+  await pane.press({ key: 'builds' })
+  await pane.press({ key: 'builds-repo-kit' })
 
   expect(await pane.find({ text: /#71 tests · push to main · running/ })).toBeDefined()
 })
@@ -1120,7 +1161,7 @@ test('a cached reload keeps what a live status found newer, and a failed live st
   recorded.prs = [row('1', { waiting: 'changes from us', checked: '2026-01-01T12:00Z' })]
   await pane.press({ key: 'refresh' })
 
-  expect(await pane.find({ text: 'Needs your attention (1)' })).toBeDefined()
+  expect(await pane.find({ key: 'attention', text: '▸ Needs your attention (1)' })).toBeDefined()
 })
 
 test('an unfolded run still going is read again with each live status, and the pane refreshes by itself', async ($, on) => {
@@ -1145,6 +1186,8 @@ test('an unfolded run still going is read again with each live status, and the p
 
   await $.command.run(RUN)
   const pane = await mountPane($, 'terminal', 100)
+  await pane.press({ key: 'builds' })
+  await pane.press({ key: 'builds-repo-project' })
   await pane.press({ key: 'build-toggle-70125' })
   await pane.press({ key: 'build-job-toggle-70125-0' })
 

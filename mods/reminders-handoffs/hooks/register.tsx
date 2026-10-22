@@ -584,7 +584,7 @@ export const register: Register = on => {
 
       return groups.map(([name, members]) => {
         const key = `${section}|${name}`
-        const isOpen = sections[key] ?? true
+        const isOpen = sections[key] ?? false
 
         return (
           <Box key={`group-${key}`} flexDirection="column" paddingLeft={2}>
@@ -597,8 +597,9 @@ export const register: Register = on => {
       })
     }
 
-    const section = <T,>(id: string, title: string, isOpenAtFirst: boolean, rows: T[], groupOf: (row: T) => string, draw: (row: T) => unknown) => {
-      const isOpen = sections[id] ?? isOpenAtFirst
+    // Sections and groups start folded; what the user unfolds stays so for the session.
+    const section = <T,>(id: string, title: string, rows: T[], groupOf: (row: T) => string, draw: (row: T) => unknown) => {
+      const isOpen = sections[id] ?? false
 
       return (
         <Box key={`section-${id}`} flexDirection="column" marginTop={1}>
@@ -622,9 +623,9 @@ export const register: Register = on => {
       const all = shownReminders ?? []
 
       return [
-        section('now', 'Now', true, all.filter(one => reminderSection(one) === 'now').sort(byNext), reminderGroup, one => reminderRow(one, 'yellow')),
-        section('upcoming', 'Upcoming', true, all.filter(one => reminderSection(one) === 'upcoming').sort(byNext), reminderGroup, one => reminderRow(one, 'cyan')),
-        section('past', 'Past', false, all.filter(one => reminderSection(one) === 'past').sort(byClosed), reminderGroup, one => reminderRow(one, 'gray')),
+        section('now', 'Now', all.filter(one => reminderSection(one) === 'now').sort(byNext), reminderGroup, one => reminderRow(one, 'yellow')),
+        section('upcoming', 'Upcoming', all.filter(one => reminderSection(one) === 'upcoming').sort(byNext), reminderGroup, one => reminderRow(one, 'cyan')),
+        section('past', 'Past', all.filter(one => reminderSection(one) === 'past').sort(byClosed), reminderGroup, one => reminderRow(one, 'gray')),
       ]
     }
 
@@ -633,8 +634,8 @@ export const register: Register = on => {
       const byDate = (one: Handoff, other: Handoff) => (other.date ?? '').localeCompare(one.date ?? '')
 
       return [
-        section('open-notes', 'Open', true, all.filter(note => note.state === 'open').sort(byDate), handoffGroup, note => handoffRow(note, 'yellow')),
-        section('done-notes', 'Done', false, all.filter(note => note.state !== 'open').sort(byClosed), handoffGroup, note => handoffRow(note, 'gray')),
+        section('open-notes', 'Open', all.filter(note => note.state === 'open').sort(byDate), handoffGroup, note => handoffRow(note, 'yellow')),
+        section('done-notes', 'Done', all.filter(note => note.state !== 'open').sort(byClosed), handoffGroup, note => handoffRow(note, 'gray')),
       ]
     }
 

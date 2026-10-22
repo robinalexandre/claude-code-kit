@@ -85,11 +85,17 @@ test('/reminders lists them by section, done closes a repeating one for today', 
   expect(calls).toContainEqual(['bash', REMINDERS, 'json', '/home/someone/dev/shop'])
   // Only the reminders skill is installed: no tabs.
   expect(await pane.find({ key: 'tab-reminders' })).toBeUndefined()
-  expect(await pane.find({ text: '▾ Now (1)' })).toBeDefined()
-  expect(await pane.find({ text: ' · now' })).toBeDefined()
-  expect(await pane.find({ text: '▾ Upcoming (1)' })).toBeDefined()
-  expect(await pane.find({ text: /02\/11/ })).toBeDefined()
+  // Every section starts folded.
+  expect(await pane.find({ text: '▸ Now (1)' })).toBeDefined()
+  expect(await pane.find({ text: '▸ Upcoming (1)' })).toBeDefined()
   expect(await pane.find({ text: '▸ Past (1)' })).toBeDefined()
+  expect(await pane.find({ text: ' · now' })).toBeUndefined()
+
+  await pane.press({ key: 'now' })
+  await pane.press({ key: 'upcoming' })
+
+  expect(await pane.find({ text: ' · now' })).toBeDefined()
+  expect(await pane.find({ text: /02\/11/ })).toBeDefined()
   expect(await pane.find({ text: /Old one/ })).toBeUndefined()
 
   await pane.press({ key: 'toggle-timesheet' })
@@ -113,6 +119,7 @@ test('stop and delete ask for a second press', async ($, on) => {
   await $.command.run(command('reminders-pane'))
   const pane = await mountPane($)
 
+  await pane.press({ key: 'now' })
   await pane.press({ key: 'stop-timesheet' })
 
   expect(calls.some(argv => argv[2] === 'stop')).toBe(false)
@@ -130,7 +137,7 @@ test('stop and delete ask for a second press', async ($, on) => {
 })
 
 test('several groups in a section each get a title that folds them', async ($, on) => {
-  const work = { ...LATER, id: 'review', title: 'Review the plan', group: 'Covea' }
+  const work = { ...LATER, id: 'review', title: 'Review the plan', group: 'Work' }
   const shop = { ...LATER, id: 'deploy', title: 'Deploy the shop', state: 'elsewhere', where: 'dev/shop', machine: 'mac' }
   answerBeneath(on, { reminders: [LATER, work, shop], handoffs: [], installed: [REMINDERS] }, [])
 
@@ -138,16 +145,20 @@ test('several groups in a section each get a title that folds them', async ($, o
   await $.command.run(command('reminders-pane'))
   const pane = await mountPane($)
 
+  await pane.press({ key: 'upcoming' })
+
   expect(await pane.find({ text: '▾ Upcoming (3)' })).toBeDefined()
-  expect(await pane.find({ text: '▾ Covea (1)' })).toBeDefined()
-  expect(await pane.find({ text: '▾ shop (1)' })).toBeDefined()
-  expect(await pane.find({ text: '▾ General (1)' })).toBeDefined()
-  expect(await pane.find({ text: /only in shop on mac/ })).toBeDefined()
-
-  await pane.press({ key: 'group-upcoming-Covea' })
-
-  expect(await pane.find({ text: '▸ Covea (1)' })).toBeDefined()
+  expect(await pane.find({ text: '▸ Work (1)' })).toBeDefined()
+  expect(await pane.find({ text: '▸ shop (1)' })).toBeDefined()
+  expect(await pane.find({ text: '▸ General (1)' })).toBeDefined()
   expect(await pane.find({ text: /Review the plan/ })).toBeUndefined()
+
+  await pane.press({ key: 'group-upcoming-Work' })
+  await pane.press({ key: 'group-upcoming-shop' })
+
+  expect(await pane.find({ text: '▾ Work (1)' })).toBeDefined()
+  expect(await pane.find({ text: /Review the plan/ })).toBeDefined()
+  expect(await pane.find({ text: /only in shop on mac/ })).toBeDefined()
 })
 
 test('pick hands a reminder to the session; restore puts a past one back', async ($, on) => {
@@ -160,6 +171,7 @@ test('pick hands a reminder to the session; restore puts a past one back', async
   await $.command.run(command('reminders-pane'))
   const pane = await mountPane($)
 
+  await pane.press({ key: 'now' })
   await pane.press({ key: 'pick-timesheet' })
 
   expect(submitted).toEqual(['Let\'s do the reminder timesheet now: "Fill the timesheet".'])
@@ -180,6 +192,10 @@ test('with both skills, a tab each; pick hands the note to the session, cancel a
   await $.session.start(START)
   await $.command.run(command('handoffs-pane'))
   const pane = await mountPane($)
+
+  expect(await pane.find({ text: '▸ Open (1)' })).toBeDefined()
+
+  await pane.press({ key: 'open-notes' })
 
   const found = [
     await pane.find({ key: 'tab-reminders', text: 'Reminders (1)' }),
@@ -205,6 +221,7 @@ test('with both skills, a tab each; pick hands the note to the session, cancel a
   expect(calls).toContainEqual(['bash', HANDOFF, 'cancel', 'migration'])
 
   await pane.press({ key: 'tab-reminders' })
+  await pane.press({ key: 'upcoming' })
 
   expect(await pane.find({ text: /Dentist/ })).toBeDefined()
 })
