@@ -9,8 +9,51 @@ const COMMAND = 'prompts'
 const BAND_COUNT = 2
 const KEPT = 1000
 const WAITING_KEPT = 20
-const HISTORY_BUTTON_WIDTH = 12
 const JUMP_ICON = '↗'
+
+// The band's buttons share one row under everything above the prompt, whatever order the mods
+// draw in: each takes that row out of what the mods beneath drew, adds its own button, and sorts
+// them by key (band-1-history, band-2-prs, band-3-reminders).
+const BAND_ROW = 'band-buttons'
+
+type Drawn = { type?: string; props?: { key?: string }; children?: unknown[] }
+
+const keyOf = (node: unknown) => (node !== null && typeof node === 'object' ? ((node as Drawn).props?.key ?? '') : '')
+
+const byBandKey = (one: unknown, other: unknown) => keyOf(one).localeCompare(keyOf(other))
+
+const takeBandRow = (tree: unknown): { rest: unknown; buttons: unknown[] } => {
+  if (Array.isArray(tree)) {
+    let buttons: unknown[] = []
+    const rest = tree.map(child => {
+      if (buttons.length > 0) {
+        return child
+      }
+
+      const taken = takeBandRow(child)
+      buttons = taken.buttons
+
+      return taken.rest
+    })
+
+    // The engine reads every child of a drawn tree: the row taken out leaves no hole.
+    return { rest: rest.filter(child => child !== null && child !== undefined), buttons }
+  }
+
+  const node = tree as Drawn | null
+
+  if (node === null || typeof node !== 'object' || !Array.isArray(node.children)) {
+    return { rest: tree, buttons: [] }
+  }
+
+  if (node.props?.key === BAND_ROW) {
+    return { rest: null, buttons: node.children.flat(Infinity) }
+  }
+
+  const taken = takeBandRow(node.children)
+
+  return taken.buttons.length > 0 ? { rest: { ...node, children: taken.rest }, buttons: taken.buttons } : { rest: tree, buttons: [] }
+}
 
 const prompts = atom({ plugin: 'recent-prompts', key: 'prompts' } as const, [])
 const query = atom({ plugin: 'recent-prompts', key: 'query' } as const, '')
@@ -198,28 +241,33 @@ export const register: Register = on => {
     }
 
     const { Box, Button, Text } = $.ui.resolve(e)
-    const width = Math.max(10, e.props.bodyColumns - 2 - HISTORY_BUTTON_WIDTH)
+    const width = Math.max(10, e.props.bodyColumns - 4)
+
+    const { rest, buttons } = takeBandRow(beneath)
+    const mine = (
+      <Box key="band-1-history" flexDirection="row">
+        <Button key="history" label="history" dimColor onPress={() => void toggleHistory($)} />
+      </Box>
+    )
 
     return (
       <Box flexDirection="column">
         {recent.map((prompt, index) => (
-          <Box key={`band-${index}`} flexDirection="row" justifyContent="space-between">
-            <Box flexDirection="row">
-              <Text color="cyan">❯ </Text>
-              <Button
-                key={`prompt-${index}`}
-                label={truncate(flatten(prompt.text), width)}
-                plain
-                dimColor
-                onPress={() => void jump($, prompt.id)}
-              />
-            </Box>
-            {index === recent.length - 1 && (
-              <Button key="history" label="history" dimColor onPress={() => void toggleHistory($)} />
-            )}
+          <Box key={`band-${index}`} flexDirection="row">
+            <Text color="cyan">❯ </Text>
+            <Button
+              key={`prompt-${index}`}
+              label={truncate(flatten(prompt.text), width)}
+              plain
+              dimColor
+              onPress={() => void jump($, prompt.id)}
+            />
           </Box>
         ))}
-        {beneath}
+        {rest as never}
+        <Box key={BAND_ROW} flexDirection="row" gap={2}>
+          {[...buttons, mine].sort(byBandKey) as never}
+        </Box>
       </Box>
     )
   })

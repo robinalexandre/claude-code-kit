@@ -57,6 +57,50 @@ const isRedRun = (build: BuildRow) => !build.ack && build.stale !== true && buil
 
 const BAND_NAME = 'PRs & CI'
 
+// The band's buttons share one row under everything above the prompt, whatever order the mods
+// draw in: each takes that row out of what the mods beneath drew, adds its own button, and sorts
+// them by key (band-1-history, band-2-prs, band-3-reminders).
+const BAND_ROW = 'band-buttons'
+
+type Drawn = { type?: string; props?: { key?: string }; children?: unknown[] }
+
+const keyOf = (node: unknown) => (node !== null && typeof node === 'object' ? ((node as Drawn).props?.key ?? '') : '')
+
+const byBandKey = (one: unknown, other: unknown) => keyOf(one).localeCompare(keyOf(other))
+
+const takeBandRow = (tree: unknown): { rest: unknown; buttons: unknown[] } => {
+  if (Array.isArray(tree)) {
+    let buttons: unknown[] = []
+    const rest = tree.map(child => {
+      if (buttons.length > 0) {
+        return child
+      }
+
+      const taken = takeBandRow(child)
+      buttons = taken.buttons
+
+      return taken.rest
+    })
+
+    // The engine reads every child of a drawn tree: the row taken out leaves no hole.
+    return { rest: rest.filter(child => child !== null && child !== undefined), buttons }
+  }
+
+  const node = tree as Drawn | null
+
+  if (node === null || typeof node !== 'object' || !Array.isArray(node.children)) {
+    return { rest: tree, buttons: [] }
+  }
+
+  if (node.props?.key === BAND_ROW) {
+    return { rest: null, buttons: node.children.flat(Infinity) }
+  }
+
+  const taken = takeBandRow(node.children)
+
+  return taken.buttons.length > 0 ? { rest: { ...node, children: taken.rest }, buttons: taken.buttons } : { rest: tree, buttons: [] }
+}
+
 const COLOR_RANK: Record<string, number> = { red: 3, yellow: 2, green: 1 }
 
 // A folded block or section wears the worst color of what it holds: red, then yellow, then green.
@@ -731,14 +775,19 @@ export const register: Register = on => {
       `${running > 0 ? ` · ${running} running` : ''}`
     const text = isBroken ? `${BAND_NAME} ?` : label
 
+    const { rest, buttons } = takeBandRow(beneath)
+    const mine = (
+      <Box key="band-2-prs" flexDirection="row">
+        {tone === undefined ? null : <Text color={tone} bold={tone === 'red'}>● </Text>}
+        <Button key="prs" label={text} dimColor={tone === undefined} onPress={() => void openPane($)} />
+      </Box>
+    )
+
     return (
-      <Box flexDirection="row" justifyContent="space-between" alignItems="flex-start">
-        <Box flexDirection="column" flexShrink={1}>
-          {beneath}
-        </Box>
-        <Box flexDirection="row" flexShrink={0}>
-          {tone === undefined ? null : <Text color={tone} bold={tone === 'red'}>● </Text>}
-          <Button key="prs" label={text} dimColor={tone === undefined} onPress={() => void openPane($)} />
+      <Box flexDirection="column">
+        {rest as never}
+        <Box key={BAND_ROW} flexDirection="row" gap={2}>
+          {[...buttons, mine].sort(byBandKey) as never}
         </Box>
       </Box>
     )

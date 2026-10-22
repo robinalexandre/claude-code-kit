@@ -38,12 +38,12 @@ const NOTE = {
 
 type World = { reminders: object[]; handoffs: object[]; installed: string[] }
 
-const answerBeneath = (on: On, world: World, calls: string[][], submitted: string[] = []) => {
+const answerBeneath = (on: On, world: World, calls: string[][], submitted: string[] = [], isNameTaken = false) => {
   mock.clock(on)
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
   // The engine hands the path on as the system writes it (C:\home\... on Windows).
   on('fs.exists', ($, e) => ({ value: world.installed.some(path => e.path.replace(/\\/g, '/').endsWith(path)) }))
-  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  on('command.register', ($, e) => (isNameTaken ? { deny: `it is the user's /${e.name}` } : { value: { command: e.name } }))
   on('session.cwd', () => ({ value: '/home/someone/dev/shop' }))
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('process.run', ($, e) => {
@@ -76,7 +76,7 @@ test('/reminders lists them by section, done closes a repeating one for today', 
   answerBeneath(on, world, calls)
 
   await $.session.start(START)
-  await $.command.run(command('reminders'))
+  await $.command.run(command('reminders-pane'))
   const pane = await mountPane($)
 
   expect(calls).toContainEqual(['bash', REMINDERS, 'json', '/home/someone/dev/shop'])
@@ -107,7 +107,7 @@ test('stop and delete ask for a second press', async ($, on) => {
   answerBeneath(on, { reminders: [WEEKLY, PAST], handoffs: [], installed: [REMINDERS] }, calls)
 
   await $.session.start(START)
-  await $.command.run(command('reminders'))
+  await $.command.run(command('reminders-pane'))
   const pane = await mountPane($)
 
   await pane.press({ key: 'stop-timesheet' })
@@ -132,7 +132,7 @@ test('several groups in a section each get a title that folds them', async ($, o
   answerBeneath(on, { reminders: [LATER, work, shop], handoffs: [], installed: [REMINDERS] }, [])
 
   await $.session.start(START)
-  await $.command.run(command('reminders'))
+  await $.command.run(command('reminders-pane'))
   const pane = await mountPane($)
 
   expect(await pane.find({ text: '▾ Upcoming (3)' })).toBeDefined()
@@ -154,7 +154,7 @@ test('pick hands a reminder to the session; restore puts a past one back', async
   answerBeneath(on, world, calls, submitted)
 
   await $.session.start(START)
-  await $.command.run(command('reminders'))
+  await $.command.run(command('reminders-pane'))
   const pane = await mountPane($)
 
   await pane.press({ key: 'pick-timesheet' })
@@ -175,7 +175,7 @@ test('with both skills, a tab each; pick hands the note to the session, cancel a
   answerBeneath(on, { reminders: [LATER], handoffs: [NOTE], installed: [REMINDERS, HANDOFF] }, calls, submitted)
 
   await $.session.start(START)
-  await $.command.run(command('handoffs'))
+  await $.command.run(command('handoffs-pane'))
   const pane = await mountPane($)
 
   const found = [
@@ -211,22 +211,67 @@ test('the band is named after the skills installed, and absent with nothing in t
   answerBeneath(on, world, [])
 
   await $.session.start(START)
-  await $.command.run(command('reminders'))
+  await $.command.run(command('reminders-pane'))
 
   expect(await (await mountBand($)).find({ key: 'reminders-handoffs', text: 'Reminders 1 now · Handoffs 1' })).toBeDefined()
 
   world.reminders = []
   world.handoffs = []
-  await $.command.run(command('reminders'))
+  await $.command.run(command('reminders-pane'))
 
   expect(await (await mountBand($)).find({ key: 'reminders-handoffs' })).toBeUndefined()
+})
+
+test('the band button joins the shared row of the mods beneath, in key order', async ($, on) => {
+  // What two other mods drew beneath: a history line, then the shared row with their buttons.
+  // Answered before answerBeneath's catch-all, which would draw nothing.
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Box, Button, Text } = $.ui.resolve(e)
+
+    return Box({
+      flexDirection: 'column',
+      children: [
+        Text({ children: '❯ last message' }),
+        Box({
+          key: 'band-buttons',
+          flexDirection: 'row',
+          children: [
+            Box({ key: 'band-2-prs', children: Button({ key: 'prs', label: 'PRs & CI', onPress: () => undefined }) }),
+            Box({ key: 'band-1-history', children: Button({ key: 'history', label: 'history', onPress: () => undefined }) }),
+          ],
+        }),
+      ],
+    })
+  })
+  answerBeneath(on, { reminders: [WEEKLY], handoffs: [], installed: [REMINDERS] }, [])
+
+  await $.session.start(START)
+  await $.command.run(command('reminders-pane'))
+  const band = await mountBand($)
+  const rows = await band.findAll({ key: 'band-buttons' })
+  const drawn = JSON.stringify(rows[0] ?? {})
+  const order = ['band-1-history', 'band-2-prs', 'band-3-reminders'].map(key => drawn.indexOf(key))
+
+  expect(rows).toHaveLength(1)
+  expect(order.every((at, index) => at >= 0 && (index === 0 || at > (order[index - 1] ?? 0)))).toBe(true)
+  expect(await band.find({ text: '❯ last message' })).toBeDefined()
+})
+
+test('a command name already taken does not stop the session start', async ($, on) => {
+  const calls: string[][] = []
+  answerBeneath(on, { reminders: [WEEKLY], handoffs: [], installed: [REMINDERS] }, calls, [], true)
+
+  await $.session.start(START)
+  await $.command.run(command('reminders-pane'))
+
+  expect(calls).toContainEqual(['bash', REMINDERS, 'json', '/home/someone/dev/shop'])
 })
 
 test('with only the handoff skill, the band says Handoffs', async ($, on) => {
   answerBeneath(on, { reminders: [], handoffs: [NOTE], installed: [HANDOFF] }, [])
 
   await $.session.start(START)
-  await $.command.run(command('handoffs'))
+  await $.command.run(command('handoffs-pane'))
 
   expect(await (await mountBand($)).find({ key: 'reminders-handoffs', text: 'Handoffs 1' })).toBeDefined()
 })

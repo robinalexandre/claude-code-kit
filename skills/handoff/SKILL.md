@@ -45,5 +45,5 @@ Notes live in `~/.claude-sync/handoffs/`, a git repo that syncs the Claude Code 
 - `handoff.sh cancel <id>`: a note no one will pick up; it moves to `done/`, marked canceled.
 - `handoff.sh delete <id>`: deletes a note, a done one too. `done/` keeps notes 60 days.
 - `handoff.sh restore <id>`: opens a done or canceled note again.
-- `handoff.sh json`: every note, open and done, as JSON. The [reminders-handoffs](../../mods/reminders-handoffs) mod reads it: `/handoffs`, or the button above the prompt, with `pick` to pick one up now.
+- `handoff.sh json`: every note, open and done, as JSON. The [reminders-handoffs](../../mods/reminders-handoffs) mod reads it: `/handoffs-pane`, or the button above the prompt, with `pick` to pick one up now.
 - After any of these, `bash ~/.claude-sync/sync.sh now` so the other computer sees it.

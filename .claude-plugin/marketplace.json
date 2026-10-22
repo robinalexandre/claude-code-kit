@@ -508,7 +508,7 @@
     {
       "name": "handoff",
       "description": "Handoff notes between your computers: continue on the other one without explaining everything again.",
-      "version": "1.2.0",
+      "version": "1.2.1",
       "category": "productivity",
       "source": ".",
       "strict": false,
@@ -549,7 +549,7 @@
     {
       "name": "reminders",
       "description": "Reminders for a later session, on any of your computers, notified on the desktop and the phone every morning; one-off or repeating, filed by group.",
-      "version": "1.2.0",
+      "version": "1.2.1",
       "category": "productivity",
       "source": ".",
       "strict": false,

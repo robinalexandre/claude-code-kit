@@ -19,8 +19,52 @@ const busy = atom({ plugin: 'reminders-handoffs', key: 'busy' } as const, '')
 
 // Each part this pane shows: the skill that keeps it, its script, and the pane's words for it.
 const SOURCES: Record<Source, { skill: string; script: string; title: string; command: string }> = {
-  reminders: { skill: 'reminders', script: 'reminders.sh', title: 'Reminders', command: 'reminders' },
-  handoffs: { skill: 'handoff', script: 'handoff.sh', title: 'Handoffs', command: 'handoffs' },
+  reminders: { skill: 'reminders', script: 'reminders.sh', title: 'Reminders', command: 'reminders-pane' },
+  handoffs: { skill: 'handoff', script: 'handoff.sh', title: 'Handoffs', command: 'handoffs-pane' },
+}
+
+// The band's buttons share one row under everything above the prompt, whatever order the mods
+// draw in: each takes that row out of what the mods beneath drew, adds its own button, and sorts
+// them by key (band-1-history, band-2-prs, band-3-reminders).
+const BAND_ROW = 'band-buttons'
+
+type Drawn = { type?: string; props?: { key?: string }; children?: unknown[] }
+
+const keyOf = (node: unknown) => (node !== null && typeof node === 'object' ? ((node as Drawn).props?.key ?? '') : '')
+
+const byBandKey = (one: unknown, other: unknown) => keyOf(one).localeCompare(keyOf(other))
+
+const takeBandRow = (tree: unknown): { rest: unknown; buttons: unknown[] } => {
+  if (Array.isArray(tree)) {
+    let buttons: unknown[] = []
+    const rest = tree.map(child => {
+      if (buttons.length > 0) {
+        return child
+      }
+
+      const taken = takeBandRow(child)
+      buttons = taken.buttons
+
+      return taken.rest
+    })
+
+    // The engine reads every child of a drawn tree: the row taken out leaves no hole.
+    return { rest: rest.filter(child => child !== null && child !== undefined), buttons }
+  }
+
+  const node = tree as Drawn | null
+
+  if (node === null || typeof node !== 'object' || !Array.isArray(node.children)) {
+    return { rest: tree, buttons: [] }
+  }
+
+  if (node.props?.key === BAND_ROW) {
+    return { rest: null, buttons: node.children.flat(Infinity) }
+  }
+
+  const taken = takeBandRow(node.children)
+
+  return taken.buttons.length > 0 ? { rest: { ...node, children: taken.rest }, buttons: taken.buttons } : { rest: tree, buttons: [] }
 }
 
 const slashed = (path: string) => path.replace(/\\/g, '/')
@@ -287,14 +331,17 @@ const counts = (shownReminders: Reminder[] | null, shownHandoffs: Handoff[] | nu
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
+    // A name already taken (a skill or command of the user's) costs that command only.
     for (const source of await detect($)) {
-      await $.command.register({
-        name: SOURCES[source].command,
-        description:
-          source === 'reminders'
-            ? 'Show the reminders: due now, upcoming and repeating, past; close or stop one'
-            : 'Show the handoff notes: open ones to pick up or cancel, done ones',
-      })
+      await $.command
+        .register({
+          name: SOURCES[source].command,
+          description:
+            source === 'reminders'
+              ? 'Show the reminders pane: due now, upcoming and repeating, past; pick, close or stop one'
+              : 'Show the handoff notes: open ones to pick up or cancel, done ones',
+        })
+        .catch(() => undefined)
     }
 
     void reload($)
@@ -308,13 +355,13 @@ export const register: Register = on => {
     return next(e)
   })
 
-  on('command.run', { command: 'reminders' }, async $ => {
+  on('command.run', { command: 'reminders-pane' }, async $ => {
     await openPane($, 'reminders')
 
     return { text: 'Reminders pane opened.' }
   })
 
-  on('command.run', { command: 'handoffs' }, async $ => {
+  on('command.run', { command: 'handoffs-pane' }, async $ => {
     await openPane($, 'handoffs')
 
     return { text: 'Handoffs pane opened.' }
@@ -339,14 +386,19 @@ export const register: Register = on => {
     )
     const first = due > 0 || fromElsewhere === 0 ? found[0] : 'handoffs'
 
+    const { rest, buttons } = takeBandRow(beneath)
+    const mine = (
+      <Box key="band-3-reminders" flexDirection="row">
+        {isUrgent && <Text color="yellow">● </Text>}
+        <Button key="reminders-handoffs" label={parts.join(' · ')} dimColor={!isUrgent} onPress={() => void openPane($, first)} />
+      </Box>
+    )
+
     return (
-      <Box flexDirection="row" justifyContent="space-between" alignItems="flex-start">
-        <Box flexDirection="column" flexShrink={1}>
-          {beneath}
-        </Box>
-        <Box flexDirection="row" flexShrink={0}>
-          {isUrgent && <Text color="yellow">● </Text>}
-          <Button key="reminders-handoffs" label={parts.join(' · ')} dimColor={!isUrgent} onPress={() => void openPane($, first)} />
+      <Box flexDirection="column">
+        {rest as never}
+        <Box key={BAND_ROW} flexDirection="row" gap={2}>
+          {[...buttons, mine].sort(byBandKey) as never}
         </Box>
       </Box>
     )
