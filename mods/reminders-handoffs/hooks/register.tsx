@@ -10,6 +10,9 @@ const BODY_LINES = 40
 // the theme's inverse text color: readable in a light and a dark theme alike.
 const LIT_BOX = { backgroundColor: 'suggestion' }
 const LIT_TEXT = { color: 'inverseText', dimColor: false }
+// At the end of a line that folds others: unfold everything under it, or fold it all back.
+const UNFOLD_ALL = '▾ all'
+const FOLD_ALL = '▴ all'
 
 const reminders = atom({ plugin: 'reminders-handoffs', key: 'reminders' } as const, null)
 const handoffs = atom({ plugin: 'reminders-handoffs', key: 'handoffs' } as const, null)
@@ -691,19 +694,68 @@ export const register: Register = on => {
       )
     }
 
+    // What folds under a section or a group: its groups' keys and its rows' ids.
+    type Folds = { sectionKeys: string[]; ids: string[] }
+
+    const foldsOf = <T extends { id: string },>(section: string, rows: T[], groupOf: (row: T) => string): Folds => ({
+      sectionKeys: [section, ...byGroup(rows, groupOf).map(([name]) => `${section}|${name}`)],
+      ids: rows.map(row => row.id),
+    })
+
+    // Something shows open under the line: one of its groups, or, for a group, one of its rows.
+    const hasOpenUnder = (folds: Folds) => {
+      const [own = '', ...groups] = folds.sectionKeys
+      const children = groups.length > 0 ? groups.map(key => sections[key] ?? false) : folds.ids.map(id => unfolded[id] ?? false)
+
+      return (sections[own] ?? false) && children.some(Boolean)
+    }
+
+    // Unfolding opens the line and all under it; folding back closes what is under it, the line
+    // itself too when `isWhole`.
+    const setFolds = async (folds: Folds, isOpen: boolean, isWhole = false) => {
+      const keys = isOpen || isWhole ? folds.sectionKeys : folds.sectionKeys.slice(1)
+      await update($, openSections, all => ({ ...all, ...Object.fromEntries(keys.map(key => [key, isOpen])) }))
+      await update($, openIds, all => ({ ...all, ...Object.fromEntries(folds.ids.map(id => [id, isOpen])) }))
+    }
+
+    // Drawn in the accent color where the build styles a button's text, named in words for a reader.
+    const foldAllControl = (key: string, isOpen: boolean, drawn: string, onPress: () => void) =>
+      styled ? (
+        <Button key={key} label={isOpen ? 'collapse all' : 'expand all'} onPress={onPress}>
+          <Text color="suggestion">{drawn}</Text>
+        </Button>
+      ) : (
+        <Button key={key} label={drawn} onPress={onPress} />
+      )
+
+    // Anything open under the line folds it all back; all of it folded, the arrow unfolds everything.
+    const foldAllButton = (key: string, folds: Folds) => {
+      const isOpen = hasOpenUnder(folds)
+
+      return foldAllControl(`all-${key}`, isOpen, isOpen ? FOLD_ALL : UNFOLD_ALL, () => void setFolds(folds, !isOpen))
+    }
+
+    const foldLine = (fold: unknown, key: string, folds: Folds) => (
+      <Box flexDirection="row" justifyContent="space-between">
+        {fold as never}
+        {foldAllButton(key, folds)}
+      </Box>
+    )
+
     // A section's rows, each group under a title that folds, even a lone one.
-    const grouped = <T,>(section: string, rows: T[], groupOf: (row: T) => string, draw: (row: T) => unknown) => {
+    const grouped = <T extends { id: string },>(section: string, rows: T[], groupOf: (row: T) => string, draw: (row: T) => unknown) => {
       const groups = byGroup(rows, groupOf)
 
       return groups.map(([name, members]) => {
         const key = `${section}|${name}`
         const isOpen = sections[key] ?? false
+        const fold = foldButton(`group-${section}-${name}`, `${isOpen ? '▾' : '▸'} ${name} (${members.length})`, {}, () =>
+          void update($, openSections, all => ({ ...all, [key]: !isOpen }))
+        )
 
         return (
           <Box key={`group-${key}`} flexDirection="column" paddingLeft={2}>
-            {foldButton(`group-${section}-${name}`, `${isOpen ? '▾' : '▸'} ${name} (${members.length})`, {}, () =>
-              void update($, openSections, all => ({ ...all, [key]: !isOpen }))
-            )}
+            {foldLine(fold, `group-${section}-${name}`, { sectionKeys: [key], ids: members.map(row => row.id) })}
             {isOpen && (members.map(draw) as never)}
           </Box>
         )
@@ -711,14 +763,15 @@ export const register: Register = on => {
     }
 
     // Sections and groups start folded; what the user unfolds stays so for the session.
-    const section = <T,>(id: string, title: string, rows: T[], groupOf: (row: T) => string, draw: (row: T) => unknown) => {
+    const section = <T extends { id: string },>(id: string, title: string, rows: T[], groupOf: (row: T) => string, draw: (row: T) => unknown) => {
       const isOpen = sections[id] ?? false
+      const fold = foldButton(id, `${isOpen ? '▾' : '▸'} ${title} (${rows.length})`, { bold: true }, () =>
+        void update($, openSections, all => ({ ...all, [id]: !isOpen }))
+      )
 
       return (
         <Box key={`section-${id}`} flexDirection="column" marginTop={1}>
-          {foldButton(id, `${isOpen ? '▾' : '▸'} ${title} (${rows.length})`, { bold: true }, () =>
-            void update($, openSections, all => ({ ...all, [id]: !isOpen }))
-          )}
+          {rows.length === 0 ? fold : foldLine(fold, id, foldsOf(id, rows, groupOf))}
           {isOpen && rows.length === 0 && (
             <Box paddingLeft={2}>
               <Text dimColor>nothing</Text>
@@ -732,27 +785,43 @@ export const register: Register = on => {
     const byNext = (one: Reminder, other: Reminder) => (one.next ?? one.on ?? '').localeCompare(other.next ?? other.on ?? '')
     const byClosed = (one: { closed?: string }, other: { closed?: string }) => (other.closed ?? '').localeCompare(one.closed ?? '')
 
+    // Each tab's sections, drawn and folded all at once by the button beside refresh.
     const remindersTab = () => {
       const all = shownReminders ?? []
+      const rowsOf = (part: string) => all.filter(one => reminderSection(one) === part)
 
-      return [
-        section('now', 'Now', all.filter(one => reminderSection(one) === 'now').sort(byNext), reminderGroup, one => reminderRow(one, 'yellow')),
-        section('upcoming', 'Upcoming', all.filter(one => reminderSection(one) === 'upcoming').sort(byNext), reminderGroup, one => reminderRow(one, 'cyan')),
-        section('past', 'Past', all.filter(one => reminderSection(one) === 'past').sort(byClosed), reminderGroup, one => reminderRow(one, 'gray')),
-      ]
+      return {
+        drawn: [
+          section('now', 'Now', rowsOf('now').sort(byNext), reminderGroup, one => reminderRow(one, 'yellow')),
+          section('upcoming', 'Upcoming', rowsOf('upcoming').sort(byNext), reminderGroup, one => reminderRow(one, 'cyan')),
+          section('past', 'Past', rowsOf('past').sort(byClosed), reminderGroup, one => reminderRow(one, 'gray')),
+        ],
+        folds: ['now', 'upcoming', 'past'].map(part => foldsOf(part, rowsOf(part), reminderGroup)),
+      }
     }
 
     const handoffsTab = () => {
       const all = shownHandoffs ?? []
       const byDate = (one: Handoff, other: Handoff) => (other.date ?? '').localeCompare(one.date ?? '')
+      const openNotes = all.filter(note => note.state === 'open').sort(byDate)
+      const doneNotes = all.filter(note => note.state !== 'open').sort(byClosed)
 
-      return [
-        section('open-notes', 'Open', all.filter(note => note.state === 'open').sort(byDate), handoffGroup, note => handoffRow(note, 'yellow')),
-        section('done-notes', 'Done', all.filter(note => note.state !== 'open').sort(byClosed), handoffGroup, note => handoffRow(note, 'gray')),
-      ]
+      return {
+        drawn: [
+          section('open-notes', 'Open', openNotes, handoffGroup, note => handoffRow(note, 'yellow')),
+          section('done-notes', 'Done', doneNotes, handoffGroup, note => handoffRow(note, 'gray')),
+        ],
+        folds: [foldsOf('open-notes', openNotes, handoffGroup), foldsOf('done-notes', doneNotes, handoffGroup)],
+      }
     }
 
     const loaded = current === 'reminders' ? shownReminders : shownHandoffs
+    const shownTab = loaded === null ? null : current === 'reminders' ? remindersTab() : handoffsTab()
+    const tabFolds: Folds = {
+      sectionKeys: (shownTab?.folds ?? []).flatMap(folds => folds.sectionKeys),
+      ids: (shownTab?.folds ?? []).flatMap(folds => folds.ids),
+    }
+    const isTabOpen = (shownTab?.folds ?? []).some(folds => sections[folds.sectionKeys[0] ?? ''] ?? false)
     const tabLabel = (source: Source) =>
       source === 'reminders' ? `Reminders (${remindersCount}${due > 0 ? `, ${due} now` : ''})` : `Handoffs (${open} open)`
 
@@ -771,22 +840,26 @@ export const register: Register = on => {
         <Box flexDirection="row" justifyContent="space-between">
           <Text dimColor>
             {trouble !== ''
-              ? `Could not read them: ${truncate(trouble, width - 30)}`
+              ? `Could not read them: ${truncate(trouble, width - 48)}`
               : loaded === null
                 ? 'Loading…'
                 : lastLoad > 0
                   ? `live at ${clockTime(lastLoad)}`
                   : ''}
           </Text>
-          {busyKey === REFRESH ? (
-            <Text key="refresh" dimColor>
-              syncing…
-            </Text>
-          ) : (
-            <Button key="refresh" label="refresh" onPress={() => void refresh($)} />
-          )}
+          <Box flexDirection="row" gap={2}>
+            {shownTab !== null &&
+              foldAllControl('fold-all', isTabOpen, isTabOpen ? '▴ collapse all' : '▾ expand all', () => void setFolds(tabFolds, !isTabOpen, true))}
+            {busyKey === REFRESH ? (
+              <Text key="refresh" dimColor>
+                syncing…
+              </Text>
+            ) : (
+              <Button key="refresh" label="refresh" onPress={() => void refresh($)} />
+            )}
+          </Box>
         </Box>
-        {loaded !== null && ((current === 'reminders' ? remindersTab() : handoffsTab()) as never)}
+        {shownTab !== null && (shownTab.drawn as never)}
       </Box>
     )
   })

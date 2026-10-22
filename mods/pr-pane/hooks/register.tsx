@@ -37,6 +37,9 @@ const readChanges = atom({ plugin: 'pr-pane', key: 'readChanges' } as const, {})
 
 const FAILED = new Set(['failed', 'broken', 'expired'])
 const RECENT_SHOWN = 8
+// At the end of a line that folds others: unfold everything under it, or fold it all back.
+const UNFOLD_ALL = '▾ all'
+const FOLD_ALL = '▴ all'
 const AFTER_RERUN_MS = 5_000
 
 const isRunning = (checks: CiCheck[]) => checks.some(check => !ENDED.has(check.state))
@@ -798,10 +801,17 @@ const toggleRepo = ($: EngineInterface, key: string, isOpen: boolean) =>
 // its changes: pr-watch clears them, the pane keeps showing them for the session.
 const togglePr = async ($: EngineInterface, pr: PrRow, isOpen: boolean) => {
   await update($, openPrs, open => ({ ...open, [pr.url]: !isOpen }))
+
+  if (!isOpen) {
+    await markRead($, pr)
+  }
+}
+
+const markRead = async ($: EngineInterface, pr: PrRow) => {
   const kept = (await read($, readChanges))[pr.url] ?? []
   const fresh = pr.changes.filter(change => !kept.includes(change))
 
-  if (isOpen || fresh.length === 0) {
+  if (fresh.length === 0) {
     return
   }
 
@@ -810,6 +820,32 @@ const togglePr = async ($: EngineInterface, pr: PrRow, isOpen: boolean) => {
     shown === null ? shown : { ...shown, prs: shown.prs.map(one => (one.url === pr.url ? { ...one, changes: [] } : one)) }
   )
   await prWatch($, ['read', pr.url], 60_000).catch(() => undefined)
+}
+
+// A line that folds, as drawn now (its default applied), and how deep it sits: a section 0, a repo
+// 1, a PR 2, its CI 3; in a run, a job 0, a step 1. Unfolding or folding all goes through the folds
+// whose content the pane already has: a pipeline run and a failing check's log, read from the host
+// when opened, are left as they are.
+type Fold = { kind: 'repo' | 'recent' | 'pr' | 'ci' | 'step'; key: string; isOpen: boolean; level: number; pr?: PrRow }
+
+const setFolds = async ($: EngineInterface, folds: Fold[], isOpen: boolean) => {
+  const changed = folds.filter(fold => fold.isOpen !== isOpen)
+  const keysOf = (kind: Fold['kind']) => Object.fromEntries(changed.filter(fold => fold.kind === kind).map(fold => [fold.key, isOpen]))
+  await update($, openRepos, open => ({ ...open, ...keysOf('repo') }))
+  await update($, ciToggled, toggled => ({ ...toggled, ...keysOf('ci') }))
+  await update($, openSteps, open => ({ ...open, ...keysOf('step') }))
+  await update($, openPrs, open => ({ ...open, ...keysOf('pr') }))
+
+  if (changed.some(fold => fold.kind === 'recent')) {
+    await update($, isRecentOpen, () => isOpen)
+  }
+
+  // One after the other: each marks its PR read in pr-watch's one state file.
+  for (const fold of isOpen ? changed : []) {
+    if (fold.pr !== undefined) {
+      await markRead($, fold.pr)
+    }
+  }
 }
 
 // What the band says the user has to do, most urgent first: red, act on a PR; yellow, a review to
@@ -1005,6 +1041,95 @@ export const register: Register = on => {
         <Button key={key} label={plainLabel} plain hover={hover} onPress={onPress} />
       )
 
+    // Drawn in the accent color where the build styles a button's text, named in words for a reader.
+    const foldAllControl = (key: string, isOpen: boolean, drawn: string, onPress: () => void) =>
+      styled ? (
+        <Button key={key} label={isOpen ? 'collapse all' : 'expand all'} onPress={onPress}>
+          <Text color="suggestion">{drawn}</Text>
+        </Button>
+      ) : (
+        <Button key={key} label={drawn} onPress={onPress} />
+      )
+
+    // The control at the end of a line: with a line just under it open, it folds back all under it;
+    // with all of them folded, it unfolds the line and everything under it.
+    const foldAllButton = (key: string, own: Fold | undefined, under: Fold[]) => {
+      if (under.length === 0) {
+        return null
+      }
+
+      const top = Math.min(...under.map(fold => fold.level))
+      const isOpen = (own?.isOpen ?? true) && under.some(fold => fold.level === top && fold.isOpen)
+
+      return foldAllControl(`all-${key}`, isOpen, isOpen ? FOLD_ALL : UNFOLD_ALL, () =>
+        void setFolds($, isOpen || own === undefined ? under : [own, ...under], !isOpen)
+      )
+    }
+
+    const foldLine = (key: string, own: Fold, under: Fold[], line: RenderChildren) => (
+      <Box flexDirection="row" justifyContent="space-between">
+        <Box flexDirection="row">{line}</Box>
+        {foldAllButton(key, own, under)}
+      </Box>
+    )
+
+    const repoFold = (key: string, level: number): Fold => ({ kind: 'repo', key, isOpen: expanded[key] ?? false, level })
+
+    const prFolds = (pr: PrRow): Fold[] => {
+      const checks = pr.checks ?? []
+
+      return [
+        { kind: 'pr', key: pr.url, isOpen: openDetails[pr.url] ?? isRunning(checks), level: 2, pr },
+        ...(checks.length > 0
+          ? [{ kind: 'ci' as const, key: pr.url, isOpen: toggled[pr.url] ?? (isRunning(checks) || hasRequiredFailure(checks)), level: 3 }]
+          : []),
+      ]
+    }
+
+    const prRepoFolds = (section: 'attention' | 'waiting' | 'approved' | 'parked', rows: PrRow[]) =>
+      byRepo(rows).flatMap(([repo, prsOfRepo]) => [repoFold(repoKey(section, repo), 1), ...prsOfRepo.flatMap(prFolds)])
+
+    const repoFolds = (section: 'builds' | 'reviews' | 'recent', rows: { repo: string }[]) =>
+      byRepo(rows).map(([repo]) => repoFold(repoKey(section, repo), 1))
+
+    // A job, folded unless a step had a problem, then its steps that have messages.
+    const jobFold = (url: string, group: ReturnType<typeof byJob>[number], jobIndex: number): Fold[] => {
+      const key = stepKey(url, `job-${jobIndex}`)
+
+      return [
+        { kind: 'step', key, isOpen: unfoldedSteps[key] ?? ['failed', 'issues', 'canceled'].includes(worstState(group.steps.map(one => one.step))), level: 0 },
+        ...group.steps
+          .filter(({ step }) => step.errors.length > 0)
+          .map(({ index }): Fold => ({ kind: 'step', key: stepKey(url, index), isOpen: unfoldedSteps[stepKey(url, index)] ?? false, level: 1 })),
+      ]
+    }
+
+    const jobFolds = (url: string, steps: BuildStep[]) => byJob(steps).flatMap((group, jobIndex) => jobFold(url, group, jobIndex))
+
+    // Each section's own fold and the folds under it, for its arrow and the one beside refresh.
+    type Section = 'builds' | 'attention' | 'reviews' | 'waiting' | 'approved' | 'parked' | 'recent'
+    const sectionFolds: Record<Section, { own: Fold; under: Fold[] }> = {
+      builds: { own: repoFold(repoKey('builds', '*'), 0), under: repoFolds('builds', builds) },
+      attention: { own: repoFold(repoKey('attention', '*'), 0), under: prRepoFolds('attention', attention) },
+      reviews: { own: repoFold(repoKey('reviews', '*'), 0), under: repoFolds('reviews', reviews) },
+      waiting: { own: repoFold(repoKey('waiting', '*'), 0), under: prRepoFolds('waiting', ours) },
+      approved: { own: repoFold(repoKey('approved', '*'), 0), under: prRepoFolds('approved', approved) },
+      parked: { own: repoFold(repoKey('parked', '*'), 0), under: prRepoFolds('parked', parked) },
+      recent: { own: { kind: 'recent', key: 'recent', isOpen: isRecentShown, level: 0 }, under: recent.map(([repo]) => repoFold(repoKey('recent', repo), 1)) },
+    }
+    const shownSections = [
+      builds.length > 0 && 'builds',
+      attention.length > 0 && 'attention',
+      reviews.length > 0 && 'reviews',
+      ours.length > 0 && 'waiting',
+      approved.length > 0 && 'approved',
+      parked.length > 0 && 'parked',
+      recentCount > 0 && 'recent',
+    ].filter((name): name is Section => name !== false)
+    const everyFold = shownSections.flatMap(name => [sectionFolds[name].own, ...sectionFolds[name].under])
+    const isAnySectionOpen = shownSections.some(name => sectionFolds[name].own.isOpen)
+    const sectionLine = (name: Section, line: RenderChildren) => foldLine(name, sectionFolds[name].own, sectionFolds[name].under, line)
+
     // One tracked PR on one line: a colored dot, its number, title and what it waits for, with `merge`
     // when that is all it waits for. Opened, it shows conflicts, CI checks, votes and the changes
     // since the last check.
@@ -1014,7 +1139,8 @@ export const register: Register = on => {
       const acked = pr.ack ? ` · acked${pr.ack.until ? ` until ${pr.ack.until.slice(5)}` : ''}` : ''
       const isAckable = needsAttention(pr) && !pr.ack && pr.parked !== true
       const what = `${plainName(pr.repo)} #${plainName(String(pr.number))}`
-      const titleWidth = Math.max(8, inner - pr.number.length - pr.waiting.length - acked.length - (withMerge && canMerge(pr) ? 26 : 20))
+      const titleWidth = Math.max(8, inner - pr.number.length - pr.waiting.length - acked.length - (withMerge && canMerge(pr) ? 32 : 26))
+      const [ownFold, ...underFolds] = prFolds(pr)
 
       // The parts that fold light up together under the pointer; the PR's link between them doesn't.
       const lit = litGroup(`pr-${group}-${pr.number}`)
@@ -1085,6 +1211,8 @@ export const register: Register = on => {
               )}
               {pr.parked === true && <Text> </Text>}
               <Button key={`open-${group}-${pr.number}`} label="open" dimColor onPress={() => void openPr($, pr.url)} />
+              {underFolds.length > 0 && <Text> </Text>}
+              {foldAllButton(`pr-${group}-${pr.number}`, ownFold, underFolds)}
             </Box>
           </Box>
           {isOpen && (
@@ -1232,13 +1360,15 @@ export const register: Register = on => {
       const duration = build.status === 'running' ? minutesText(startedMs, nowMs) : isEnded ? minutesText(startedMs, endedMs(build.ended)) : ''
       const branch = build.branch ? ` · ${build.trigger === 'push' ? 'push to ' : ''}${build.branch}` : ''
       const staleMark = build.stale === true ? ' · cached' : ''
-      const room = inner - build.number.length - branch.length - build.status.length - staleMark.length - acked.length - 14
+      const room = inner - build.number.length - branch.length - build.status.length - staleMark.length - acked.length - 20
       // The pipeline's name comes first: on a narrow pane the duration, then the time, give way.
       const when = [[at, duration].filter(Boolean).join(' · '), at, ''].find(option => room - option.length >= 20) ?? ''
       const nameWidth = Math.max(8, room - when.length - 2)
       const hasIssues = isEnded && build.status !== 'succeeded'
       const shownDetails = allBuildDetails[build.url]
       const isOpen = shownDetails !== undefined
+      // Once its steps are read, the run's arrow unfolds or folds its jobs and their steps.
+      const stepFolds = shownDetails === undefined || shownDetails.isLoading ? [] : jobFolds(build.url, shownDetails.steps)
       const rerunKey = actionKey('rerun', build.url)
       // The parts that fold light up together under the pointer; the run's link between them doesn't.
       const buildLit = litGroup(`build-${build.number}`)
@@ -1317,27 +1447,31 @@ export const register: Register = on => {
         const { mark, color } = STEP_MARKS[worst] ?? { mark: '◌', color: 'yellow' }
         const count = `${group.steps.length} step${group.steps.length === 1 ? '' : 's'}`
         const lit = litGroup(`job-${build.number}-${jobIndex}`)
+        const [ownFold, ...underFolds] = jobFold(build.url, group, jobIndex)
 
         return (
           <Box key={`build-job-${build.number}-${jobIndex}`} flexDirection="column">
-            <Box flexDirection="row" hover={lit.box}>
-              <Button
-                key={`build-job-toggle-${build.number}-${jobIndex}`}
-                label={`${isOpen ? '▾' : '▸'} ${truncate(group.job || 'steps', Math.max(8, inner - count.length - 12))}`}
-                plain
-                hover={lit.text}
-                onPress={() => void toggleStep($, key, isOpen)}
-              />
-              <Text hover={lit.text}>
-                {' '}
-                <Text color={color} hover={lit.text}>
-                  {mark}
-                </Text>
-                <Text dimColor hover={lit.text}>
+            <Box flexDirection="row" justifyContent="space-between">
+              <Box flexDirection="row" hover={lit.box}>
+                <Button
+                  key={`build-job-toggle-${build.number}-${jobIndex}`}
+                  label={`${isOpen ? '▾' : '▸'} ${truncate(group.job || 'steps', Math.max(8, inner - count.length - 18))}`}
+                  plain
+                  hover={lit.text}
+                  onPress={() => void toggleStep($, key, isOpen)}
+                />
+                <Text hover={lit.text}>
                   {' '}
-                  {count}
+                  <Text color={color} hover={lit.text}>
+                    {mark}
+                  </Text>
+                  <Text dimColor hover={lit.text}>
+                    {' '}
+                    {count}
+                  </Text>
                 </Text>
-              </Text>
+              </Box>
+              {foldAllButton(`build-job-${build.number}-${jobIndex}`, ownFold, underFolds)}
             </Box>
             {isOpen && (
               <Box flexDirection="column" paddingLeft={2}>
@@ -1400,7 +1534,11 @@ export const register: Register = on => {
                 )}
               </Box>
             </Box>
-            <Button key={`build-open-${build.number}`} label="open" dimColor onPress={() => void openPr($, build.url)} />
+            <Box flexDirection="row">
+              <Button key={`build-open-${build.number}`} label="open" dimColor onPress={() => void openPr($, build.url)} />
+              {stepFolds.length > 0 && <Text> </Text>}
+              {foldAllButton(`build-${build.number}`, undefined, stepFolds)}
+            </Box>
           </Box>
           {shownDetails !== undefined && (
             <Box flexDirection="column" paddingLeft={4}>
@@ -1453,23 +1591,23 @@ export const register: Register = on => {
     }
 
     // One block per repo, in the order its rows come; `hint` is said beside a folded one.
-    const repoBlock = (key: string, buttonKey: string, repo: string, count: number, isOpen: boolean, hint: RenderChildren, body: () => RenderChildren, color = 'gray') => (
+    const repoBlock = (key: string, buttonKey: string, repo: string, count: number, isOpen: boolean, hint: RenderChildren, body: () => RenderChildren, color = 'gray', under: Fold[] = []) => (
       <Box key={`block-${key}`} flexDirection="column" paddingLeft={2}>
-        <Box flexDirection="row">
+        {foldLine(buttonKey, repoFold(key, 1), under, [
           <Box flexDirection="row" hover={litGroup(`block-${key}`).box}>
             <Text color={color} hover={litGroup(`block-${key}`).text}>
               ●{' '}
             </Text>
             <Button
               key={buttonKey}
-              label={`${isOpen ? '▾' : '▸'} ${truncate(repo, width - 30)} (${count})`}
+              label={`${isOpen ? '▾' : '▸'} ${truncate(repo, width - 36)} (${count})`}
               plain
               hover={litGroup(`block-${key}`).text}
               onPress={() => void toggleRepo($, key, isOpen)}
             />
-          </Box>
-          {hint}
-        </Box>
+          </Box>,
+          hint,
+        ])}
         {isOpen && body()}
       </Box>
     )
@@ -1487,6 +1625,7 @@ export const register: Register = on => {
         return repoBlock(key, section === 'waiting' ? `repo-${repo}` : `${section}-repo-${repo}`, repo, prsOfRepo.length, isOpen, hint, () =>
           prsOfRepo.map((pr, index) => prRow(pr, repo, index, isStacked, withMerge)),
           worst(prsOfRepo.map(prColor)),
+          prsOfRepo.flatMap(prFolds),
         )
       })
 
@@ -1554,13 +1693,19 @@ export const register: Register = on => {
       <Box flexDirection="column">
         <Box flexDirection="row" justifyContent="space-between">
           <Text dimColor>{summary}</Text>
-          <Button
-            key="refresh"
-            label={busy ? 'refreshing…' : 'refresh'}
-            hotkey="r"
-            dimColor={busy}
-            onPress={() => void refresh($)}
-          />
+          <Box flexDirection="row" gap={2}>
+            {everyFold.length > 0 &&
+              foldAllControl('fold-all', isAnySectionOpen, isAnySectionOpen ? '▴ collapse all' : '▾ expand all', () =>
+                void setFolds($, everyFold, !isAnySectionOpen)
+              )}
+            <Button
+              key="refresh"
+              label={busy ? 'refreshing…' : 'refresh'}
+              hotkey="r"
+              dimColor={busy}
+              onPress={() => void refresh($)}
+            />
+          </Box>
         </Box>
         {trouble !== '' && <Text color="red">{trouble}</Text>}
         {shown?.errors.map(line => (
@@ -1568,30 +1713,30 @@ export const register: Register = on => {
         ))}
         {builds.length > 0 && (
           <Box flexDirection="column" marginTop={1}>
-            <Box flexDirection="row">
-              <Text color={worst(builds.map(runColor))}>● </Text>
+            {sectionLine('builds', [
+              <Text color={worst(builds.map(runColor))}>● </Text>,
               <Button
                 key="builds"
                 label={`${isBuildsOpen ? '▾' : '▸'} Pipeline runs (${builds.length})`}
                 plain
                 onPress={() => void toggleRepo($, repoKey('builds', '*'), isBuildsOpen)}
-              />
-              {!isBuildsOpen && runningBuilds > 0 && <Text color="yellow"> · {runningBuilds} running</Text>}
-              {!isBuildsOpen && runningBuilds === 0 && (
+              />,
+              !isBuildsOpen && runningBuilds > 0 && <Text color="yellow"> · {runningBuilds} running</Text>,
+              !isBuildsOpen && runningBuilds === 0 && (
                 <Text dimColor>
                   {' '}
                   · last {builds[0].status} {endedText(builds[0].ended, nowMs)}
                 </Text>
-              )}
-            </Box>
+              ),
+            ])}
             {isBuildsOpen && buildBlocks()}
           </Box>
         )}
         {attention.length > 0 && (
           <Box flexDirection="column" marginTop={1}>
-            <Box flexDirection="row">
-              {!styled && <Text color="red">● </Text>}
-              {styled ? (
+            {sectionLine('attention', [
+              !styled && <Text color="red">● </Text>,
+              styled ? (
                 <Button key="attention" plain onPress={() => void toggleRepo($, repoKey('attention', '*'), isAttentionOpen)}>
                   <Text bold color="red">
                     {`${isAttentionOpen ? '▾' : '▸'} Needs your attention (${attention.length})`}
@@ -1604,30 +1749,33 @@ export const register: Register = on => {
                   plain
                   onPress={() => void toggleRepo($, repoKey('attention', '*'), isAttentionOpen)}
                 />
-              )}
-              {!isAttentionOpen && hasRunningCi(attention) && <Text color="yellow"> · CI running</Text>}
-            </Box>
+              ),
+              !isAttentionOpen && hasRunningCi(attention) && <Text color="yellow"> · CI running</Text>,
+            ])}
             {isAttentionOpen && repoBlocks('attention', attention, false)}
           </Box>
         )}
         {reviews.length > 0 && (
           <Box flexDirection="column" marginTop={1}>
-            {styled ? (
-              <Button key="reviews" plain onPress={() => void toggleRepo($, repoKey('reviews', '*'), isReviewsOpen)}>
-                <Text bold color="yellow">
-                  {`${isReviewsOpen ? '▾' : '▸'} Waiting for my review (${reviews.length})`}
-                </Text>
-              </Button>
-            ) : (
-              <Box flexDirection="row">
-                <Text color="yellow">● </Text>
-                <Button
-                  key="reviews"
-                  label={`${isReviewsOpen ? '▾' : '▸'} Waiting for my review (${reviews.length})`}
-                  plain
-                  onPress={() => void toggleRepo($, repoKey('reviews', '*'), isReviewsOpen)}
-                />
-              </Box>
+            {sectionLine(
+              'reviews',
+              styled ? (
+                <Button key="reviews" plain onPress={() => void toggleRepo($, repoKey('reviews', '*'), isReviewsOpen)}>
+                  <Text bold color="yellow">
+                    {`${isReviewsOpen ? '▾' : '▸'} Waiting for my review (${reviews.length})`}
+                  </Text>
+                </Button>
+              ) : (
+                [
+                  <Text color="yellow">● </Text>,
+                  <Button
+                    key="reviews"
+                    label={`${isReviewsOpen ? '▾' : '▸'} Waiting for my review (${reviews.length})`}
+                    plain
+                    onPress={() => void toggleRepo($, repoKey('reviews', '*'), isReviewsOpen)}
+                  />,
+                ]
+              )
             )}
             {isReviewsOpen &&
               byRepo(reviews).map(([repo, requests]) => {
@@ -1641,62 +1789,60 @@ export const register: Register = on => {
         {shown !== null && prs.length === 0 && <Text dimColor>No PR tracked. Ask Claude to watch one.</Text>}
         {ours.length > 0 && (
           <Box flexDirection="column" marginTop={1}>
-            <Box flexDirection="row">
-              <Text color={worst(ours.map(prColor))}>● </Text>
+            {sectionLine('waiting', [
+              <Text color={worst(ours.map(prColor))}>● </Text>,
               <Button
                 key="waiting"
                 label={`${isWaitingOpen ? '▾' : '▸'} Waiting for others (${ours.length})`}
                 plain
                 onPress={() => void toggleRepo($, repoKey('waiting', '*'), isWaitingOpen)}
-              />
-              {!isWaitingOpen && hasRunningCi(ours) && <Text color="yellow"> · CI running</Text>}
-            </Box>
+              />,
+              !isWaitingOpen && hasRunningCi(ours) && <Text color="yellow"> · CI running</Text>,
+            ])}
             {isWaitingOpen && repoBlocks('waiting', ours, false)}
           </Box>
         )}
         {approved.length > 0 && (
           <Box flexDirection="column" marginTop={1}>
-            <Box flexDirection="row">
-              <Text color={worst(approved.map(prColor))}>● </Text>
+            {sectionLine('approved', [
+              <Text color={worst(approved.map(prColor))}>● </Text>,
               <Button
                 key="approved"
                 label={`${isApprovedOpen ? '▾' : '▸'} Approved, waiting for the merge (${approved.length})`}
                 plain
                 onPress={() => void toggleRepo($, repoKey('approved', '*'), isApprovedOpen)}
-              />
-              {!isApprovedOpen && mergeable > 0 && (
-                <Text color="green"> · {mergeable} ready to merge</Text>
-              )}
-              {!isApprovedOpen && hasRunningCi(approved) && <Text color="yellow"> · CI running</Text>}
-            </Box>
+              />,
+              !isApprovedOpen && mergeable > 0 && <Text color="green"> · {mergeable} ready to merge</Text>,
+              !isApprovedOpen && hasRunningCi(approved) && <Text color="yellow"> · CI running</Text>,
+            ])}
             {isApprovedOpen && repoBlocks('approved', approved, true)}
           </Box>
         )}
         {parked.length > 0 && (
           <Box flexDirection="column" marginTop={1}>
-            <Box flexDirection="row">
-              <Text color="gray">● </Text>
+            {sectionLine('parked', [
+              <Text color="gray">● </Text>,
               <Button
                 key="parked"
                 label={`${isParkedOpen ? '▾' : '▸'} Parked, kept but quiet (${parked.length})`}
                 plain
                 onPress={() => void toggleRepo($, repoKey('parked', '*'), isParkedOpen)}
-              />
-            </Box>
+              />,
+            ])}
             {isParkedOpen && repoBlocks('parked', parked, false)}
           </Box>
         )}
         {recentCount > 0 && (
           <Box flexDirection="column" marginTop={1}>
-            <Box flexDirection="row">
-              <Text color="gray">● </Text>
+            {sectionLine('recent', [
+              <Text color="gray">● </Text>,
               <Button
                 key="recent"
                 label={`${isRecentShown ? '▾' : '▸'} Recently merged or closed (${recentCount})`}
                 plain
                 onPress={() => void update($, isRecentOpen, isShown => !isShown)}
-              />
-            </Box>
+              />,
+            ])}
             {isRecentShown &&
               recent.map(([repo, rows]) => {
                 const isOpen = expanded[repoKey('recent', repo)] ?? false

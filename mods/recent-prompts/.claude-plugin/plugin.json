@@ -1,6 +1,6 @@
 {
   "name": "recent-prompts",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "description": "Shows your last two messages above the prompt and a searchable history pane; click one to scroll the transcript to it.",
   "types": "./types/index.d.ts",
   "author": {

@@ -16,6 +16,9 @@ const JUMP_ICON = '↗'
 // the theme's inverse text color: readable in a light and a dark theme alike.
 const LIT_BOX = { backgroundColor: 'suggestion' }
 const LIT_TEXT = { color: 'inverseText', dimColor: false }
+// At the end of a line that folds others: unfold everything under it, or fold it all back.
+const UNFOLD_ALL = '▾ all'
+const FOLD_ALL = '▴ all'
 
 // The band's buttons share one row under everything above the prompt, whatever order the mods
 // draw in: each takes that row out of what the mods beneath drew, adds its own button, and sorts
@@ -376,10 +379,10 @@ export const register: Register = on => {
     const styled = await isStyled($)
     // What folds lights up under the pointer, the jump arrow left out as it does something else.
     // What a line leaves for its text: the jump arrow, the fold arrow and the time take 10 columns,
-    // a lesson's 💡 three more.
+    // the control that unfolds its replies six more, a lesson's 💡 three more.
     const width = Math.max(10, e.props.bodyColumns - 12)
     const rows = list.flatMap(prompt => {
-      const shown = shownLine(prompt.text, search, width - (isMessage(prompt) ? 0 : 3))
+      const shown = shownLine(prompt.text, search, width - 6 - (isMessage(prompt) ? 0 : 3))
 
       return shown === null ? [] : [{ prompt, shown }]
     })
@@ -388,6 +391,25 @@ export const register: Register = on => {
     const lessons = list.length - messages
     const counted = `${messages} messages${lessons > 0 ? `, ${lessons} 💡` : ''}`
     const summary = search.trim() === '' ? counted : `${rows.length} of ${list.length} match`
+
+    // A message's line and its replies fold together: a reply open folds them back, all folded
+    // unfolds them all. The button beside the count does it for every line listed, the lines too.
+    const foldsOf = (prompt: RecentPrompt) => [prompt.id, ...(prompt.answers ?? []).map(answer => answer.id)]
+    const isOpenId = (id: string) => open[id] ?? false
+    const setFolds = (ids: string[], isOpen: boolean) =>
+      void update($, unfolded, all => ({ ...all, ...Object.fromEntries(ids.map(id => [id, isOpen])) }))
+    const listed = rows.flatMap(({ prompt }) => foldsOf(prompt))
+    const isListOpen = rows.some(({ prompt }) => isOpenId(prompt.id))
+
+    // Drawn in the accent color where the build styles a button's text, named in words for a reader.
+    const foldAllControl = (key: string, isOpen: boolean, drawn: string, onPress: () => void) =>
+      styled ? (
+        <Button key={key} label={isOpen ? 'collapse all' : 'expand all'} onPress={onPress}>
+          <Text color="suggestion">{drawn}</Text>
+        </Button>
+      ) : (
+        <Button key={key} label={drawn} onPress={onPress} />
+      )
 
     // A line's text folds and unfolds it, as its arrow does; a build that draws no styled button
     // gets the plain label.
@@ -451,46 +473,58 @@ export const register: Register = on => {
           onInput={setQuery}
           onSubmit={setQuery}
         />
-        <Text dimColor>{summary}</Text>
+        <Box flexDirection="row" justifyContent="space-between">
+          <Text dimColor>{summary}</Text>
+          {listed.length > 0 &&
+            foldAllControl('fold-all', isListOpen, isListOpen ? '▴ collapse all' : '▾ expand all', () => setFolds(listed, !isListOpen))}
+        </Box>
         {rows.map(({ prompt, shown }) => {
           const isOpen = open[prompt.id] ?? false
           const isLesson = prompt.kind === 'learn'
+          const folds = foldsOf(prompt)
+          const hasOpenReply = isOpen && folds.slice(1).some(isOpenId)
 
           return (
             <Box key={`entry-${prompt.id}`} flexDirection="column">
-              <Box flexDirection="row">
-                <Button key={`row-${prompt.id}`} label={JUMP_ICON} plain dimColor onPress={() => void jump($, prompt.id)} />
-                <Text> </Text>
-                <Box key={`line-${prompt.id}`} flexDirection="row" hover={LIT_BOX}>
-                  <Button key={`toggle-${prompt.id}`} label={isOpen ? '▾' : '▸'} plain hover={LIT_TEXT} onPress={() => toggle(prompt.id)} />
-                  <Text dimColor hover={LIT_TEXT}>
-                    {' '}
-                    {prompt.time ?? '--:--'}{' '}
-                  </Text>
-                  {foldText(
-                    `text-${prompt.id}`,
-                    `${isLesson ? '💡 ' : ''}${shown.before}${shown.match}${shown.after}`,
-                    [
-                      isLesson && (
-                        <Text color="yellow" hover={LIT_TEXT}>
-                          💡{' '}
-                        </Text>
-                      ),
-                      <Text color={isLesson ? 'yellow' : undefined} dimColor={isLesson} hover={LIT_TEXT}>
-                        {shown.before}
-                      </Text>,
-                      shown.match !== '' && (
-                        <Text color="yellow" bold hover={LIT_TEXT}>
-                          {shown.match}
-                        </Text>
-                      ),
-                      <Text color={isLesson ? 'yellow' : undefined} dimColor={isLesson} hover={LIT_TEXT}>
-                        {shown.after}
-                      </Text>,
-                    ],
-                    () => toggle(prompt.id)
-                  )}
+              <Box flexDirection="row" justifyContent="space-between">
+                <Box flexDirection="row">
+                  <Button key={`row-${prompt.id}`} label={JUMP_ICON} plain dimColor onPress={() => void jump($, prompt.id)} />
+                  <Text> </Text>
+                  <Box key={`line-${prompt.id}`} flexDirection="row" hover={LIT_BOX}>
+                    <Button key={`toggle-${prompt.id}`} label={isOpen ? '▾' : '▸'} plain hover={LIT_TEXT} onPress={() => toggle(prompt.id)} />
+                    <Text dimColor hover={LIT_TEXT}>
+                      {' '}
+                      {prompt.time ?? '--:--'}{' '}
+                    </Text>
+                    {foldText(
+                      `text-${prompt.id}`,
+                      `${isLesson ? '💡 ' : ''}${shown.before}${shown.match}${shown.after}`,
+                      [
+                        isLesson && (
+                          <Text color="yellow" hover={LIT_TEXT}>
+                            💡{' '}
+                          </Text>
+                        ),
+                        <Text color={isLesson ? 'yellow' : undefined} dimColor={isLesson} hover={LIT_TEXT}>
+                          {shown.before}
+                        </Text>,
+                        shown.match !== '' && (
+                          <Text color="yellow" bold hover={LIT_TEXT}>
+                            {shown.match}
+                          </Text>
+                        ),
+                        <Text color={isLesson ? 'yellow' : undefined} dimColor={isLesson} hover={LIT_TEXT}>
+                          {shown.after}
+                        </Text>,
+                      ],
+                      () => toggle(prompt.id)
+                    )}
+                  </Box>
                 </Box>
+                {folds.length > 1 &&
+                  foldAllControl(`all-${prompt.id}`, hasOpenReply, hasOpenReply ? FOLD_ALL : UNFOLD_ALL, () =>
+                    setFolds(hasOpenReply ? folds.slice(1) : folds, !hasOpenReply)
+                  )}
               </Box>
               {isOpen && details(prompt)}
             </Box>

@@ -127,6 +127,59 @@ test('/reminders lists them by section, done closes a repeating one for today', 
   expect(await pane.find({ text: /30\/10 09:00 · every friday/ })).toBeDefined()
 })
 
+test('the arrow at the end of a section line unfolds or folds all under it, the one beside refresh the whole tab', async ($, on) => {
+  const calls: string[][] = []
+  const world: World = { reminders: [WEEKLY, LATER, PAST], handoffs: [], installed: [REMINDERS] }
+  answerBeneath(on, world, calls)
+
+  await $.session.start(START)
+  await $.command.run(command('reminders-pane'))
+  const pane = await mountPane($)
+
+  await pane.press({ key: 'all-now' })
+
+  expect(await pane.find({ text: '▾ Now (1)' })).toBeDefined()
+  expect(await pane.find({ text: '▾ General (1)' })).toBeDefined()
+  expect(await pane.find({ text: /Repeats: every friday/ })).toBeDefined()
+  expect(await pane.find({ text: '▸ Upcoming (1)' })).toBeDefined()
+  expect(await pane.find({ key: 'all-now', text: '▴ all' })).toBeDefined()
+
+  // Folding back keeps the section open with everything under it folded.
+  await pane.press({ key: 'all-now' })
+
+  expect(await pane.find({ text: '▾ Now (1)' })).toBeDefined()
+  expect(await pane.find({ text: '▸ General (1)' })).toBeDefined()
+  expect(await pane.find({ key: 'all-now', text: '▾ all' })).toBeDefined()
+
+  // One child opened by hand: the arrow folds it back at the first press.
+  await pane.press({ key: 'group-now-General' })
+
+  expect(await pane.find({ key: 'all-now', text: '▴ all' })).toBeDefined()
+  expect(await pane.find({ key: 'all-group-now-General', text: '▾ all' })).toBeDefined()
+
+  await pane.press({ key: 'all-now' })
+
+  expect(await pane.find({ text: '▸ General (1)' })).toBeDefined()
+
+  // The one beside refresh folds the whole tab while a section is open, else unfolds it all.
+  await pane.press({ key: 'fold-all' })
+
+  expect(await pane.find({ text: '▸ Now (1)' })).toBeDefined()
+  expect(await pane.find({ text: '▾ expand all' })).toBeDefined()
+
+  await pane.press({ key: 'fold-all' })
+
+  expect(await pane.find({ text: '▾ Upcoming (1)' })).toBeDefined()
+  expect(await pane.find({ text: /At 10:00\./ })).toBeDefined()
+  expect(await pane.find({ text: /Old one/ })).toBeDefined()
+  expect(await pane.find({ text: '▴ collapse all' })).toBeDefined()
+
+  await pane.press({ key: 'fold-all' })
+
+  expect(await pane.find({ text: '▸ Now (1)' })).toBeDefined()
+  expect(await pane.find({ text: '▸ Past (1)' })).toBeDefined()
+})
+
 test('stop and delete ask for a second press', async ($, on) => {
   const calls: string[][] = []
   answerBeneath(on, { reminders: [WEEKLY, PAST], handoffs: [], installed: [REMINDERS] }, calls)

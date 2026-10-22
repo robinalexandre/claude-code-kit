@@ -192,6 +192,63 @@ test('an unfolded message shows it whole, then each reply folded until opened, t
   expect(await pane.find({ text: 'No reply yet.' })).toBeUndefined()
 })
 
+test("the arrow at the end of a message unfolds it with all its replies; the one beside the count, every message listed", async ($, on) => {
+  mock.clock(on)
+  on('ui.render', () => Fragment({}))
+  const reply = (uuid: string, text: string) =>
+    $.session.append({ message: { type: 'assistant', role: 'assistant', content: [{ type: 'text', text }] }, door: 'response', origin: { kind: 'composer' }, uuid })
+
+  await say($, 'ask', 'Check the sync')
+  await reply('look', 'Looking at the sync first.\n\nThe remote is reachable.')
+  await reply('done', 'It works.\n\nNothing was left behind.')
+  await say($, 'next', 'Thanks')
+
+  const pane = await $.ui.mount({
+    plugin: 'recent-prompts',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'my-messages',
+    props: { title: 'My messages', isFocused: true, bodyColumns: 60, placement: 'dock', scroll: SCROLL, view: {} },
+  })
+
+  // A message with no reply has nothing to unfold under it.
+  expect(await pane.find({ key: 'all-next' })).toBeUndefined()
+
+  await pane.press({ key: 'all-ask' })
+
+  expect(await pane.find({ type: 'Text', text: 'The remote is reachable.' })).toBeDefined()
+  expect(await pane.find({ type: 'Text', text: 'Nothing was left behind.' })).toBeDefined()
+  expect(await pane.find({ key: 'all-ask', text: '▴ all' })).toBeDefined()
+
+  // Folding back leaves the message open, its replies folded.
+  await pane.press({ key: 'all-ask' })
+
+  expect(await pane.find({ key: 'details-ask' })).toBeDefined()
+  expect(await pane.find({ type: 'Text', text: 'Nothing was left behind.' })).toBeUndefined()
+
+  // One reply opened by hand: the arrow folds it back at the first press.
+  await pane.press({ key: 'answer-text-done' })
+
+  expect(await pane.find({ key: 'all-ask', text: '▴ all' })).toBeDefined()
+
+  await pane.press({ key: 'all-ask' })
+
+  expect(await pane.find({ type: 'Text', text: 'Nothing was left behind.' })).toBeUndefined()
+
+  // A message open: the one beside the count folds every line.
+  expect(await pane.find({ text: '▴ collapse all' })).toBeDefined()
+
+  await pane.press({ key: 'fold-all' })
+
+  expect(await pane.find({ key: 'details-ask' })).toBeUndefined()
+  expect(await pane.find({ text: '▾ expand all' })).toBeDefined()
+
+  await pane.press({ key: 'fold-all' })
+
+  expect(await pane.find({ type: 'Text', text: 'Nothing was left behind.' })).toBeDefined()
+  expect(await pane.find({ key: 'details-next' })).toBeDefined()
+})
+
 test('a 💡 Learn block Claude ended a reply with is listed in the history between the messages, never in the band', async ($, on) => {
   mock.clock(on)
   on('ui.render', () => Fragment({}))

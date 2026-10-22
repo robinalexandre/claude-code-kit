@@ -1,6 +1,6 @@
 {
   "name": "pr-pane",
-  "version": "0.4.7",
+  "version": "0.5.0",
   "description": "A pane listing the PRs pr-watch tracks: status, CI, votes and what each one waits for; open one in the browser, refresh them live.",
   "types": "./types/index.d.ts",
   "author": {
