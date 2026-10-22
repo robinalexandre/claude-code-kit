@@ -73,6 +73,8 @@ export const register: Register = on => {
       description: 'Short lessons on the security, architecture or patterns behind the code: off, brief, normal, deep',
       argumentHint: '[off|brief|normal|deep] | default <level>',
     })
+    // The level used to be pinned under the prompt; the status line shows it now.
+    $.ui.status(undefined)
     const held = (await $.state.get(level)).value
     const stored = parse(String((await $.store.get(DEFAULT_KEY)) ?? ''))
 

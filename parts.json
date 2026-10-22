@@ -190,7 +190,7 @@
       "name": "learn",
       "kind": "mod",
       "group": "dev",
-      "what": "Claude ends a reply with a short, precise lesson when the work touches security, an architecture choice, a design pattern or a performance trap, quoting the real code. /learn off, brief, normal or deep per session; the status line shows it as 💡 0 to 100%, and the history pane lists the lessons.",
+      "what": "Claude ends a reply with a short, precise lesson when the work touches security, an architecture choice, a design pattern or a performance trap, quoting the real code. /learn off, brief, normal or deep per session; the status line shows 💡 and the level, and the history pane lists the lessons.",
       "why": "You learn the why behind the code while you work, without asking for it every time.",
       "when": "At the end of a reply, only when there is something worth learning.",
       "who": "Anyone who wants to learn from the work; pair it with statusline and recent-prompts."

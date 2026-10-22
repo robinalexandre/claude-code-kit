@@ -1,7 +1,7 @@
 {
   "name": "learn",
   "version": "0.1.0",
-  "description": "Learn while working: Claude ends a reply with a short, precise point on the security, architecture or pattern behind the code at hand. /learn off|brief|normal|deep per session, shown in the status line as 💡 0–100%.",
+  "description": "Learn while working: Claude ends a reply with a short, precise point on the security, architecture or pattern behind the code at hand. /learn off|brief|normal|deep per session, shown in the status line as 💡 and the level.",
   "types": "./types/index.d.ts",
   "author": {
     "name": "robinalexandre",
