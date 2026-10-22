@@ -4,8 +4,10 @@
 # or, with no rule for it, the one they used most in that repo. Otherwise it is refused, with what to
 # ask the user.
 #   git-identity-guard.sh                    the hook (reads the tool call on stdin)
-#   git-identity-guard.sh git-hooks [on|off] git's global pre-push runs the same check for every push
+#   git-identity-guard.sh git-hooks [on|off] git's global pre-commit and pre-push run the same check
+#                                            for every commit and push, whoever runs git
 #   git-identity-guard.sh pre-push REMOTE URL   that check (git passes the refs on stdin)
+#   git-identity-guard.sh pre-commit         the same at commit time, on the identity git will use
 #   git-identity-guard.sh set MATCH EMAIL    record the email for remotes starting with MATCH
 #                                            (github.com, github.com/<owner>, dev.azure.com/<org>, ...)
 #   git-identity-guard.sh unset MATCH        forget a rule
@@ -25,6 +27,7 @@ else
 fi
 
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+is_email() { [[ "$1" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]+$ ]]; }
 
 # One spelling per remote: host/path, lowercase, no scheme, user, port or .git.
 normalize() {
@@ -42,7 +45,7 @@ normalize() {
     *@*:*) u=${u#*@}; u="${u%%:*}/${u#*:}" ;;
     *:*) [[ "${u%%:*}" == */* ]] || u="${u%%:*}/${u#*:}" ;;
   esac
-  u=$(lower "$u")
+  u=$(lower "$u" | tr -cd 'a-z0-9._~/:@+-')
   case "$u" in
     ssh.dev.azure.com/v3/*) u="dev.azure.com/${u#ssh.dev.azure.com/v3/}" ;;
     vs-ssh.visualstudio.com/v3/*) u="dev.azure.com/${u#vs-ssh.visualstudio.com/v3/}" ;;
@@ -94,7 +97,7 @@ ask_rule() {
 }
 
 check_call() {
-  local dir=$1 sub=$2 env_author=$3 env_committer=$4 cfg_email=$5 author=$6
+  local dir=$1 sub=$2 env_author=$3 env_committer=$4 author=$6
   shift 6
   git -C "$dir" rev-parse --git-dir > /dev/null 2>&1 || return 0
   local remotes target="" url="" arg
@@ -134,11 +137,16 @@ check_call() {
   local fix="Ask the user to confirm $expected ($SOURCE) before changing anything; on their yes, set it for this repo: git -C \"$dir\" config user.email $expected."
 
   if [ "$sub" = commit ]; then
+    # git itself says who the commit would be from, with the command's own -c options and variables.
     local mine committer
-    mine=${author:-${env_author:-${cfg_email:-$(git -C "$dir" config --get user.email 2> /dev/null)}}}
-    committer=${env_committer:-${cfg_email:-$(git -C "$dir" config --get user.email 2> /dev/null)}}
+    local -a envs=()
+    [ -n "$env_author" ] && envs+=("GIT_AUTHOR_EMAIL=$env_author")
+    [ -n "$env_committer" ] && envs+=("GIT_COMMITTER_EMAIL=$env_committer")
+    mine=$(env ${envs[@]+"${envs[@]}"} git -C "$dir" ${GITC[@]+"${GITC[@]}"} var GIT_AUTHOR_IDENT 2> /dev/null)
+    committer=$(env ${envs[@]+"${envs[@]}"} git -C "$dir" ${GITC[@]+"${GITC[@]}"} var GIT_COMMITTER_IDENT 2> /dev/null)
+    [ -n "$author" ] && mine=$author
     mine=$(lower "$(email_in "$mine")")
-    committer=$(lower "$committer")
+    committer=$(lower "$(email_in "$committer")")
     [ -z "$mine" ] && deny "No git email is set in $dir. The user commits to $where as $expected. $fix"
     [ "$mine" = "$expected" ] && [ "$committer" = "$expected" ] && return 0
     deny "This commit would be authored as ${mine} (committer ${committer}), but the user commits to $where as $expected. $fix"
@@ -175,6 +183,8 @@ resolve() {
   used=$(most_used "$1")
   [ -n "$used" ] || return 0
   EXPECTED=${used%%$'\t'*}
+  # The history is the repo's, not the user's: only a plain address may come out of it.
+  is_email "$EXPECTED" || { EXPECTED=""; return 0; }
   used=${used#*$'\t'}
   SOURCE="no email is recorded for $2, and the user's commits in this repo use it most: ${used%%$'\t'*} of ${used#*$'\t'}; once confirmed, record it: bash \"$SELF\" set <host or host/org> <email>"
 }
@@ -210,8 +220,27 @@ pre_push() {
   return 1
 }
 
-# git-hooks on|off: points git's global core.hooksPath at a folder whose pre-push runs the check,
-# and whose every hook runs the repo's own one, so repos keep their hooks.
+# Git's own pre-commit hook (git-hooks on): the identity git will really use, whatever ran git
+# (a wrapper, a script, another agent) and however the email was set.
+pre_commit() {
+  local r u where author committer
+  r=$(remote_of "$PWD")
+  [ -n "$r" ] || return 0
+  u=$(git remote get-url --push "$r" 2> /dev/null)
+  [ -n "$u" ] || return 0
+  where=$(normalize "$u")
+  resolve "$PWD" "$where"
+  [ -n "$EXPECTED" ] || return 0
+  author=$(lower "$(email_in "$(git var GIT_AUTHOR_IDENT 2> /dev/null)")")
+  committer=$(lower "$(email_in "$(git var GIT_COMMITTER_IDENT 2> /dev/null)")")
+  [ "$author" = "$EXPECTED" ] && [ "$committer" = "$EXPECTED" ] && return 0
+  echo "git-identity-guard: this commit would be authored as $author (committer $committer), but $where expects $EXPECTED." >&2
+  echo "Set it (git config user.email $EXPECTED), or commit with --no-verify if this is intended." >&2
+  return 1
+}
+
+# git-hooks on|off: points git's global core.hooksPath at a folder whose pre-commit and pre-push run
+# the check, and whose every hook runs the repo's own one, so repos keep their hooks.
 HOOK_NAMES="applypatch-msg pre-applypatch post-applypatch pre-commit pre-merge-commit prepare-commit-msg commit-msg
 post-commit pre-rebase post-checkout post-merge pre-push post-rewrite pre-auto-gc push-to-checkout sendemail-validate"
 git_hooks() {
@@ -235,6 +264,9 @@ git_hooks() {
       if [ "$name" = pre-push ]; then
         printf 'input=$(cat)\nprintf "%%s\\n" "$input" | bash "$HOME/.claude/hooks/git-identity-guard.sh" pre-push "$@" || exit 1\n'
         printf 'own="$(git rev-parse --git-common-dir 2> /dev/null)/hooks/%s"\n[ -x "$own" ] || exit 0\nprintf "%%s\\n" "$input" | "$own" "$@"\n' "$name"
+      elif [ "$name" = pre-commit ]; then
+        printf 'bash "$HOME/.claude/hooks/git-identity-guard.sh" pre-commit || exit 1\n'
+        printf 'own="$(git rev-parse --git-common-dir 2> /dev/null)/hooks/%s"\n[ -x "$own" ] && exec "$own" "$@"\nexit 0\n' "$name"
       else
         printf 'own="$(git rev-parse --git-common-dir 2> /dev/null)/hooks/%s"\n[ -x "$own" ] && exec "$own" "$@"\nexit 0\n' "$name"
       fi
@@ -269,7 +301,8 @@ hook() {
       dir=$to
       continue
     fi
-    local i=0 env_author="" env_committer="" cfg="" here=$dir
+    local i=0 env_author="" env_committer="" here=$dir
+    GITC=()
     while [ $i -lt ${#t[@]} ] && [[ "${t[$i]}" == *=* ]] && [[ "${t[$i]}" != -* ]]; do
       case "${t[$i]}" in
         GIT_AUTHOR_EMAIL=*) env_author=$(unquote "${t[$i]#*=}") ;;
@@ -282,7 +315,7 @@ hook() {
     while [ $i -lt ${#t[@]} ] && [[ "${t[$i]}" == -* ]]; do
       case "${t[$i]}" in
         -C) i=$((i + 1)); here=$(unquote "${t[$i]:-}"); here=${here/#\~/$HOME}; [[ "$here" == /* ]] || [[ "$here" =~ ^[A-Za-z]: ]] || here="$dir/$here" ;;
-        -c) i=$((i + 1)); [[ "${t[$i]:-}" == user.email=* ]] && cfg=$(unquote "${t[$i]#user.email=}") ;;
+        -c) i=$((i + 1)); GITC+=(-c "$(unquote "${t[$i]:-}")") ;;
       esac
       i=$((i + 1))
     done
@@ -299,14 +332,14 @@ hook() {
       done
       rest=()
     fi
-    check_call "$here" "$sub" "$env_author" "$env_committer" "$cfg" "$author" "${rest[@]+"${rest[@]}"}"
+    check_call "$here" "$sub" "$env_author" "$env_committer" "" "$author" "${rest[@]+"${rest[@]}"}"
   done <<< "$segs"
   exit 0
 }
 
 case "${1:-}" in
   set)
-    [ -n "${2:-}" ] && [[ "${3:-}" == *@* ]] || { echo "usage: $0 set MATCH EMAIL" >&2; exit 1; }
+    [ -n "${2:-}" ] && is_email "${3:-}" || { echo "usage: $0 set MATCH EMAIL" >&2; exit 1; }
     mkdir -p "$(dirname "$RULES")"
     [ -f "$RULES" ] || echo '{"rules": []}' > "$RULES"
     m=$(normalize "$2")
@@ -327,6 +360,7 @@ case "${1:-}" in
     printf '%s\texpected %s\tset %s\n' "$w" "$(expected_for "$w")" "$(git -C "$d" config --get user.email)"
     ;;
   pre-push) shift; pre_push "$@" ;;
+  pre-commit) pre_commit ;;
   git-hooks) git_hooks "${2:-on}" ;;
   *) hook ;;
 esac

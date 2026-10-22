@@ -22,11 +22,11 @@ while [ "$i" -le 20 ]; do
 done
 
 echo
-echo "Claude's commits and pushes are checked from now on. Git itself can run the same check on every push,"
+echo "Claude's commits and pushes are checked from now on. Git itself can run the same check on every commit and push,"
 echo "whoever runs it (you, Claude, another agent, your editor), through git's global hooks folder."
 echo "Each repo's own hooks keep running; git push --no-verify skips the check."
 if [ -n "$(git config --global --get core.hooksPath || true)" ] && [ "$(git config --global --get core.hooksPath)" != "$(kit_path "$HOME/.claude/hooks/git")" ]; then
   echo "Not offered: git's global hooks folder is already $(git config --global --get core.hooksPath)."
-elif ask git-identity.git-hooks "Check every push on this computer too?"; then
+elif ask git-identity.git-hooks "Check every commit and push on this computer too?"; then
   bash "$GUARD" git-hooks on
 fi

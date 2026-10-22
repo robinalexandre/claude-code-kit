@@ -12,6 +12,8 @@
 set -u
 KIT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 REAL_HOME=$HOME
+PATH_SEP=':'
+command -v cygpath > /dev/null 2>&1 && PATH_SEP=';'
 WATCHED=".claude/settings.json .claude/CLAUDE.md .claude.json .gitconfig .zshrc .bashrc .bash_profile"
 
 die() {
@@ -72,7 +74,7 @@ report() {
   while read -r path; do
     [ -z "$path" ] && continue
     if [ -d "$path" ]; then echo "ok   mod $path"; else echo "!!   mod folder $path is missing"; problems=$((problems + 1)); fi
-  done < <(jq -r '.env.CLAUDE_CODE_PLUGIN_DIRS // empty' "$home/.claude/settings.json" | tr ':;' '\n\n')
+  done < <(jq -r '.env.CLAUDE_CODE_PLUGIN_DIRS // empty' "$home/.claude/settings.json" | tr -d '\r' | tr "$PATH_SEP" '\n')
   if grep -rIl --exclude-dir=backups -- "$REAL_HOME/" "$home/.claude" 2> /dev/null | grep -q .; then
     echo "!!   files in the sandbox name your real home folder:"
     grep -rIl --exclude-dir=backups -- "$REAL_HOME/" "$home/.claude" | sed 's/^/       /'

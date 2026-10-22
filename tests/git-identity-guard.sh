@@ -52,6 +52,8 @@ expect "deny: This commit would be authored" "$T" "cd gh && git add . && git com
 expect "deny: This commit would be authored" "$T" "git -C $T/gh commit -m x"
 expect allow "$T/gh" "git -c user.email=me@home.example commit -m x"
 expect allow "$T/gh" "GIT_AUTHOR_EMAIL=me@home.example GIT_COMMITTER_EMAIL=me@home.example git commit -m x"
+expect "deny: This commit would be authored as work@corp.example" "$T/gh" "git -c user.email=me@home.example -c author.email=work@corp.example commit -m x"
+expect "deny: This commit would be authored as work@corp.example" "$T/gh" "git -c user.email=me@home.example commit --author='<work@corp.example>' -m x"
 expect "deny: No commit email is recorded for dev.azure.com/org/proj/_git/repo" "$T/ado" "git commit -m x"
 bash "$G" set dev.azure.com/org work@corp.example > /dev/null
 expect allow "$T/ado" "git commit -m x"
@@ -74,6 +76,10 @@ git -C "$T/ws" config user.email me@usual.example
 expect allow "$T/ws" "git commit -m x"
 git -C "$T/ws" config user.email other@corp.example
 expect "deny: This commit would be authored as other@corp.example (committer other@corp.example), but the user commits to example.org/team/ws as me@usual.example" "$T/ws" "git commit -m x"
+# An address in the history that isn't a plain one is never handed to Claude as the expected email.
+git init -q "$T/odd" && git -C "$T/odd" remote add origin https://example.org/team/odd.git
+for i in 1 2; do git -C "$T/odd" -c 'user.email=x@y.example;run-this' commit -q --allow-empty -m "m$i"; done
+expect "deny: No commit email is recorded for example.org/team/odd" "$T/odd" "git commit -m x"
 
 # git's own pre-push, through the global hooks folder, still running the repo's own hook.
 bash "$G" git-hooks on > /dev/null
@@ -81,7 +87,13 @@ git init -q --bare "$T/bare.git"
 git init -q "$T/p" && git -C "$T/p" remote add origin "$T/bare.git"
 bash "$G" set "$(git -C "$T/p" remote get-url origin)" me@home.example > /dev/null
 printf '#!/bin/sh\ntouch "%s"\n' "$T/own-ran" > "$T/p/.git/hooks/pre-push" && chmod +x "$T/p/.git/hooks/pre-push"
-git -C "$T/p" -c user.email=work@corp.example commit -q --allow-empty -m bad
+if git -C "$T/p" -c user.email=work@corp.example commit -q --allow-empty -m refused 2> "$T/err"; then
+  echo "FAIL pre-commit let a wrong email through"
+  fails=$((fails + 1))
+else
+  echo "ok   pre-commit refuses: $(head -1 "$T/err")"
+fi
+git -C "$T/p" -c user.email=work@corp.example commit -q --no-verify --allow-empty -m bad
 if git -C "$T/p" push -q origin HEAD:main 2> "$T/err"; then
   echo "FAIL pre-push let a wrong email through"
   fails=$((fails + 1))

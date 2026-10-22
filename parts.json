@@ -78,7 +78,7 @@
     },
     {
       "name": "git-identity-guard", "kind": "hook", "group": "dev", "setup": "hooks/setup/git-identity-guard.sh",
-      "what": "Refuses a commit or push whose email isn't the one you chose for that host (GitHub, GitLab, Azure DevOps, any), or, with no rule, the one you used most in that repo. Can also check every push made outside Claude.",
+      "what": "Refuses a commit or push whose email isn't the one you chose for that host (GitHub, GitLab, Azure DevOps, any), or, with no rule, the one you used most in that repo. Can also check every commit and push made outside Claude.",
       "why": "One work email on a personal or public repo can expose your employer, or make a security team think secrets leaked.",
       "when": "Each git commit and push.",
       "who": "Anyone committing with different emails (work, personal, clients), even on a single host."
