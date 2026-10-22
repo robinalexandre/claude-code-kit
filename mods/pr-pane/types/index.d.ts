@@ -1,5 +1,8 @@
 export type CiCheck = { name: string; state: string; required: boolean | null; link: string | null }
 
+/** `until`: YYYY-MM-DD, empty when it lasts until the alert changes; `note`: the reminder's words. */
+export type Ack = { until: string; note: string; at: string }
+
 export type PrRow = {
   url: string
   repo: string
@@ -19,6 +22,8 @@ export type PrRow = {
   note: string
   /** Tracked because the user approved it: listed apart until it is merged. */
   reviewed?: boolean
+  /** The user acknowledged its current alert (pr-watch ack), until it changes or `until` passes. */
+  ack?: Ack | null
   /** Kept but quiet (pr-watch park): never in "needs your attention", its changes not reported. */
   parked?: boolean
   parkedWhy?: string
@@ -54,6 +59,7 @@ export type BuildRow = {
   ended: string
   /** The run's host did not answer: this is the run as last found there. */
   stale?: boolean
+  ack?: Ack | null
   /** What started it: the user by hand, or a push of theirs; absent on runs recorded before. */
   trigger?: 'manual' | 'push' | null
 }

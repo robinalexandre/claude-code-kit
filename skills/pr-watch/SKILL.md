@@ -23,7 +23,11 @@ bash $SK/pr-watch.sh merge <PR URL>   # merge it (GitHub: squash when the repo a
 bash $SK/pr-watch.sh remove <PR URL>  # stop tracking it; it is not tracked again on its own
 bash $SK/pr-watch.sh park <PR URL> [--note "<why>"]  # keep it tracked but quiet: its changes are no longer reported, nor shown as needing the user, until it is merged or closed
 bash $SK/pr-watch.sh unpark <PR URL>
+bash $SK/pr-watch.sh ack <PR or build URL> [--until YYYY-MM-DD] [--note "<words>"]  # the user has seen this alert: not red any more until it changes (a new comment, another failure) or the date passes
+bash $SK/pr-watch.sh unack <PR or build URL>
 ```
+
+**Acknowledged alerts**: when the user acks a PR that needs them or a failed run, `status` carries it as `ack` (`until`, `note`) while the alert stays the same and the date has not passed; the pr-pane shows it in blue, out of the red count. When the user asks to ack with a reminder (the pane's `ack + remind` asks you), ask in one message what the reminder should say and when, proposing a date; leave it with the reminders skill on that date, then run `ack <URL> --until <that date> --note "<the words>"`, so the alert and the reminder come back the same day.
 
 **Parked PRs**: a PR the user keeps open without meaning to merge it (a reference, a spike, one waiting months for a decision) is `park`ed when they ask, with why. `check` records its changes without reporting them, `status` marks it `parked` with no `changes`, and the pr-pane lists it apart, folded, out of the band's count. Its merge or close is still reported once.
 

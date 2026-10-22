@@ -23,6 +23,10 @@
     pr_watch.py remove URL              stop tracking a PR (and never track it again on its own)
     pr_watch.py park URL [--note WHY]   keep tracking a PR without reporting its changes
     pr_watch.py unpark URL              report them again
+    pr_watch.py ack URL [--until DATE] [--note TEXT]
+                                        acknowledge a PR's or a run's current alert: not red any more
+                                        until it changes or DATE (YYYY-MM-DD) passes
+    pr_watch.py unack URL               undo it
 
 Tracked PRs live in $PR_WATCH_DIR (default ~/.claude-sync/pr-watch), one JSON file per PR, so the
 config sync carries them to every computer. A merged, abandoned or closed PR is reported once, then
@@ -73,6 +77,7 @@ WATCH_DIR = Path(os.environ.get("PR_WATCH_DIR", Path.home() / ".claude-sync" / "
 CONFIG = WATCH_DIR / "config.json"
 REVIEWS = WATCH_DIR / "reviews.json"
 BUILDS = WATCH_DIR / "builds.json"
+ACKS = WATCH_DIR / "acks.json"
 # Not a .json file: older copies of this script read every .json file here as a tracked PR.
 DISMISSED = WATCH_DIR / "dismissed.txt"
 DONE_DIR = WATCH_DIR / "done"
@@ -920,7 +925,7 @@ def entry_path(url: str) -> Path:
 
 def load_entries() -> list[tuple[Path, dict]]:
     return [(path, json.loads(path.read_text(encoding="utf-8")))
-            for path in sorted(WATCH_DIR.glob("*.json")) if path not in (CONFIG, REVIEWS, BUILDS)]
+            for path in sorted(WATCH_DIR.glob("*.json")) if path not in (CONFIG, REVIEWS, BUILDS, ACKS)]
 
 
 def reviews_file() -> dict:
@@ -1332,7 +1337,8 @@ def status(live: bool) -> None:
         # keeps its cached rows in them.
         save_reviews(reviews)
         save_builds(builds)
-    ignore, bots, prs = config("ignoreAuthors"), config("bots"), []
+    ignore, bots, prs, acks = config("ignoreAuthors"), config("bots"), [], acks_file()
+    builds = [{**build, "ack": ack_of(build["url"], _build_alert(build), acks)} for build in builds]
     for _, entry, now, me, error in fetched:
         if error:
             errors.append(f"{entry['url']}: {error}")
@@ -1360,6 +1366,7 @@ def status(live: bool) -> None:
             "reviewed": bool(entry.get("reviewed")),
             "parked": bool(entry.get("parked")),
             "parkedWhy": entry.get("parkedWhy", ""),
+            "ack": ack_of(entry["url"], _pr_alert(seen, news), acks),
             "changes": news,
             "checked": _now() if now else entry.get("checked", ""),
         })
@@ -1500,6 +1507,76 @@ def park(url: str, why: str) -> None:
     print(f"parked {label(entry)}: changes are no longer reported (`unpark` to bring it back)")
 
 
+def acks_file() -> dict:
+    return json.loads(ACKS.read_text(encoding="utf-8")) if ACKS.exists() else {}
+
+
+def _pr_alert(seen: dict, news: list[str]) -> dict:
+    """What makes a PR need the user, as an ack compares it: what it waits for, a conflict, and the
+    new comments not read yet."""
+    return {"waiting": waiting_for(seen), "conflicts": bool(seen.get("conflicts")),
+            "comments": sorted(line for line in news if line.startswith("new comment"))}
+
+
+def _build_alert(build: dict) -> dict:
+    return {"status": build.get("status", ""), "ended": build.get("ended", "")}
+
+
+def ack_of(url: str, alert: dict, acks: dict) -> dict | None:
+    """The user's ack of this alert, while it holds: the same state (a PR's comments read since are
+    fine, a new one is not) and its date not passed yet."""
+    ack = acks.get(url)
+    if not ack:
+        return None
+    if ack.get("until") and datetime.now().strftime("%Y-%m-%d") > ack["until"]:
+        return None
+    was = ack.get("alert", {})
+    if "comments" in alert:
+        same = (was.get("waiting"), was.get("conflicts")) == (alert["waiting"], alert["conflicts"]) \
+            and set(alert["comments"]) <= set(was.get("comments", []))
+    else:
+        same = was == alert
+    return {"until": ack.get("until", ""), "note": ack.get("note", ""), "at": ack.get("at", "")} if same else None
+
+
+def ack(url: str, until: str, note: str) -> None:
+    """Quiets a PR's or a run's current alert until it changes or `until` (YYYY-MM-DD) passes."""
+    if until and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", until):
+        raise WatchError(f"--until takes a date as YYYY-MM-DD, not {until}")
+    path = entry_path(normalize(url))
+    if path.exists():
+        entry = json.loads(path.read_text(encoding="utf-8"))
+        # As a live status shows it, so the comments on screen are the ones acknowledged.
+        seen, news = entry["seen"], entry.get("unread", [])
+        try:
+            pr = provider(entry["url"])
+            now = pr.snapshot()
+            prefix = f"{label(entry)}: "
+            news = news + [line.removeprefix(prefix) for line in
+                           changes(entry, now, config("ignoreAuthors") | {pr.me()} - {""}, config("bots"))]
+            seen = now
+        except (WatchError, KeyError, TypeError, AttributeError):
+            pass
+        key, alert, what = entry["url"], _pr_alert(seen, news), label(entry)
+    elif build := next((row for row in cached_builds() if row["url"] == url.strip()), None):
+        key, alert, what = build["url"], _build_alert(build), f"{build['pipeline']} #{build['number']}"
+    else:
+        raise WatchError(f"neither a tracked PR nor a listed run: {url}")
+    acks = acks_file()
+    acks[key] = {"alert": alert, "until": until, "note": note, "at": _now()}
+    save(ACKS, acks)
+    print(f"acknowledged {what}" + (f" until {until}" if until else "") + ": back if it changes")
+
+
+def unack(url: str) -> None:
+    acks = acks_file()
+    key = normalize(url) if entry_path(normalize(url)).exists() else url.strip()
+    if acks.pop(key, None) is None:
+        raise WatchError(f"not acknowledged: {url}")
+    save(ACKS, acks)
+    print(f"no longer acknowledged: {key}")
+
+
 def unpark(url: str) -> None:
     path = entry_path(normalize(url))
     if not path.exists():
@@ -1550,6 +1627,11 @@ def main(argv: list[str]) -> int:
             park(args[0], args[args.index("--note") + 1] if "--note" in args[1:-1] else "")
         elif command == "unpark" and args:
             unpark(args[0])
+        elif command == "ack" and args:
+            ack(args[0], args[args.index("--until") + 1] if "--until" in args[1:-1] else "",
+                args[args.index("--note") + 1] if "--note" in args[1:-1] else "")
+        elif command == "unack" and args:
+            unack(args[0])
         else:
             print(__doc__, file=sys.stderr)
             return 2

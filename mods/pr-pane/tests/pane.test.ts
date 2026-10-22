@@ -219,7 +219,7 @@ test('a merge conflict marks the band and the pane asks Claude to rebase and fix
   const band = await $.ui.mount({ plugin: 'pr-pane', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
   const pane = await mountPane($, 'terminal')
 
-  expect(await band.find({ key: 'prs', text: 'PRs 1 !' })).toBeDefined()
+  expect(await band.find({ key: 'prs', text: 'PRs & CI 1 !' })).toBeDefined()
   expect(await bandColor(band)).toBe('red')
 
   await pane.press({ key: 'pr-toggle-shop-9' })
@@ -362,7 +362,7 @@ test('a PR waiting for my review is listed first: approve on a second press, or 
   const pane = await mountPane($, 'terminal')
 
   // A review to give is something to do, not a problem: yellow, no `!`.
-  expect(await band.find({ key: 'prs', text: 'PRs 1 · 1 to review' })).toBeDefined()
+  expect(await band.find({ key: 'prs', text: 'PRs & CI · 1 to review' })).toBeDefined()
   expect(await bandColor(band)).toBe('yellow')
   expect(await pane.find({ text: 'Waiting for my review (1)' })).toBeDefined()
   expect(await pane.find({ key: 'reviews-repo-api', text: '▾ api (1)' })).toBeDefined()
@@ -581,8 +581,9 @@ test('the pipeline runs the user launched come first, open while one runs, and r
   const band = await $.ui.mount({ plugin: 'pr-pane', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
   const pane = await mountPane($, 'terminal', 100)
 
-  expect(await band.find({ key: 'prs', text: 'PRs 1 · 1 build running' })).toBeDefined()
-  expect(await bandColor(band)).toBe('yellow')
+  // The failed run counts: it needs the user.
+  expect(await band.find({ key: 'prs', text: 'PRs & CI 1 ! · 1 running' })).toBeDefined()
+  expect(await bandColor(band)).toBe('red')
   // The section sits above the PRs, open because a run is in progress.
   expect(await pane.find({ key: 'builds', text: '▾ Pipeline runs (3)' })).toBeDefined()
   const buttons = (await pane.findAll({ type: 'Button' })).map(element => element.key ?? '')
@@ -698,7 +699,7 @@ test('a run whose host did not answer is shown as cached and not watched', async
   const band = await $.ui.mount({ plugin: 'pr-pane', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
   const pane = await mountPane($, 'terminal', 100)
 
-  expect(await band.find({ key: 'prs', text: 'PRs 1' })).toBeDefined()
+  expect(await band.find({ key: 'prs', text: 'PRs & CI' })).toBeDefined()
   expect(await bandColor(band)).toBeUndefined()
   expect(await pane.find({ key: 'builds', text: '▸ Pipeline runs (2)' })).toBeDefined()
 
@@ -752,7 +753,7 @@ const BAND_PROPS = {
   view: {},
 }
 
-test('the band shows a PRs button, marked when one needs us, that opens the pane', async ($, on) => {
+test('the band shows a PRs & CI button, counting only what needs us, that opens the pane', async ($, on) => {
   mock.clock(on)
   const opened: string[] = []
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
@@ -771,7 +772,7 @@ test('the band shows a PRs button, marked when one needs us, that opens the pane
   await $.command.run(RUN)
   const band = await $.ui.mount({ plugin: 'pr-pane', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
 
-  expect(await band.find({ key: 'prs', text: 'PRs 2 !' })).toBeDefined()
+  expect(await band.find({ key: 'prs', text: 'PRs & CI 1 !' })).toBeDefined()
 
   await band.press({ key: 'prs' })
 
@@ -788,7 +789,7 @@ test('the band is green when a PR only waits for the merge', async ($, on) => {
   await $.command.run(RUN)
   const band = await $.ui.mount({ plugin: 'pr-pane', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
 
-  expect(await band.find({ key: 'prs', text: 'PRs 1' })).toBeDefined()
+  expect(await band.find({ key: 'prs', text: 'PRs & CI' })).toBeDefined()
   expect(await bandColor(band)).toBe('green')
 })
 
@@ -844,7 +845,7 @@ test('no Git Bash anywhere is said in the pane and the band shows PRs ?', async 
   const band = await $.ui.mount({ plugin: 'pr-pane', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
 
   expect(await pane.find({ text: /Git Bash not found: set CLAUDE_CODE_GIT_BASH_PATH/ })).toBeDefined()
-  expect(await band.find({ key: 'prs', text: 'PRs ?' })).toBeDefined()
+  expect(await band.find({ key: 'prs', text: 'PRs & CI ?' })).toBeDefined()
 })
 
 test('a parked PR leaves the attention list and the band, and is unparked from its own section', async ($, on) => {
@@ -871,7 +872,7 @@ test('a parked PR leaves the attention list and the band, and is unparked from i
   const band = await $.ui.mount({ plugin: 'pr-pane', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
   const pane = await mountPane($, 'terminal', 100)
 
-  expect(await band.find({ key: 'prs', text: 'PRs 1 !' })).toBeDefined()
+  expect(await band.find({ key: 'prs', text: 'PRs & CI 1 !' })).toBeDefined()
   expect(await pane.find({ text: 'Needs your attention (1)' })).toBeDefined()
   expect(await pane.find({ key: 'parked', text: '▸ Parked, kept but quiet (1)' })).toBeDefined()
 
@@ -889,6 +890,105 @@ test('a parked PR leaves the attention list and the band, and is unparked from i
   await pane.press({ key: 'unpark-shop-3' })
 
   expect(calls).toContainEqual(['unpark', 'https://dev.azure.com/org/project/_git/shop/pullrequest/3'])
+})
+
+test('an acknowledged alert turns blue, leaves the count and the colors above it, and can be undone', async ($, on) => {
+  mock.clock(on)
+  const calls: string[][] = []
+  const submitted: string[] = []
+  const ACKED = {
+    live: false,
+    prs: [
+      row('5', { ci: 'CI failed', waiting: 'a CI fix', ack: { until: '2026-10-25', note: 'after the release', at: '' } }),
+      row('6', { ci: 'CI failed', waiting: 'a CI fix' }),
+      row('7', { repo: 'docs', url: 'https://dev.azure.com/org/project/_git/docs/pullrequest/7', waiting: 'a review' }),
+    ],
+    builds: [{ ...BUILDS.builds[0], status: 'failed', ended: '2026-01-01T07:50Z' }],
+    errors: [],
+  }
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
+  on('process.run', ($, e) => {
+    calls.push(e.argv.slice(2))
+
+    if (e.argv[2] === 'details') {
+      return ran(0, JSON.stringify(BUILD_DETAILS))
+    }
+
+    return ran(0, e.argv[2] === 'status' ? JSON.stringify(ACKED) : '')
+  })
+  on('ui.render', () => Fragment({}))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('prompt.submit', ($, e) => {
+    submitted.push(e.text)
+
+    return { text: e.text }
+  })
+
+  await $.command.run(RUN)
+  const band = await $.ui.mount({ plugin: 'pr-pane', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
+  const pane = await mountPane($, 'terminal', 120)
+
+  // #6 and the failed run need the user; #5 was acknowledged.
+  expect(await band.find({ key: 'prs', text: 'PRs & CI 2 !' })).toBeDefined()
+  expect(await pane.find({ text: 'Needs your attention (1)' })).toBeDefined()
+
+  // Folded, "Waiting for others" holds the acknowledged #5 (blue) and #7 (yellow): it is yellow.
+  const waiting = await pane.find({ key: 'waiting' })
+  expect(waiting).toBeDefined()
+
+  await pane.press({ key: 'waiting' })
+  await pane.press({ key: 'repo-shop' })
+
+  expect(await pane.find({ text: ' · acked until 10-25' })).toBeDefined()
+
+  await pane.press({ key: 'pr-toggle-shop-5' })
+
+  expect(await pane.find({ text: 'acked · reminder 10-25: after the release' })).toBeDefined()
+
+  await pane.press({ key: 'unack-shop-5' })
+
+  expect(calls).toContainEqual(['unack', 'https://dev.azure.com/org/project/_git/shop/pullrequest/5'])
+
+  await pane.press({ key: 'pr-toggle-shop-6' })
+  await pane.press({ key: 'ack-shop-6' })
+
+  expect(calls).toContainEqual(['ack', 'https://dev.azure.com/org/project/_git/shop/pullrequest/6'])
+
+  await pane.press({ key: 'remind-shop-6' })
+
+  expect(submitted[0]).toContain('pr-watch.sh ack https://dev.azure.com/org/project/_git/shop/pullrequest/6 --until')
+  expect(submitted[0]).toContain('reminders skill')
+
+  await pane.press({ key: 'build-toggle-70125' })
+  await pane.press({ key: 'build-ack-70125' })
+
+  expect(calls).toContainEqual(['ack', 'https://dev.azure.com/org/project/_build/results?buildId=70125'])
+})
+
+test('a folded block wears the worst color of what it holds, acknowledged ones left out', async ($, on) => {
+  mock.clock(on)
+  const MIXED = {
+    live: false,
+    prs: [
+      row('8', { waiting: 'a review' }),
+      row('9', { waiting: 'the merge', votes: { Ada: 'approved' } }),
+      row('10', { repo: 'docs', url: 'https://dev.azure.com/org/project/_git/docs/pullrequest/10', waiting: 'the merge' }),
+    ],
+    errors: [],
+  }
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
+  on('process.run', () => ran(0, JSON.stringify(MIXED)))
+  on('ui.render', () => Fragment({}))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+
+  await $.command.run(RUN)
+  const pane = await mountPane($, 'terminal', 120)
+  const dots = (await pane.findAll({ text: '● ' })).map(dot => (dot.props as { color?: string }).color)
+
+  // Approved section (shop #9, docs #10): green; waiting section (#8): yellow.
+  expect(dots).toContain('green')
+  expect(dots).toContain('yellow')
 })
 
 test('the CI of a push of the user is listed with the runs, marked as a push', async ($, on) => {
