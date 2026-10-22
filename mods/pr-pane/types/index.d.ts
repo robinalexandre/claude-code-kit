@@ -91,6 +91,8 @@ declare module 'claude-code' {
       details: Record<string, CheckDetails>
       /** By run URL: its steps, once the user asked for them. */
       buildDetails: Record<string, BuildDetails>
+      /** By run URL: the steps of an ended run already read this session, shown again at once. */
+      readSteps: Record<string, BuildStep[]>
       /** `<run URL>|<step index>` of the steps whose messages are unfolded. */
       openSteps: Record<string, boolean>
       armed: string

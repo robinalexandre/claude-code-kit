@@ -15,7 +15,7 @@ bash $SK/pr-watch.sh list
 bash $SK/pr-watch.sh status [--live]  # JSON per repo in merge order, with checks and what each PR waits for, plus the review requests and the user's pipeline runs (--live: fetched now, records only those two lists)
 bash $SK/pr-watch.sh open <PR or build URL>  # in the default browser
 bash $SK/pr-watch.sh details <PR URL> # JSON: each failed check, its failed steps and error lines
-bash $SK/pr-watch.sh details <build URL>  # JSON: every step of the run in order (`steps`, each with `job`, `state`: succeeded, issues, failed, canceled, skipped, running); a step with issues has its messages and log error lines in `errors`
+bash $SK/pr-watch.sh details <build URL>  # JSON (kept in steps/ once the run has ended, answered from there after): every step of the run in order (`steps`, each with `job`, `state`: succeeded, issues, failed, canceled, skipped, running); a step with issues has its messages and log error lines in `errors`
 bash $SK/pr-watch.sh rerun <PR URL> <check name>  # relaunch it: only on the user's yes
 bash $SK/pr-watch.sh rerun <build URL>  # launch the run again (Azure DevOps: a new run of the same pipeline, branch and parameters, as the user; GitHub: re-run the workflow run): only on the user's yes
 bash $SK/pr-watch.sh approve <PR URL> # vote approved (Azure DevOps) or submit an approving review (GitHub), then track it as reviewed (`reviewed: true` in status) until it is merged: only on the user's yes

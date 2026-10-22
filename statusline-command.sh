@@ -62,6 +62,19 @@ if [ -n "$effort" ]; then
   eff_str=$(printf "⚡ ${eff_color}%s\033[0m" "$effort")
 fi
 
+# Learning level of this session, written by the learn mod: off 0%, brief 33%, normal 66%, deep 100%
+session_id=$(echo "$input" | jq -r '.session_id // empty')
+learn_file="$HOME/.claude/learn-levels.json"
+if [ -n "$session_id" ] && [ -f "$learn_file" ]; then
+  learn=$(jq -r --arg s "$session_id" '.[$s] // empty' "$learn_file" 2>/dev/null | tr -d '\r')
+  case "$learn" in
+    off)    learn_str=$(printf '💡 \033[2m0%%\033[0m') ;;
+    brief)  learn_str=$(printf '💡 \033[34m33%%\033[0m') ;;
+    normal) learn_str=$(printf '💡 \033[32m66%%\033[0m') ;;
+    deep)   learn_str=$(printf '💡 \033[33m100%%\033[0m') ;;
+  esac
+fi
+
 # Git branch (skip optional lock, non-fatal); detached HEAD falls back to the short SHA
 branch=$(git -C "$cwd" --no-optional-locks branch --show-current 2>/dev/null)
 [ -z "$branch" ] && branch=$(git -C "$cwd" --no-optional-locks rev-parse --short HEAD 2>/dev/null)
@@ -82,6 +95,7 @@ out=""
 [ -n "$model" ]      && out="$out $(printf '🤖 \033[35m%s\033[0m' "$model")"
 [ -n "$ctx_str" ]   && out="$out $ctx_str"
 [ -n "$eff_str" ]   && out="$out $eff_str"
+[ -n "$learn_str" ] && out="$out $learn_str"
 [ -n "$rate_str" ]  && out="$out $rate_str"
 
 # Trim leading space

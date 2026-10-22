@@ -78,6 +78,7 @@ CONFIG = WATCH_DIR / "config.json"
 REVIEWS = WATCH_DIR / "reviews.json"
 BUILDS = WATCH_DIR / "builds.json"
 ACKS = WATCH_DIR / "acks.json"
+STEPS_DIR = WATCH_DIR / "steps"
 # Not a .json file: older copies of this script read every .json file here as a tracked PR.
 DISMISSED = WATCH_DIR / "dismissed.txt"
 DONE_DIR = WATCH_DIR / "done"
@@ -676,17 +677,34 @@ def build_provider(url: str) -> AzureBuild | GitHubRun | None:
     return None
 
 
+def _steps_path(url: str) -> Path:
+    return STEPS_DIR / f"{hashlib.sha1(url.encode()).hexdigest()[:16]}.json"
+
+
 def build_details(build: AzureBuild | GitHubRun, url: str) -> None:
-    """JSON: every step of the run with its job and state; a step with issues has its error lines."""
+    """JSON: every step of the run with its job and state; a step with issues has its error lines.
+
+    An ended run's steps no longer change: they are kept in STEPS_DIR (synced with the rest, so a
+    computer that cannot reach the host still shows what another one read) and answered from there."""
+    kept = _steps_path(url)
+    if kept.exists():
+        print(kept.read_text(encoding="utf-8"))
+        return
     steps = build.steps()
     for step in steps:
         if step["state"] in STEP_ISSUES and not step["errors"]:
             step["errors"] = ["no step details kept: see the build log"]
-    print(json.dumps({"url": url, "steps": steps}, ensure_ascii=False))
+    answer = json.dumps({"url": url, "steps": steps}, ensure_ascii=False)
+    if steps and not any(step["state"] == "running" for step in steps):
+        STEPS_DIR.mkdir(parents=True, exist_ok=True)
+        kept.write_text(answer, encoding="utf-8")
+    print(answer)
 
 
-def rerun_build(build: AzureBuild | GitHubRun) -> None:
+def rerun_build(build: AzureBuild | GitHubRun, url: str) -> None:
     name = build.name()
+    # A GitHub re-run keeps the run's URL: its kept steps are those of the attempt before.
+    _steps_path(url).unlink(missing_ok=True)
     print(f"relaunched {name}: {build.rerun()}")
 
 
@@ -1083,6 +1101,9 @@ def prune_done() -> None:
         except ValueError:
             age = None
         if age is None or age.total_seconds() > KEEP_DAYS * 86400:
+            path.unlink()
+    for path in STEPS_DIR.glob("*.json"):
+        if now.timestamp() - path.stat().st_mtime > KEEP_DAYS * 86400:
             path.unlink()
 
 
@@ -1539,12 +1560,24 @@ def ack_of(url: str, alert: dict, acks: dict) -> dict | None:
     return {"until": ack.get("until", ""), "note": ack.get("note", ""), "at": ack.get("at", "")} if same else None
 
 
-def ack(url: str, until: str, note: str) -> None:
-    """Quiets a PR's or a run's current alert until it changes or `until` (YYYY-MM-DD) passes."""
+def ack(url: str, until: str, note: str, shown: str = "") -> None:
+    """Quiets a PR's or a run's current alert until it changes or `until` (YYYY-MM-DD) passes.
+
+    `shown`: the PR's alert as a live `status` gave it (JSON of `waiting`, `conflicts`, `comments`), so
+    a pane acknowledges what it shows without asking the host again."""
     if until and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", until):
         raise WatchError(f"--until takes a date as YYYY-MM-DD, not {until}")
     path = entry_path(normalize(url))
-    if path.exists():
+    given = json.loads(shown) if shown else None
+    if given is not None and not (isinstance(given, dict) and isinstance(given.get("waiting"), str)
+                                  and isinstance(given.get("comments", []), list)):
+        raise WatchError("--alert takes {\"waiting\": ..., \"conflicts\": ..., \"comments\": [...]}")
+    if path.exists() and given is not None:
+        entry = json.loads(path.read_text(encoding="utf-8"))
+        key, what = entry["url"], label(entry)
+        alert = {"waiting": given["waiting"], "conflicts": bool(given.get("conflicts")),
+                 "comments": sorted(str(line) for line in given.get("comments", []) if str(line).startswith("new comment"))}
+    elif path.exists():
         entry = json.loads(path.read_text(encoding="utf-8"))
         # As a live status shows it, so the comments on screen are the ones acknowledged.
         seen, news = entry["seen"], entry.get("unread", [])
@@ -1614,7 +1647,7 @@ def main(argv: list[str]) -> int:
         elif command == "details" and args:
             details(args[0])
         elif command == "rerun" and args and (build := build_provider(args[0].strip())):
-            rerun_build(build)
+            rerun_build(build, args[0].strip())
         elif command == "rerun" and len(args) >= 2:
             rerun(args[0], " ".join(args[1:]))
         elif command == "approve" and args:
@@ -1629,7 +1662,8 @@ def main(argv: list[str]) -> int:
             unpark(args[0])
         elif command == "ack" and args:
             ack(args[0], args[args.index("--until") + 1] if "--until" in args[1:-1] else "",
-                args[args.index("--note") + 1] if "--note" in args[1:-1] else "")
+                args[args.index("--note") + 1] if "--note" in args[1:-1] else "",
+                args[args.index("--alert") + 1] if "--alert" in args[1:-1] else "")
         elif command == "unack" and args:
             unack(args[0])
         else:

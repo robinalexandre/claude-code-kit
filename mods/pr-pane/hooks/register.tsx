@@ -25,6 +25,7 @@ const problem = atom({ plugin: 'pr-pane', key: 'problem' } as const, '')
 const ciToggled = atom({ plugin: 'pr-pane', key: 'ciToggled' } as const, {})
 const details = atom({ plugin: 'pr-pane', key: 'details' } as const, {})
 const buildDetails = atom({ plugin: 'pr-pane', key: 'buildDetails' } as const, {})
+const readSteps = atom({ plugin: 'pr-pane', key: 'readSteps' } as const, {})
 const openSteps = atom({ plugin: 'pr-pane', key: 'openSteps' } as const, {})
 const armed = atom({ plugin: 'pr-pane', key: 'armed' } as const, '')
 const inFlight = atom({ plugin: 'pr-pane', key: 'busy' } as const, '')
@@ -274,16 +275,32 @@ const toggleBuildDetails = async ($: EngineInterface, url: string) => {
     return
   }
 
+  const known = (await read($, readSteps))[url]
+
+  if (known !== undefined) {
+    await update($, buildDetails, shown => ({ ...shown, [url]: { isLoading: false, steps: known } }))
+
+    return
+  }
+
   await update($, buildDetails, shown => ({ ...shown, [url]: { isLoading: true, steps: [] } }))
   const problem = (text: string): BuildStep[] => [{ name: 'pr-watch', job: '', state: 'failed', errors: [text] }]
+  let isRead = false
   const steps = await prWatch($, ['details', url], 120_000)
-    .then(ran =>
-      ran.exitCode === 0
+    .then(ran => {
+      isRead = ran.exitCode === 0
+
+      return isRead
         ? (JSON.parse(ran.stdout) as { steps: BuildStep[] }).steps
         : problem(ran.stderr.trim() || `pr-watch exited with ${ran.exitCode}`)
-    )
+    })
     .catch(error => problem(`pr-watch did not run: ${String(error)}`))
   await update($, buildDetails, shown => ({ ...shown, [url]: { isLoading: false, steps } }))
+
+  // A run still going changes: only an ended one is kept.
+  if (isRead && !steps.some(step => step.state === 'running')) {
+    await update($, readSteps, kept => ({ ...kept, [url]: steps }))
+  }
 }
 
 const stepKey = (url: string, index: number | string) => `${url}|${index}`
@@ -337,6 +354,9 @@ const rerunBuild = async ($: EngineInterface, build: BuildRow) => {
   }
 
   $.ui.toast(`Relaunched ${build.pipeline}`)
+  // GitHub re-runs keep the URL: the steps read before belong to the attempt that ended.
+  await update($, readSteps, kept => Object.fromEntries(Object.entries(kept).filter(([url]) => url !== build.url)))
+  await update($, buildDetails, shown => Object.fromEntries(Object.entries(shown).filter(([url]) => url !== build.url)))
   $.clock.after(AFTER_RERUN_MS, () => void refresh($))
 }
 
@@ -436,22 +456,56 @@ const approvePr = ($: EngineInterface, pr: ReviewPr) => actOnPr($, 'approve', pr
 
 const mergePr = ($: EngineInterface, pr: PrRow) => actOnPr($, 'merge', pr, 'Merged')
 
-// Acknowledging takes the alert off the red list until it changes; unack brings it back.
-const setAck = async ($: EngineInterface, url: string, what: string, isAcked: boolean) => {
-  const ran = await prWatch($, [isAcked ? 'ack' : 'unack', url], 60_000).catch(error => ({
-    exitCode: 1,
-    stdout: '',
-    stderr: String(error),
-  }))
+const quickKey = (url: string) => `quick|${url}`
+
+// Ack and park only write in pr-watch's folder: the row changes at once, pr-watch records it behind,
+// a second press is ignored meanwhile, and a failure puts the recorded state back.
+const quickly = async (
+  $: EngineInterface,
+  url: string,
+  args: string[],
+  change: { pr?: (pr: PrRow) => PrRow; build?: (build: BuildRow) => BuildRow },
+  done: string,
+  failed: string
+) => {
+  if ((await read($, inFlight)) === quickKey(url)) {
+    return
+  }
+
+  await update($, inFlight, () => quickKey(url))
+  await update($, snapshot, shown =>
+    shown === null
+      ? shown
+      : {
+          ...shown,
+          prs: shown.prs.map(pr => (pr.url === url && change.pr ? change.pr(pr) : pr)),
+          builds: (shown.builds ?? []).map(build => (build.url === url && change.build ? change.build(build) : build)),
+        }
+  )
+  const ran = await prWatch($, args, 60_000).catch(error => ({ exitCode: 1, stdout: '', stderr: String(error) }))
+  await update($, inFlight, () => '')
 
   if (ran.exitCode !== 0) {
-    $.ui.toast(`Could not ${isAcked ? 'acknowledge' : 'unack'} ${what}: ${ran.stderr.trim().split('\n')[0]}`)
+    $.ui.toast(`${failed}: ${ran.stderr.trim().split('\n')[0]}`)
+    await load($, false)
 
     return
   }
 
-  $.ui.toast(`${isAcked ? 'Acknowledged' : 'No longer acknowledged:'} ${what}`)
-  await load($, false)
+  $.ui.toast(done)
+}
+
+const ACK_NOW: Ack = { until: '', note: '', at: '' }
+
+// Acknowledging takes the alert off the red list until it changes; unack brings it back. A PR's alert
+// goes as the pane shows it, so pr-watch need not ask the host again.
+const setAck = ($: EngineInterface, url: string, what: string, isAcked: boolean, pr?: PrRow) => {
+  const alert = pr && { waiting: pr.waiting, conflicts: pr.conflicts === true, comments: pr.changes }
+  const args = isAcked ? ['ack', url, ...(alert ? ['--alert', JSON.stringify(alert)] : [])] : ['unack', url]
+  const ack = isAcked ? ACK_NOW : null
+
+  return quickly($, url, args, { pr: one => ({ ...one, ack }), build: one => ({ ...one, ack }) },
+    `${isAcked ? 'Acknowledged' : 'No longer acknowledged:'} ${what}`, `Could not ${isAcked ? 'acknowledge' : 'unack'} ${what}`)
 }
 
 // The reminder's words and date are the user's: Claude asks them, leaves the reminder, then acks
@@ -469,22 +523,9 @@ const askAckReminder = async ($: EngineInterface, url: string, what: string) => 
 }
 
 // Parking only quiets the PR in pr-watch, so one press is enough, and unpark undoes it.
-const setParked = async ($: EngineInterface, pr: PrRow, isParked: boolean) => {
-  const ran = await prWatch($, [isParked ? 'park' : 'unpark', pr.url], 60_000).catch(error => ({
-    exitCode: 1,
-    stdout: '',
-    stderr: String(error),
-  }))
-
-  if (ran.exitCode !== 0) {
-    $.ui.toast(`Could not ${isParked ? 'park' : 'unpark'} #${pr.number}: ${ran.stderr.trim().split('\n')[0]}`)
-
-    return
-  }
-
-  $.ui.toast(`${isParked ? 'Parked' : 'Unparked'} ${pr.repo} #${pr.number}`)
-  await load($, false)
-}
+const setParked = ($: EngineInterface, pr: PrRow, isParked: boolean) =>
+  quickly($, pr.url, [isParked ? 'park' : 'unpark', pr.url], { pr: one => ({ ...one, parked: isParked }) },
+    `${isParked ? 'Parked' : 'Unparked'} ${pr.repo} #${pr.number}`, `Could not ${isParked ? 'park' : 'unpark'} #${pr.number}`)
 
 // What the user has to act on: a failing or expired CI, a conflict, a rejection, or a new comment
 // since the last check.
@@ -812,15 +853,16 @@ export const register: Register = on => {
             )}
           </Text>
           <Box flexDirection="row">
-            {isAckable && (
-              <Button key={`ack-${group}-${pr.number}`} label="ack" dimColor onPress={() => void setAck($, pr.url, what, true)} />
+            {busyKey === quickKey(pr.url) && <Text dimColor>saving… </Text>}
+            {isAckable && busyKey !== quickKey(pr.url) && (
+              <Button key={`ack-${group}-${pr.number}`} label="ack" dimColor onPress={() => void setAck($, pr.url, what, true, pr)} />
             )}
             {isAckable && <Text> </Text>}
             {isAckable && (
               <Button key={`remind-${group}-${pr.number}`} label="ack + remind" dimColor onPress={() => void askAckReminder($, pr.url, what)} />
             )}
             {pr.ack && (
-              <Button key={`unack-${group}-${pr.number}`} label="unack" dimColor onPress={() => void setAck($, pr.url, what, false)} />
+              <Button key={`unack-${group}-${pr.number}`} label="unack" dimColor onPress={() => void setAck($, pr.url, what, false, pr)} />
             )}
             {pr.parked !== true && (isAckable || pr.ack) && <Text> </Text>}
             {pr.parked !== true && (
@@ -1051,7 +1093,8 @@ export const register: Register = on => {
                     />
                   )}
                   {isAckable && <Text> </Text>}
-                  {isAckable && (
+                  {busyKey === quickKey(build.url) && <Text dimColor> saving…</Text>}
+                  {isAckable && busyKey !== quickKey(build.url) && (
                     <Button key={`build-ack-${build.number}`} label="ack" dimColor onPress={() => void setAck($, build.url, what, true)} />
                   )}
                   {isAckable && <Text> </Text>}

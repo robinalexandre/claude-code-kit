@@ -653,6 +653,9 @@ test('the pipeline runs the user launched come first, open while one runs, and r
 
   expect(calls).toContain('rerun https://dev.azure.com/org/project/_build/results?buildId=70100')
 
+  // A re-run folds the run: the steps read belong to the attempt that ended.
+  expect(await pane.find({ key: 'build-diagnose-70100' })).toBeUndefined()
+  await pane.press({ key: 'build-toggle-70100' })
   await pane.press({ key: 'build-diagnose-70100' })
 
   expect(submitted).toHaveLength(1)
@@ -951,14 +954,15 @@ test('an acknowledged alert turns blue, leaves the count and the colors above it
   expect(calls).toContainEqual(['unack', 'https://dev.azure.com/org/project/_git/shop/pullrequest/5'])
 
   await pane.press({ key: 'pr-toggle-shop-6' })
-  await pane.press({ key: 'ack-shop-6' })
-
-  expect(calls).toContainEqual(['ack', 'https://dev.azure.com/org/project/_git/shop/pullrequest/6'])
-
   await pane.press({ key: 'remind-shop-6' })
 
   expect(submitted[0]).toContain('pr-watch.sh ack https://dev.azure.com/org/project/_git/shop/pullrequest/6 --until')
   expect(submitted[0]).toContain('reminders skill')
+
+  await pane.press({ key: 'ack-shop-6' })
+
+  expect(calls.some(call => call[0] === 'ack' && call[1] === 'https://dev.azure.com/org/project/_git/shop/pullrequest/6' && call[2] === '--alert')).toBe(true)
+
 
   await pane.press({ key: 'build-toggle-70125' })
   await pane.press({ key: 'build-ack-70125' })

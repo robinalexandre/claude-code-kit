@@ -31,10 +31,15 @@ const clockTime = (milliseconds: number) => {
   return [date.getHours(), date.getMinutes()].map(part => String(part).padStart(2, '0')).join(':')
 }
 
-const remember = async ($: EngineInterface, id: string, text: string) => {
-  const prompt: RecentPrompt = { id, text, time: clockTime(await $.clock.now()) }
+const remember = async ($: EngineInterface, id: string, text: string, kind?: 'learn') => {
+  const prompt: RecentPrompt = { id, text, time: clockTime(await $.clock.now()), ...(kind ? { kind } : {}) }
   await update($, prompts, list => [...list, prompt].slice(-KEPT))
 }
+
+// What follows the "💡 Learn:" heading Claude ends a reply with when the learn mod asks it to.
+const LEARN = /💡\s*\**\s*Learn\b\s*:?\**\s*([\s\S]+)$/
+
+const isMessage = (prompt: RecentPrompt) => prompt.kind !== 'learn'
 
 const withoutFirst = (list: string[], text: string) => {
   const at = list.indexOf(text)
@@ -142,6 +147,23 @@ export const register: Register = on => {
     return stored
   }).catch(($, e, next) => next(e))
 
+  // A lesson is kept between the messages, where it was given, so the history can find it again.
+  on('session.append', { door: 'response' }, async ($, e, next) => {
+    const stored = await next(e)
+
+    if (stored.uuid === undefined || e.agentId !== undefined) {
+      return stored
+    }
+
+    const lesson = textOf(stored.message.content).match(LEARN)?.[1]?.trim() ?? ''
+
+    if (lesson !== '') {
+      await remember($, stored.uuid, lesson, 'learn')
+    }
+
+    return stored
+  }).catch(($, e, next) => next(e))
+
   for (const door of ['attachment', 'delivery'] as const) {
     on('session.append', { door }, async ($, e, next) => {
       const stored = await next(e)
@@ -169,7 +191,7 @@ export const register: Register = on => {
       return beneath
     }
 
-    const recent = (await read($, prompts)).slice(-BAND_COUNT)
+    const recent = (await read($, prompts)).filter(isMessage).slice(-BAND_COUNT)
 
     if (recent.length === 0) {
       return beneath
@@ -217,7 +239,10 @@ export const register: Register = on => {
       return shown === null ? [] : [{ prompt, shown }]
     })
     const setQuery = (value: string) => void update($, query, () => value)
-    const summary = search.trim() === '' ? `${list.length} messages` : `${rows.length} of ${list.length} match`
+    const messages = list.filter(isMessage).length
+    const lessons = list.length - messages
+    const counted = `${messages} messages${lessons > 0 ? `, ${lessons} 💡` : ''}`
+    const summary = search.trim() === '' ? counted : `${rows.length} of ${list.length} match`
 
     return (
       <Box flexDirection="column">
@@ -235,8 +260,9 @@ export const register: Register = on => {
         {rows.map(({ prompt, shown }) => (
           <Box key={`line-${prompt.id}`} flexDirection="row">
             <Button key={`row-${prompt.id}`} label={JUMP_ICON} plain dimColor onPress={() => void jump($, prompt.id)} />
-            <Text>
+            <Text color={prompt.kind === 'learn' ? 'yellow' : undefined} dimColor={prompt.kind === 'learn'}>
               <Text dimColor> {prompt.time ?? '--:--'} </Text>
+              {prompt.kind === 'learn' ? '💡 ' : ''}
               {shown.before}
               {shown.match !== '' && (
                 <Text color="yellow" bold>

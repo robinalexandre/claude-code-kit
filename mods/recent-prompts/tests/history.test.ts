@@ -100,3 +100,36 @@ test('a message absorbed into the running turn is listed as typed once its deliv
 
   expect(await band.find({ key: 'prompt-1', text: /^And the code-kit \?$/ })).toBeDefined()
 })
+
+test('a 💡 Learn block Claude ended a reply with is listed in the history between the messages, never in the band', async ($, on) => {
+  mock.clock(on)
+  on('ui.render', () => Fragment({}))
+
+  await say($, 'first', 'Fix the login query')
+  await $.session.append({
+    message: { type: 'assistant', role: 'assistant', content: [{ type: 'text', text: 'Done.\n\n💡 Learn: a parameterized query keeps user input out of the SQL text.' }] },
+    door: 'response',
+    origin: { kind: 'composer' },
+    uuid: 'answer',
+  })
+  await say($, 'second', 'Thanks')
+
+  const band = await $.ui.mount({ plugin: 'recent-prompts', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
+
+  expect(await band.find({ key: 'prompt-0', text: /login query/ })).toBeDefined()
+  expect(await band.find({ text: /parameterized/ })).toBeUndefined()
+
+  const pane = await $.ui.mount({
+    plugin: 'recent-prompts',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'my-messages',
+    props: { title: 'My messages', isFocused: true, bodyColumns: 80, placement: 'dock', scroll: SCROLL, view: {} },
+  })
+
+  expect(await pane.find({ text: '2 messages, 1 💡' })).toBeDefined()
+  expect(await pane.find({ text: /parameterized query keeps user input/ })).toBeDefined()
+  const keys = (await pane.findAll({ type: 'Button' })).map(button => button.key ?? '')
+  expect(keys.indexOf('row-answer')).toBeGreaterThan(keys.indexOf('row-first'))
+  expect(keys.indexOf('row-answer')).toBeLessThan(keys.indexOf('row-second'))
+})

@@ -2,7 +2,10 @@
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "claude-code-kit",
   "description": "Skills, mods and hooks for Claude Code that work on macOS, Linux and Windows. The parts that need setup (pr-watch, reminders, the email guard, the sync) install with install.sh instead.",
-  "owner": { "name": "robinalexandre", "url": "https://github.com/robinalexandre/claude-code-kit" },
+  "owner": {
+    "name": "robinalexandre",
+    "url": "https://github.com/robinalexandre/claude-code-kit"
+  },
   "plugins": [
     {
       "name": "capability-builder",
@@ -10,7 +13,9 @@
       "category": "development",
       "source": ".",
       "strict": false,
-      "skills": ["./skills/capability-builder"]
+      "skills": [
+        "./skills/capability-builder"
+      ]
     },
     {
       "name": "test-evidence",
@@ -18,7 +23,9 @@
       "category": "development",
       "source": ".",
       "strict": false,
-      "skills": ["./skills/test-evidence"]
+      "skills": [
+        "./skills/test-evidence"
+      ]
     },
     {
       "name": "ci-review",
@@ -26,7 +33,9 @@
       "category": "development",
       "source": ".",
       "strict": false,
-      "skills": ["./skills/ci-review"]
+      "skills": [
+        "./skills/ci-review"
+      ]
     },
     {
       "name": "file-tools-guard",
@@ -39,7 +48,11 @@
           {
             "matcher": "Bash",
             "hooks": [
-              { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/file-tools-guard.sh\" 2>/dev/null || true", "timeout": 5 }
+              {
+                "type": "command",
+                "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/file-tools-guard.sh\" 2>/dev/null || true",
+                "timeout": 5
+              }
             ]
           }
         ]
@@ -56,6 +69,12 @@
       "description": "Your last two messages above the prompt, and a searchable history pane (/prompts).",
       "category": "productivity",
       "source": "./mods/recent-prompts"
+    },
+    {
+      "name": "learn",
+      "description": "Short, precise lessons on the security, architecture or patterns behind the code at hand, at the end of a reply. /learn off|brief|normal|deep per session.",
+      "category": "learning",
+      "source": "./mods/learn"
     }
   ]
 }
