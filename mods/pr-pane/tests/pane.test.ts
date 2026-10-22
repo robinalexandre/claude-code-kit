@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import type { Engine } from 'claude-code/testing'
+import type { Engine, Plugin } from 'claude-code/testing'
 
 const SCROLL = { offset: 0, bodyRows: 30 }
 const PANE_PROPS = {
@@ -378,8 +378,31 @@ const REVIEWS = {
   errors: [],
 }
 
+// The tests run on the Claude Code installed: one older than 2.1.306 refuses styled Text inside a
+// Button, so the styled drawing is checked only where this probe draws.
+const STYLED_PROBE: Plugin = {
+  name: 'styled-probe',
+  register(on) {
+    on('ui.render', { component: 'Pane', requestId: 'styled-probe' }, async ($, e) => {
+      const { Button, Text } = $.ui.resolve(e)
+
+      return Button({ key: 'probe', onPress: () => undefined, children: Text({ bold: true, children: 'probe' }) })
+    })
+  },
+}
+
+const drawsStyledButtons = async ($: Engine) => {
+  try {
+    const probe = await $.ui.mount({ plugin: 'styled-probe', surface: 'terminal', component: 'Pane', requestId: 'styled-probe', props: PANE_PROPS })
+
+    return (await probe.find({ type: 'Text', text: 'probe' })) !== undefined
+  } catch {
+    return false
+  }
+}
+
 for (const [base, isStyled] of [['2.1.306', true], ['2.1.192', false]] as const) {
-  test(`on ${base} the review section title is ${isStyled ? 'styled Text in its button' : 'a plain label'}`, async ($, on) => {
+  test(`on ${base} the review section title is ${isStyled ? 'styled Text in its button' : 'a plain label'}`, { plugins: [STYLED_PROBE] }, async ($, on) => {
     mock.clock(on)
     on('session.version', () => ({ value: { version: base, base } }))
     on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
@@ -389,6 +412,11 @@ for (const [base, isStyled] of [['2.1.306', true], ['2.1.192', false]] as const)
 
     await $.command.run(RUN)
     const pane = await mountPane($, 'terminal')
+
+    if (isStyled && !(await drawsStyledButtons($))) {
+      return
+    }
+
     const styledTitle = await pane.find({ type: 'Text', text: '▸ Waiting for my review (1)' })
 
     expect(styledTitle?.props.bold ?? false).toBe(isStyled)
