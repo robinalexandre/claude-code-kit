@@ -1,6 +1,6 @@
 ---
 name: reminders
-description: Leaves a reminder for a later Claude Code session, on this computer or another one, and notifies the user on the desktop and on the phone (Claude mobile app through a scheduled task, or ntfy) every morning and at the first session of the day. Use when the user says "remind me", "rappelle-moi", "tomorrow when I open a session, tell me…", "don't let me forget", "list my reminders", "that reminder is done", or when a SessionStart message lists reminders.
+description: Leaves a reminder for a later Claude Code session, on this computer or another one, and notifies the user on the desktop and on the phone (Claude mobile app through a scheduled task, or ntfy) every morning and at the first session of the day; also leaves a task for the user's personal assistant to run by itself at a set time. Use when the user says "remind me", "rappelle-moi", "tomorrow when I open a session, tell me…", "don't let me forget", "list my reminders", "that reminder is done", "a task for <assistant>", "ask <assistant> to … at …", or when a SessionStart message lists reminders.
 ---
 
 # Reminders
@@ -42,6 +42,14 @@ Enough for a session in a few days, without this conversation, to help.>
 - Never put secrets in it: the file goes to GitHub.
 - Then run `bash ~/.claude-sync/sync.sh now` so the other computers get it, and tell the user when and where it will show up.
 
+## A task for an assistant that runs it by itself
+
+Some users have a personal assistant (an agent on a server, reading the sync repo) that starts tasks on its own at a set time. `bash $SK/reminders.sh agents` lists them, one line each: the assistant's name, a tab, its tasks folder. They come from `agents.json` next to the reminders, `[{"name": "<assistant>", "dir": "<folder from the sync repo's root>"}]`; with none listed, this section doesn't apply.
+
+- When the user asks for something the assistant should do or say at a set time ("ask <assistant> to…", "a task for <assistant>", "have <assistant> remind me on WhatsApp"), write `<its folder>/<YYYY-MM-DD>-<short-slug>.md` in the reminders' format: `title`, `on` (the time it starts), `until` (optional: last day it may still start if it was missed), `created`. No `every`, `where`, `machine` or `group`.
+- The body is the request itself, as the user would write it to the assistant, in their language, with every detail it needs (paths, names, dates, the order of the steps): it gets nothing else.
+- Then `bash ~/.claude-sync/sync.sh now`, and tell the user when it will start. The assistant moves each task to `past/` once it ran; the pane shows them under the assistant's name.
+
 ## Manage them
 
 - `bash $SK/reminders.sh list`: every reminder with its state (`due`, `later`, `expired`), and for a repeating one when it shows next.
@@ -49,7 +57,8 @@ Enough for a session in a few days, without this conversation, to help.>
 - When the user says a reminder is done: `bash $SK/reminders.sh done <id>` (the file name without `.md`); a repeating one is closed for today only. When they no longer want a repeating one: `stop <id>`. Then `bash ~/.claude-sync/sync.sh now`. Offer to close expired ones when you see them.
 - Closed reminders move to `past/` with a `closed:` line and stay there 60 days; `restore <id>` puts one back as it was (its dates and repeat days), `delete <id>` removes one for good.
 - When the user wants to do a reminder now ("let's do the reminder <id> now", the pane's `pick`): read its file and help with it; once it's done, close it with `done`.
-- `bash $SK/reminders.sh json [DIR]`: all of them, past ones included, as JSON. The [reminders-handoffs](../../mods/reminders-handoffs) mod reads it: `/reminders-pane` or the band button above the prompt.
+- An assistant's task has the id `<its folder>/<file name>`: `done` cancels it (it won't run), `restore` and `delete` work as for a reminder.
+- `bash $SK/reminders.sh json [DIR]`: all of them, past ones and assistants' tasks included, as JSON. The [reminders-handoffs](../../mods/reminders-handoffs) mod reads it: `/reminders-pane` or the band button above the prompt.
 
 ## Notifications
 

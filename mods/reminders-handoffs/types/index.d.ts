@@ -22,6 +22,8 @@ export type Reminder = {
   /** Past ones: when it was closed. */
   closed?: string
   body?: string
+  /** A task for this assistant, which runs it by itself; its group is the assistant's name. */
+  agent?: string
 }
 
 /** One handoff note as `handoff.sh json` prints it. */

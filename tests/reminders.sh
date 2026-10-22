@@ -69,5 +69,21 @@ R delete now-one > /dev/null
 check "delete removes a past one" '[ ! -f "$CLAUDE_REMINDERS_DIR/past/now-one.md" ]'
 check "an unknown id is refused" '! R done nope 2> /dev/null'
 
+TASKS="$T/assistant/tasks"
+mkdir -p "$TASKS/past"
+printf '[{"name": "Max", "dir": "assistant/tasks/"}, {"name": "Up", "dir": "../outside"}]\n' > "$CLAUDE_REMINDERS_DIR/agents.json"
+{ echo ---; echo "title: water the plants"; echo "on: $(plus 1) 18:00"; echo ---; echo; echo "Remind me."; } > "$TASKS/plants.md"
+{ echo ---; echo "title: ran"; echo "on: $today"; echo "closed: $today 09:00"; echo ---; } > "$TASKS/past/ran.md"
+json=$(R json)
+check "an assistant's task shows under its name" '[ "$(jq -r ".[] | select(.id == \"assistant/tasks/plants\") | .group + \"/\" + .agent + \"/\" + .state" <<< "$json")" = "Max/Max/later" ]'
+check "one it ran is past" '[ "$(jq -r ".[] | select(.id == \"assistant/tasks/ran\") | .state" <<< "$json")" = past ]'
+check "agents names each assistant's folder, never one going up" '[ "$(R agents)" = "$(printf "Max\t%s" "$T/assistant/tasks")" ]'
+check "its tasks are not shown to coding sessions" '! R due | grep -q plants'
+R done assistant/tasks/plants > /dev/null
+check "done cancels an assistant's task into its own past" '[ -f "$TASKS/past/plants.md" ] && grep -q "^closed:" "$TASKS/past/plants.md"'
+R restore assistant/tasks/plants > /dev/null
+check "and restore puts it back" '[ -f "$TASKS/plants.md" ]'
+check "an id outside the listed folders is refused" '! R done ../outside/x 2> /dev/null && ! R delete assistant/x/../../y 2> /dev/null'
+
 echo "$fails failure(s)"
 [ "$fails" -eq 0 ]

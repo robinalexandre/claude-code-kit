@@ -12,14 +12,22 @@
 #   reminders.sh delete ID       deletes a reminder, a past one too
 #   reminders.sh restore ID      puts a past reminder back, with its dates and repeat days
 #   reminders.sh notify [TEXT]   sends TEXT to the desktop and the phone (to test)
+#   reminders.sh agents          the assistants that run tasks by themselves, and their folders
 # A repeating reminder has `every: friday` (days in English, comma-separated, or `day` or
 # `weekday`) and shows on those days from `on` until `until`, at the time of day `on` gives, else
 # at REMINDERS_AT (09:00, when the morning sync notifies). Closing one moves it to past/ with a
 # `closed:` line, where it stays PAST_DAYS days.
+# Tasks for an assistant that runs them by itself (a personal agent reading the sync repo)
+# live in that assistant's own folder, listed in agents.json next to the reminders:
+# [{"name": "<assistant>", "dir": "<folder, from the sync repo's root>"}]. They share the
+# reminders' format, show in the pane under the assistant's name, and their id is
+# "<folder>/<file name>"; the assistant moves each one to past/ once it ran.
 set -u
 SK=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SYNC="$HOME/.claude-sync"
 DIR=${CLAUDE_REMINDERS_DIR:-$SYNC/reminders}
+ROOT=$(dirname "$DIR")
+AGENTS="$DIR/agents.json"
 PAST="$DIR/past"
 PAST_DAYS=60
 DEFAULT_AT=${REMINDERS_AT:-09:00}
@@ -131,6 +139,31 @@ state() {
 
 files() { for f in "$DIR"/*.md; do [ -f "$f" ] && printf '%s\n' "$f"; done; }
 
+# agents: "name<TAB>folder" for each assistant in agents.json; a folder going up (..) is left out.
+agents() {
+  [ -f "$AGENTS" ] || return 0
+  jq -r '.[] | select((.name // "") != "" and (.dir // "") != "")
+    | select(.dir | test("(^|/)\\.\\.(/|$)") | not) | "\(.name)\t\(.dir | sub("/+$"; ""))"' \
+    "$AGENTS" 2> /dev/null | tr -d '\r'
+}
+
+# file_of ID: the file of a reminder, or of an assistant's task when ID is "<its folder>/<name>".
+file_of() {
+  case "$1" in
+    */*)
+      agents | cut -f2 | grep -qxF "${1%/*}" || return 1
+      printf '%s/%s.md' "$ROOT" "$1"
+      ;;
+    *) printf '%s/%s.md' "$DIR" "$1" ;;
+  esac
+}
+
+past_of() {
+  local f
+  f=$(file_of "$1") || return 1
+  printf '%s/past/%s' "$(dirname "$f")" "$(basename "$f")"
+}
+
 due() {
   local f
   files | while IFS= read -r f; do
@@ -160,10 +193,18 @@ one() {
 }
 
 json() {
-  local f
+  local f name dir
   {
     files | while IFS= read -r f; do one "$f" "$(state "$f" "${1:-}")"; done
     for f in "$PAST"/*.md; do [ -f "$f" ] && one "$f" past; done
+    agents | while IFS=$'\t' read -r name dir; do
+      for f in "$ROOT/$dir"/*.md "$ROOT/$dir/past"/*.md; do
+        [ -f "$f" ] || continue
+        case "$f" in */past/*) set -- past ;; *) set -- "$(state "$f")" ;; esac
+        one "$f" "$1" | jq --arg id "$dir/$(basename "$f" .md)" --arg agent "$name" \
+          '.id = $id | .agent = $agent | .group = $agent'
+      done
+    done
   } | jq -s .
 }
 
@@ -178,9 +219,12 @@ set_field() {
 
 # close ID: moves the reminder to past/, with when it was closed.
 close() {
-  mkdir -p "$PAST"
-  set_field "$DIR/$1.md" closed "$(date '+%Y-%m-%d %H:%M')"
-  mv "$DIR/$1.md" "$PAST/$1.md"
+  local f p
+  f=$(file_of "$1")
+  p=$(past_of "$1")
+  mkdir -p "$(dirname "$p")"
+  set_field "$f" closed "$(date '+%Y-%m-%d %H:%M')"
+  mv "$f" "$p"
 }
 
 drop_field() {
@@ -189,17 +233,18 @@ drop_field() {
 }
 
 restore() {
-  [ -n "${1:-}" ] && [ -f "$PAST/$1.md" ] || {
+  local p
+  p=$(past_of "${1:-}") && [ -n "${1:-}" ] && [ -f "$p" ] || {
     echo "no past reminder ${1:-}" >&2
     exit 1
   }
-  drop_field "$PAST/$1.md" closed
-  mv "$PAST/$1.md" "$DIR/$1.md"
-  echo "restored: $1 ($(state "$DIR/$1.md"))"
+  drop_field "$p" closed
+  mv "$p" "$(file_of "$1")"
+  echo "restored: $1 ($(state "$(file_of "$1")"))"
 }
 
 reminder_file() {
-  [ -n "${1:-}" ] && [ -f "$DIR/$1.md" ] || {
+  [ -n "${1:-}" ] && [ -f "$(file_of "$1")" ] || {
     echo "no reminder ${1:-}; see: reminders.sh list" >&2
     exit 1
   }
@@ -300,7 +345,10 @@ start() {
   read_input
   mkdir -p "$STATE"
   find "$STATE" -maxdepth 1 \( -name 'shown-*' -o -name 'pending-*' \) -mtime +2 -exec rm -f {} + 2> /dev/null
-  [ -d "$PAST" ] && find "$PAST" -maxdepth 1 -name '*.md' -mtime +"$PAST_DAYS" -exec rm -f {} + 2> /dev/null
+  { printf '%s\n' "$PAST"; agents | cut -f2 | while IFS= read -r p; do printf '%s/%s/past\n' "$ROOT" "$p"; done; } |
+    while IFS= read -r p; do
+      [ -d "$p" ] && find "$p" -maxdepth 1 -name '*.md' -mtime +"$PAST_DAYS" -exec rm -f {} + 2> /dev/null
+    done
   (nohup bash "$SK/reminders.sh" after-sync "$SID" "$CWD" > /dev/null 2>&1 < /dev/null &)
   set --
   while IFS= read -r f; do set -- "$@" "$f"; done < <(unseen "$SID" "$CWD")
@@ -348,9 +396,11 @@ morning() {
 
 done_() {
   reminder_file "${1:-}"
-  if [ -n "$(frontmatter "$DIR/$1.md" every)" ]; then
-    set_field "$DIR/$1.md" done "$(date +%Y-%m-%d)"
-    echo "done for today: $1 (next: $(next_time "$DIR/$1.md"))"
+  local f
+  f=$(file_of "$1")
+  if [ -n "$(frontmatter "$f" every)" ]; then
+    set_field "$f" done "$(date +%Y-%m-%d)"
+    echo "done for today: $1 (next: $(next_time "$f"))"
   else
     close "$1"
     echo "done: $1"
@@ -365,7 +415,7 @@ stop() {
 
 delete() {
   local f
-  for f in "$DIR/${1:-}.md" "$PAST/${1:-}.md"; do
+  for f in "$(file_of "${1:-}")" "$(past_of "${1:-}")"; do
     if [ -n "${1:-}" ] && [ -f "$f" ]; then
       rm -f "$f"
       echo "deleted $1"
@@ -389,8 +439,9 @@ case "${1:-}" in
   delete) delete "${2:-}" ;;
   restore) restore "${2:-}" ;;
   notify) notify "Reminder" "${2:-Test from the reminders skill}" ;;
+  agents) agents | while IFS=$'\t' read -r name dir; do printf '%s\t%s\n' "$name" "$ROOT/$dir"; done ;;
   *)
-    echo "usage: reminders.sh start|prompt|morning|due [DIR]|list|json [DIR]|done ID|stop ID|delete ID|restore ID|notify [TEXT]" >&2
+    echo "usage: reminders.sh start|prompt|morning|due [DIR]|list|json [DIR]|done ID|stop ID|delete ID|restore ID|notify [TEXT]|agents" >&2
     exit 2
     ;;
 esac

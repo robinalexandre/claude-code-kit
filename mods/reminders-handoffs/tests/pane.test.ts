@@ -1,6 +1,6 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
-import type { Engine } from 'claude-code/testing'
+import type { Engine, Plugin } from 'claude-code/testing'
 
 const REMINDERS = '/home/someone/.claude/skills/reminders/reminders.sh'
 const HANDOFF = '/home/someone/.claude/skills/handoff/handoff.sh'
@@ -159,6 +159,28 @@ test('several groups in a section each get a title that folds them', async ($, o
   expect(await pane.find({ text: '▾ Work (1)' })).toBeDefined()
   expect(await pane.find({ text: /Review the plan/ })).toBeDefined()
   expect(await pane.find({ text: /only in shop on mac/ })).toBeDefined()
+})
+
+test("an assistant's task is filed under its name, with cancel only", async ($, on) => {
+  const calls: string[][] = []
+  const task = { id: 'max/tasks/plants', state: 'later', title: 'Water the plants', on: '2026-11-02 18:00', agent: 'Max', group: 'Max' }
+  answerBeneath(on, { reminders: [LATER, task], handoffs: [], installed: [REMINDERS] }, calls)
+
+  await $.session.start(START)
+  await $.command.run(command('reminders-pane'))
+  const pane = await mountPane($)
+
+  await pane.press({ key: 'upcoming' })
+  await pane.press({ key: 'group-upcoming-Max' })
+  await pane.press({ key: 'toggle-max/tasks/plants' })
+
+  expect(await pane.find({ text: /Run by Max on its own/ })).toBeDefined()
+  expect(await pane.find({ key: 'pick-max/tasks/plants' })).toBeUndefined()
+
+  await pane.press({ key: 'stop-max/tasks/plants' })
+  await pane.press({ key: 'stop-max/tasks/plants' })
+
+  expect(calls).toContainEqual(['bash', REMINDERS, 'stop', 'max/tasks/plants'])
 })
 
 test('pick hands a reminder to the session; restore puts a past one back', async ($, on) => {
@@ -350,6 +372,29 @@ test('a skill found again later brings the band button back', async ($, on) => {
   expect(await (await mountBand($)).find({ key: 'reminders-handoffs', text: 'Reminders 1 now' })).toBeDefined()
 })
 
+// The tests run on the Claude Code installed: one older than 2.1.306 refuses styled Text inside a
+// Button, so the styled drawing is checked only where this probe draws.
+const STYLED_PROBE: Plugin = {
+  name: 'styled-probe',
+  register(on) {
+    on('ui.render', { component: 'Pane', requestId: 'styled-probe' }, async ($, e) => {
+      const { Button, Text } = $.ui.resolve(e)
+
+      return Button({ key: 'probe', onPress: () => undefined, children: Text({ bold: true, children: 'probe' }) })
+    })
+  },
+}
+
+const drawsStyledButtons = async ($: Engine) => {
+  try {
+    const probe = await $.ui.mount({ plugin: 'styled-probe', surface: 'terminal', component: 'Pane', requestId: 'styled-probe', props: PANE_PROPS })
+
+    return (await probe.find({ type: 'Text', text: 'probe' })) !== undefined
+  } catch {
+    return false
+  }
+}
+
 const lookOn = async (on: On, $: Engine, base: string) => {
   on('session.version', () => ({ value: { version: base, base } }))
   answerBeneath(on, { reminders: [WEEKLY], handoffs: [NOTE], installed: [REMINDERS, HANDOFF] }, [])
@@ -365,8 +410,12 @@ const lookOn = async (on: On, $: Engine, base: string) => {
   ]
 }
 
-test('from 2.1.306 the section titles and tabs are styled Text inside their buttons', async ($, on) => {
+test('from 2.1.306 the section titles and tabs are styled Text inside their buttons', { plugins: [STYLED_PROBE] }, async ($, on) => {
   const [section, tab] = await lookOn(on, $, '2.1.306')
+
+  if (!(await drawsStyledButtons($))) {
+    return
+  }
 
   expect(section?.props.bold).toBe(true)
   expect(tab?.props.underline).toBe(true)

@@ -606,7 +606,9 @@ export const register: Register = on => {
         one,
         one.state === 'past'
           ? [['restore', 'restore'], ['delete', 'delete']]
-          : one.state === 'due'
+          : one.agent
+            ? [['stop', 'cancel']]
+            : one.state === 'due'
             ? isRepeating(one)
               ? [['pick', 'pick'], ['done', 'done today'], ['stop', 'stop']]
               : [['pick', 'pick'], ['done', 'done']]
@@ -617,6 +619,7 @@ export const register: Register = on => {
         textLines(
           one.id,
           [
+            one.agent ? `Run by ${one.agent} on its own` : '',
             one.on ? `Starts: ${one.on}` : '',
             one.every ? `Repeats: every ${one.every}${one.next ? ` · next ${one.next}` : ''}${one.done ? ` · last done ${one.done}` : ''}` : '',
             one.until ? `Until: ${one.until}` : '',
