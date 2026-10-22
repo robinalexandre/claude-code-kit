@@ -85,6 +85,8 @@ declare module 'claude-code' {
   interface PluginState {
     'pr-pane': {
       snapshot: PrSnapshot | null
+      /** pr-watch is installed: the band shows its button, even with nothing tracked. */
+      isActive: boolean
       isRefreshing: boolean
       problem: string
       ciToggled: Record<string, boolean>

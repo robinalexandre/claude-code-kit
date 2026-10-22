@@ -50,6 +50,25 @@ test('the band shows the last two messages and the pane finds one by an accent-f
   expect(await pane.find({ key: 'row-third' })).toBeUndefined()
 })
 
+test('a /clear empties the history, and the band keeps its history button', async ($, on) => {
+  const clock = mock.clock(on)
+  on('ui.render', () => Fragment({}))
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
+
+  const empty = await $.ui.mount({ plugin: 'recent-prompts', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
+
+  expect(await empty.find({ key: 'history' })).toBeDefined()
+
+  await say($, 'first', 'Why is my sound so low?')
+  await $.session.end({ reason: 'clear', sessionId: 'old', resume: { id: 'old' } })
+  await clock.advance(0)
+  const band = await $.ui.mount({ plugin: 'recent-prompts', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
+
+  expect(await band.find({ text: /sound so low/ })).toBeUndefined()
+  expect(await band.find({ key: 'history' })).toBeDefined()
+})
+
 test('a message typed while a turn runs is listed as typed once its queued row is stored', async ($, on) => {
   mock.clock(on)
   on('prompt.submit', ($, e) => ({ text: e.text }))

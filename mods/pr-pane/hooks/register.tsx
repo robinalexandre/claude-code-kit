@@ -20,6 +20,7 @@ const CHECK_MARKS: Record<string, { mark: string; color: string }> = {
 }
 
 const snapshot = atom({ plugin: 'pr-pane', key: 'snapshot' } as const, null)
+const isActive = atom({ plugin: 'pr-pane', key: 'isActive' } as const, false)
 const isRefreshing = atom({ plugin: 'pr-pane', key: 'isRefreshing' } as const, false)
 const problem = atom({ plugin: 'pr-pane', key: 'problem' } as const, '')
 const ciToggled = atom({ plugin: 'pr-pane', key: 'ciToggled' } as const, {})
@@ -253,6 +254,7 @@ const load = async ($: EngineInterface, isLive: boolean) => {
     const parsed = JSON.parse(ran.stdout) as { prs: PrRow[]; errors: string[] }
     const loaded: PrSnapshot = { ...parsed, isLive, at: clockTime(await $.clock.now()) }
     await update($, snapshot, () => loaded)
+    await update($, isActive, () => true)
     await update($, problem, () => '')
   } catch (error) {
     await update($, problem, () => `pr-watch did not run: ${String(error)}`)
@@ -729,21 +731,44 @@ let loadedAt = 0
 const reloadCached = async ($: EngineInterface) => {
   const now = await $.clock.now()
 
-  if (now - loadedAt >= RELOAD_EVERY_MS) {
+  if ((await read($, isActive)) && now - loadedAt >= RELOAD_EVERY_MS) {
     loadedAt = now
     await load($, false)
   }
 }
 
-export const register: Register = on => {
-  on('session.start', async ($, e, next) => {
-    await $.command.register({
+const start = async ($: EngineInterface) => {
+  await $.command
+    .register({
       name: COMMAND,
       description: 'Show the tracked PRs (pr-watch) and refresh them: status, CI, what each waits for',
     })
-    void reloadCached($)
+    .catch(() => undefined)
+
+  if (await $.fs.exists(await script($)).catch(() => false)) {
+    await update($, isActive, () => true)
+  }
+
+  loadedAt = Number.NEGATIVE_INFINITY
+  void reloadCached($)
+}
+
+export const register: Register = on => {
+  on('session.start', async ($, e, next) => {
+    await start($)
 
     return next(e)
+  })
+
+  // A /clear starts a fresh session without a session.start: the band is set up again once it has.
+  on('session.end', async ($, e, next) => {
+    const ended = await next(e)
+
+    if (e.reason === 'clear') {
+      $.clock.after(0, () => void start($))
+    }
+
+    return ended
   })
 
   on('turn.complete', async ($, e, next) => {
@@ -759,10 +784,8 @@ export const register: Register = on => {
     const reviews = shown?.reviews?.length ?? 0
     const running = (shown?.builds ?? []).filter(isBuildWatched).length
     const isBroken = (await read($, problem)) !== ''
-    const builds = shown?.builds?.length ?? 0
-    const isEmpty = prs.length === 0 && reviews === 0 && builds === 0 && !isBroken
 
-    if (e.props.hasSurvey || e.props.view.agentId !== undefined || isEmpty) {
+    if (e.props.hasSurvey || e.props.view.agentId !== undefined || (!(await read($, isActive)) && !isBroken)) {
       return beneath
     }
 

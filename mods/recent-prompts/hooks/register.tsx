@@ -151,11 +151,29 @@ const toggleHistory = async ($: EngineInterface) => {
   return 'opened'
 }
 
+const registerCommand = ($: EngineInterface) =>
+  $.command.register({ name: COMMAND, description: 'Open or close the searchable list of your messages' }).catch(() => undefined)
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: COMMAND, description: 'Open or close the searchable list of your messages' })
+    await registerCommand($)
 
     return next(e)
+  })
+
+  // A /clear starts a fresh session without a session.start: its history starts empty.
+  on('session.end', async ($, e, next) => {
+    const ended = await next(e)
+
+    if (e.reason === 'clear') {
+      $.clock.after(0, () => {
+        void update($, prompts, () => [])
+        void update($, waiting, () => [])
+        void registerCommand($)
+      })
+    }
+
+    return ended
   })
 
   on('command.run', { command: COMMAND }, async $ => ({ text: `My messages pane ${await toggleHistory($)}.` }))
@@ -235,11 +253,6 @@ export const register: Register = on => {
     }
 
     const recent = (await read($, prompts)).filter(isMessage).slice(-BAND_COUNT)
-
-    if (recent.length === 0) {
-      return beneath
-    }
-
     const { Box, Button, Text } = $.ui.resolve(e)
     const width = Math.max(10, e.props.bodyColumns - 4)
 

@@ -850,6 +850,50 @@ test('opening a PR with a new comment reads it: pr-watch clears it, the pane kee
   expect(await bandColor(band)).toBeUndefined()
 })
 
+test('with pr-watch installed the band shows PRs & CI before anything is tracked, and again after a /clear', async ($, on) => {
+  const clock = mock.clock(on)
+  const calls: string[][] = []
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
+  on('fs.exists', ($, e) => ({ value: e.path.replace(/\\/g, '/').endsWith('/skills/pr-watch/pr-watch.sh') }))
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
+  on('process.run', ($, e) => {
+    calls.push(e.argv.slice(2))
+
+    return ran(0, JSON.stringify({ live: false, prs: [], errors: [] }))
+  })
+  on('ui.render', () => Fragment({}))
+
+  await $.session.start({ cwd: '/home/someone/dev/shop', surface: 'terminal', isInteractive: true })
+  await clock.advance(0)
+  const band = await $.ui.mount({ plugin: 'pr-pane', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
+
+  expect(await band.find({ key: 'prs', text: 'PRs & CI' })).toBeDefined()
+
+  const before = calls.length
+  await $.session.end({ reason: 'clear', sessionId: 'old', resume: { id: 'old' } })
+  await clock.advance(0)
+
+  expect(calls.length).toBeGreaterThan(before)
+})
+
+test('without pr-watch the band has no PRs & CI button', async ($, on) => {
+  const clock = mock.clock(on)
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
+  on('fs.exists', () => ({ value: false }))
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('process.run', () => ran(1, '', 'no such file'))
+  on('ui.render', () => Fragment({}))
+
+  await $.session.start({ cwd: '/home/someone/dev/shop', surface: 'terminal', isInteractive: true })
+  await clock.advance(0)
+  const band = await $.ui.mount({ plugin: 'pr-pane', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
+
+  expect(await band.find({ key: 'prs' })).toBeUndefined()
+})
+
 test('a failing pr-watch is shown in the pane', async ($, on) => {
   mock.clock(on)
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))

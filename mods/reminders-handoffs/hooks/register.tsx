@@ -329,24 +329,40 @@ const counts = (shownReminders: Reminder[] | null, shownHandoffs: Handoff[] | nu
   fromElsewhere: (shownHandoffs ?? []).filter(note => note.state === 'open' && note.isMine !== true).length,
 })
 
+const start = async ($: EngineInterface) => {
+  // A name already taken (a skill or command of the user's) costs that command only.
+  for (const source of await detect($)) {
+    await $.command
+      .register({
+        name: SOURCES[source].command,
+        description:
+          source === 'reminders'
+            ? 'Show the reminders pane: due now, upcoming and repeating, past; pick, close or stop one'
+            : 'Show the handoff notes: open ones to pick up or cancel, done ones',
+      })
+      .catch(() => undefined)
+  }
+
+  loadedAt = Number.NEGATIVE_INFINITY
+  void reload($)
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    // A name already taken (a skill or command of the user's) costs that command only.
-    for (const source of await detect($)) {
-      await $.command
-        .register({
-          name: SOURCES[source].command,
-          description:
-            source === 'reminders'
-              ? 'Show the reminders pane: due now, upcoming and repeating, past; pick, close or stop one'
-              : 'Show the handoff notes: open ones to pick up or cancel, done ones',
-        })
-        .catch(() => undefined)
-    }
-
-    void reload($)
+    await start($)
 
     return next(e)
+  })
+
+  // A /clear starts a fresh session without a session.start: the band is set up again once it has.
+  on('session.end', async ($, e, next) => {
+    const ended = await next(e)
+
+    if (e.reason === 'clear') {
+      $.clock.after(0, () => void start($))
+    }
+
+    return ended
   })
 
   on('turn.complete', async ($, e, next) => {
@@ -367,15 +383,14 @@ export const register: Register = on => {
     return { text: 'Handoffs pane opened.' }
   })
 
-  // One button at the right of the band above the prompt, named after the parts activated, while
-  // there is something in them: yellow when a reminder is due or a note from the other computer
-  // waits.
+  // One button at the right of the band above the prompt, named after the parts activated, even
+  // with nothing in them: yellow when a reminder is due or a note from the other computer waits.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const beneath = await next(e)
     const found = await read($, enabled)
-    const { due, current, open, fromElsewhere } = counts(await read($, reminders), await read($, handoffs))
+    const { due, open, fromElsewhere } = counts(await read($, reminders), await read($, handoffs))
 
-    if (e.props.hasSurvey || e.props.view.agentId !== undefined || current + open === 0) {
+    if (e.props.hasSurvey || e.props.view.agentId !== undefined || found.length === 0) {
       return beneath
     }
 

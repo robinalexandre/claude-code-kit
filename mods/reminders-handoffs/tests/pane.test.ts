@@ -39,7 +39,7 @@ const NOTE = {
 type World = { reminders: object[]; handoffs: object[]; installed: string[] }
 
 const answerBeneath = (on: On, world: World, calls: string[][], submitted: string[] = [], isNameTaken = false) => {
-  mock.clock(on)
+  const clock = mock.clock(on)
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
   // The engine hands the path on as the system writes it (C:\home\... on Windows).
   on('fs.exists', ($, e) => ({ value: world.installed.some(path => e.path.replace(/\\/g, '/').endsWith(path)) }))
@@ -63,6 +63,9 @@ const answerBeneath = (on: On, world: World, calls: string[][], submitted: strin
   })
   on('ui.render', () => Fragment({}))
   on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
+
+  return clock
 }
 
 const mountPane = ($: Engine) =>
@@ -206,7 +209,7 @@ test('with both skills, a tab each; pick hands the note to the session, cancel a
   expect(await pane.find({ text: /Dentist/ })).toBeDefined()
 })
 
-test('the band is named after the skills installed, and absent with nothing in them', async ($, on) => {
+test('the band is named after the skills installed, and stays with nothing in them', async ($, on) => {
   const world: World = { reminders: [WEEKLY, LATER], handoffs: [NOTE], installed: [REMINDERS, HANDOFF] }
   answerBeneath(on, world, [])
 
@@ -219,7 +222,29 @@ test('the band is named after the skills installed, and absent with nothing in t
   world.handoffs = []
   await $.command.run(command('reminders-pane'))
 
+  expect(await (await mountBand($)).find({ key: 'reminders-handoffs', text: 'Reminders · Handoffs' })).toBeDefined()
+})
+
+test('the band has no button when neither skill is installed', async ($, on) => {
+  answerBeneath(on, { reminders: [WEEKLY], handoffs: [NOTE], installed: [] }, [])
+
+  await $.session.start(START)
+
   expect(await (await mountBand($)).find({ key: 'reminders-handoffs' })).toBeUndefined()
+})
+
+test('after a /clear the band is set up again and reloaded, before any message', async ($, on) => {
+  const calls: string[][] = []
+  const clock = answerBeneath(on, { reminders: [WEEKLY], handoffs: [], installed: [REMINDERS] }, calls)
+
+  await $.session.start(START)
+  await clock.advance(0)
+  const before = calls.length
+  await $.session.end({ reason: 'clear', sessionId: 'old', resume: { id: 'old' } })
+  await clock.advance(0)
+
+  expect(calls.length).toBeGreaterThan(before)
+  expect(await (await mountBand($)).find({ key: 'reminders-handoffs', text: 'Reminders 1 now' })).toBeDefined()
 })
 
 test('the band button joins the shared row of the mods beneath, in key order', async ($, on) => {
