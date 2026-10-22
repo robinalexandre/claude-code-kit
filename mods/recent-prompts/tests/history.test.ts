@@ -120,6 +120,32 @@ test('a message absorbed into the running turn is listed as typed once its deliv
   expect(await band.find({ key: 'prompt-1', text: /^And the code-kit \?$/ })).toBeDefined()
 })
 
+test("a prompt a plugin sends for the person, such as a reminder's pick, is listed without the engine's framing", async ($, on) => {
+  mock.clock(on)
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  on('ui.render', () => Fragment({}))
+
+  const origin = { kind: 'plugin', name: 'reminders-handoffs' } as const
+  const sent = `Let's do the reminder water-the-plants now: "Water the plants".`
+
+  await say($, 'first', 'Check the sync')
+  await submit($, { text: sent, origin, wait: false })
+  await $.session.append({
+    message: {
+      type: 'user',
+      role: 'user',
+      content: [{ type: 'text', text: `The reminders-handoffs plugin sent a message:\n  ${sent}\n\nAddress the message above.` }],
+    },
+    door: 'prompt',
+    origin,
+    uuid: 'picked',
+  })
+
+  const band = await $.ui.mount({ plugin: 'recent-prompts', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
+
+  expect(await band.find({ key: 'prompt-1', text: /^Let's do the reminder water-the-plants now/ })).toBeDefined()
+})
+
 test('an unfolded message shows it whole, then each reply folded until opened, tool calls left out', async ($, on) => {
   mock.clock(on)
   on('ui.render', () => Fragment({}))

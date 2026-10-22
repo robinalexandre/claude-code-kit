@@ -69,7 +69,8 @@ const unfolded = atom({ plugin: 'recent-prompts', key: 'unfolded' } as const, {}
 type Block = { type: string; [field: string]: unknown }
 type Shown = { before: string; match: string; after: string }
 
-const isPerson = (kind: string) => kind === 'composer' || kind === 'bridge'
+// A plugin's prompt is sent for the person: a button they pressed in a pane, such as a reminder's pick.
+const isPerson = (kind: string) => kind === 'composer' || kind === 'bridge' || kind === 'plugin'
 
 const flatten = (text: string) => text.replace(/\s+/g, ' ').trim()
 
@@ -247,10 +248,10 @@ export const register: Register = on => {
   on('command.run', { command: COMMAND }, async $ => ({ text: `My messages pane ${await toggleHistory($)}.` }))
 
   // A message typed while a turn runs is stored later, wrapped in the engine's framing, as a queued_command
-  // attachment (through the delivery door when absorbed mid-turn); its text is kept at Enter so that row
-  // can be told apart and listed as typed.
+  // attachment (through the delivery door when absorbed mid-turn); a plugin's prompt is stored wrapped
+  // too, even between turns. Its text is kept at submit so that row can be told apart and listed as sent.
   on('prompt.submit', async ($, e, next) => {
-    if (e.turnId !== undefined && isPerson(e.origin.kind) && e.text.trim() !== '') {
+    if ((e.turnId !== undefined || e.origin.kind === 'plugin') && isPerson(e.origin.kind) && e.text.trim() !== '') {
       await update($, waiting, list => [...list, e.text].slice(-WAITING_KEPT))
     }
 
@@ -266,7 +267,9 @@ export const register: Register = on => {
 
     const blocks: Block[] = stored.message.content
     const first = blocks.find(block => block.type === 'text')
-    const text = typeof first?.text === 'string' ? first.text : ''
+    const sent =
+      e.origin.kind === 'plugin' ? (await read($, waiting)).find(one => flatten(textOf(blocks)).includes(flatten(one))) : undefined
+    const text = sent ?? (typeof first?.text === 'string' ? first.text : '')
 
     if (text.trim() !== '') {
       await update($, waiting, list => withoutFirst(list, text))
