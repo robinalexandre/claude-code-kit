@@ -16,6 +16,7 @@ const openIds = atom({ plugin: 'reminders-handoffs', key: 'openIds' } as const, 
 const openSections = atom({ plugin: 'reminders-handoffs', key: 'openSections' } as const, {})
 const armed = atom({ plugin: 'reminders-handoffs', key: 'armed' } as const, '')
 const busy = atom({ plugin: 'reminders-handoffs', key: 'busy' } as const, '')
+const loadedTime = atom({ plugin: 'reminders-handoffs', key: 'loadedTime' } as const, 0)
 
 // Each part this pane shows: the skill that keeps it, its script, and the pane's words for it.
 const SOURCES: Record<Source, { skill: string; script: string; title: string; command: string }> = {
@@ -73,6 +74,27 @@ const truncate = (text: string, width: number) =>
   text.length > width ? `${text.slice(0, Math.max(0, width - 1))}…` : text
 
 const tail = (path: string) => slashed(path).replace(/\/+$/, '').split('/').pop() ?? path
+
+// Buttons holding styled Text draw from 2.1.306 on, the oldest build checked; an older one, or a
+// version that cannot be read, gets plain labels.
+const STYLED_SINCE = [2, 1, 306]
+
+let styledFound: boolean | undefined
+
+const isStyled = async ($: EngineInterface) => {
+  if (styledFound === undefined) {
+    try {
+      const parts = ((await $.session.version()).base ?? '').replace(/-.*$/, '').split('.').map(Number)
+      const at = parts.findIndex((part, index) => part !== STYLED_SINCE[index])
+
+      styledFound = parts.length === 3 && parts.every(Number.isInteger) && (at === -1 || (parts[at] ?? 0) > (STYLED_SINCE[at] ?? 0))
+    } catch {
+      styledFound = false
+    }
+  }
+
+  return styledFound
+}
 
 const home = async ($: EngineInterface) => slashed((await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE')) ?? '~')
 
@@ -195,23 +217,61 @@ const load = async ($: EngineInterface) => {
   for (const source of await read($, enabled)) {
     await loadOne($, source)
   }
+
+  const now = await $.clock.now()
+  await update($, loadedTime, () => now)
+}
+
+const clockTime = (milliseconds: number) => {
+  const date = new Date(milliseconds)
+
+  return [date.getHours(), date.getMinutes()].map(part => String(part).padStart(2, '0')).join(':')
 }
 
 let loadedAt = 0
 
+// Detects again each time: a /clear or a reload can leave the session with no part enabled,
+// which would hide the band's button for the rest of it.
 const reload = async ($: EngineInterface) => {
   const now = await $.clock.now()
 
   if (now - loadedAt >= RELOAD_EVERY_MS) {
     loadedAt = now
+    await detect($)
     await load($)
   }
 }
 
+const syncNow = async ($: EngineInterface) => {
+  const sync = `${await home($)}/.claude-sync/sync.sh`
+
+  return $.process.run([await bash($), '-c', `[ -f "${sync}" ] && bash "${sync}" now`], { timeoutMs: 120_000 }).catch(() => undefined)
+}
+
 // The other computers get the change with the next sync; it runs in the background.
 const shareChange = async ($: EngineInterface) => {
-  const sync = `${await home($)}/.claude-sync/sync.sh`
-  void $.process.run([await bash($), '-c', `[ -f "${sync}" ] && bash "${sync}" now`], { timeoutMs: 120_000 }).catch(() => undefined)
+  void syncNow($)
+}
+
+const REFRESH = 'refresh'
+
+// What is on this computer first, then again once the sync has brought what the others wrote.
+const refresh = async ($: EngineInterface) => {
+  if ((await read($, busy)) === REFRESH) {
+    return
+  }
+
+  await update($, busy, () => REFRESH)
+
+  try {
+    loadedAt = await $.clock.now()
+    await detect($)
+    await load($)
+    await syncNow($)
+    await load($)
+  } finally {
+    await update($, busy, () => '')
+  }
 }
 
 type Action = 'done' | 'stop' | 'delete' | 'cancel' | 'restore'
@@ -344,7 +404,8 @@ const start = async ($: EngineInterface) => {
   }
 
   loadedAt = Number.NEGATIVE_INFINITY
-  void reload($)
+  styledFound = undefined
+  void reload($).catch(() => undefined)
 }
 
 export const register: Register = on => {
@@ -366,7 +427,7 @@ export const register: Register = on => {
   })
 
   on('turn.complete', async ($, e, next) => {
-    void reload($)
+    void reload($).catch(() => undefined)
 
     return next(e)
   })
@@ -389,6 +450,10 @@ export const register: Register = on => {
     const beneath = await next(e)
     const found = await read($, enabled)
     const { due, open, fromElsewhere } = counts(await read($, reminders), await read($, handoffs))
+
+    if (found.length === 0) {
+      void reload($).catch(() => undefined)
+    }
 
     if (e.props.hasSurvey || e.props.view.agentId !== undefined || found.length === 0) {
       return beneath
@@ -430,8 +495,21 @@ export const register: Register = on => {
     const sections = await read($, openSections)
     const armedKey = await read($, armed)
     const busyKey = await read($, busy)
+    const lastLoad = await read($, loadedTime)
+    const styled = await isStyled($)
     const width = Math.max(20, e.props.bodyColumns - 2)
     const { due, current: remindersCount, open } = counts(shownReminders, shownHandoffs)
+
+    type Look = { bold?: boolean; underline?: boolean; dimColor?: boolean; color?: string }
+
+    const foldButton = (key: string, label: string, look: Look, onPress: () => void) =>
+      styled ? (
+        <Button key={key} plain onPress={onPress}>
+          <Text {...look}>{label}</Text>
+        </Button>
+      ) : (
+        <Button key={key} label={label} plain dimColor={look.dimColor} onPress={onPress} />
+      )
 
     const actionButton = (source: Source, action: Action, id: string, label: string) => {
       const key = `${source}|${action}|${id}`
@@ -440,13 +518,16 @@ export const register: Register = on => {
         return <Text key={`${action}-${id}`} dimColor>{`${action}… `}</Text>
       }
 
-      return (
-        <Button
-          key={`${action}-${id}`}
-          label={armedKey === key ? `${label}? press again` : label}
-          variant={armedKey === key ? 'primary' : undefined}
-          onPress={() => void act($, source, action, id)}
-        />
+      if (armedKey !== key) {
+        return <Button key={`${action}-${id}`} label={label} onPress={() => void act($, source, action, id)} />
+      }
+
+      return styled ? (
+        <Button key={`${action}-${id}`} onPress={() => void act($, source, action, id)}>
+          <Text color="red">{`${label}? press again`}</Text>
+        </Button>
+      ) : (
+        <Button key={`${action}-${id}`} label={`${label}? press again`} variant="primary" onPress={() => void act($, source, action, id)} />
       )
     }
 
@@ -589,12 +670,9 @@ export const register: Register = on => {
 
         return (
           <Box key={`group-${key}`} flexDirection="column" paddingLeft={2}>
-            <Button
-              key={`group-${section}-${name}`}
-              label={`${isOpen ? '▾' : '▸'} ${name} (${members.length})`}
-              plain
-              onPress={() => void update($, openSections, all => ({ ...all, [key]: !isOpen }))}
-            />
+            {foldButton(`group-${section}-${name}`, `${isOpen ? '▾' : '▸'} ${name} (${members.length})`, {}, () =>
+              void update($, openSections, all => ({ ...all, [key]: !isOpen }))
+            )}
             {isOpen && (members.map(draw) as never)}
           </Box>
         )
@@ -607,12 +685,9 @@ export const register: Register = on => {
 
       return (
         <Box key={`section-${id}`} flexDirection="column" marginTop={1}>
-          <Button
-            key={id}
-            label={`${isOpen ? '▾' : '▸'} ${title} (${rows.length})`}
-            plain
-            onPress={() => void update($, openSections, all => ({ ...all, [id]: !isOpen }))}
-          />
+          {foldButton(id, `${isOpen ? '▾' : '▸'} ${title} (${rows.length})`, { bold: true }, () =>
+            void update($, openSections, all => ({ ...all, [id]: !isOpen }))
+          )}
           {isOpen && rows.length === 0 && (
             <Box paddingLeft={2}>
               <Text dimColor>nothing</Text>
@@ -654,23 +729,31 @@ export const register: Register = on => {
       <Box flexDirection="column">
         {found.length > 1 && (
           <Box flexDirection="row" gap={2}>
-            {found.map(source => (
-              <Button
-                key={`tab-${source}`}
-                label={tabLabel(source)}
-                plain
-                dimColor={source !== current}
-                onPress={() => void update($, tab, () => source)}
-              />
-            ))}
+            {found.map(source =>
+              foldButton(`tab-${source}`, tabLabel(source), source === current ? { bold: true, underline: true } : { dimColor: true }, () =>
+                void update($, tab, () => source)
+              )
+            )}
           </Box>
         )}
         {found.length === 0 && <Text dimColor>Neither the reminders nor the handoff skill is installed.</Text>}
         <Box flexDirection="row" justifyContent="space-between">
           <Text dimColor>
-            {trouble !== '' ? `Could not read them: ${truncate(trouble, width - 30)}` : loaded === null ? 'Loading…' : ''}
+            {trouble !== ''
+              ? `Could not read them: ${truncate(trouble, width - 30)}`
+              : loaded === null
+                ? 'Loading…'
+                : lastLoad > 0
+                  ? `live at ${clockTime(lastLoad)}`
+                  : ''}
           </Text>
-          <Button key="refresh" label="refresh" onPress={() => void load($)} />
+          {busyKey === REFRESH ? (
+            <Text key="refresh" dimColor>
+              syncing…
+            </Text>
+          ) : (
+            <Button key="refresh" label="refresh" onPress={() => void refresh($)} />
+          )}
         </Box>
         {loaded !== null && ((current === 'reminders' ? remindersTab() : handoffsTab()) as never)}
       </Box>

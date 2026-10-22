@@ -57,8 +57,10 @@ declare module 'claude-code' {
       openSections: Record<string, boolean>
       /** `<part>|<action>|<id>` pressed once: a second press confirms. */
       armed: string
-      /** `<part>|<action>|<id>` while it runs. */
+      /** `<part>|<action>|<id>` while it runs, `refresh` while the refresh button's sync runs. */
       busy: string
+      /** When the lists were last read, in epoch milliseconds; 0 before the first read. */
+      loadedTime: number
     }
   }
 }

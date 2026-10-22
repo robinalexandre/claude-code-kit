@@ -378,6 +378,24 @@ const REVIEWS = {
   errors: [],
 }
 
+for (const [base, isStyled] of [['2.1.306', true], ['2.1.192', false]] as const) {
+  test(`on ${base} the review section title is ${isStyled ? 'styled Text in its button' : 'a plain label'}`, async ($, on) => {
+    mock.clock(on)
+    on('session.version', () => ({ value: { version: base, base } }))
+    on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
+    on('process.run', ($, e) => ran(0, e.argv.slice(2).join(' ').startsWith('status') ? JSON.stringify(REVIEWS) : ''))
+    on('ui.render', () => Fragment({}))
+    on('ui.open', () => ({ value: { isPlaced: true as const } }))
+
+    await $.command.run(RUN)
+    const pane = await mountPane($, 'terminal')
+    const styledTitle = await pane.find({ type: 'Text', text: '▸ Waiting for my review (1)' })
+
+    expect(styledTitle?.props.bold ?? false).toBe(isStyled)
+    expect(await pane.find({ key: 'reviews', text: '▸ Waiting for my review (1)' })).toBeDefined()
+  })
+}
+
 test('a PR waiting for my review is listed first: approve on a second press, or a quick review by Claude', async ($, on) => {
   mock.clock(on)
   const calls: string[] = []

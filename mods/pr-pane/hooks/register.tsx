@@ -164,6 +164,27 @@ const descriptionLines = (text: string, width: number) => {
   return lines.length > DESCRIPTION_LINES ? [...lines.slice(0, DESCRIPTION_LINES), '…'] : lines
 }
 
+// Buttons holding styled Text draw from 2.1.306 on, the oldest build checked; an older one, or a
+// version that cannot be read, gets plain labels.
+const STYLED_SINCE = [2, 1, 306]
+
+let styledFound: boolean | undefined
+
+const isStyled = async ($: EngineInterface) => {
+  if (styledFound === undefined) {
+    try {
+      const parts = ((await $.session.version()).base ?? '').replace(/-.*$/, '').split('.').map(Number)
+      const at = parts.findIndex((part, index) => part !== STYLED_SINCE[index])
+
+      styledFound = parts.length === 3 && parts.every(Number.isInteger) && (at === -1 || (parts[at] ?? 0) > (STYLED_SINCE[at] ?? 0))
+    } catch {
+      styledFound = false
+    }
+  }
+
+  return styledFound
+}
+
 const clockTime = (milliseconds: number) => {
   const date = new Date(milliseconds)
 
@@ -817,6 +838,7 @@ const reloadCached = async ($: EngineInterface) => {
 }
 
 const start = async ($: EngineInterface) => {
+  styledFound = undefined
   await $.command
     .register({
       name: COMMAND,
@@ -917,6 +939,7 @@ export const register: Register = on => {
     const expanded = await read($, openRepos)
     const busyKey = await read($, inFlight)
     const nowMs = await $.clock.now()
+    const styled = await isStyled($)
     const width = Math.max(20, e.props.bodyColumns - 2)
     const inner = width - 2
     const alreadyRead = await read($, readChanges)
@@ -1428,13 +1451,21 @@ export const register: Register = on => {
         {attention.length > 0 && (
           <Box flexDirection="column" marginTop={1}>
             <Box flexDirection="row">
-              <Text color="red">● </Text>
-              <Button
-                key="attention"
-                label={`${isAttentionOpen ? '▾' : '▸'} Needs your attention (${attention.length})`}
-                plain
-                onPress={() => void toggleRepo($, repoKey('attention', '*'), isAttentionOpen)}
-              />
+              {!styled && <Text color="red">● </Text>}
+              {styled ? (
+                <Button key="attention" plain onPress={() => void toggleRepo($, repoKey('attention', '*'), isAttentionOpen)}>
+                  <Text bold color="red">
+                    {`${isAttentionOpen ? '▾' : '▸'} Needs your attention (${attention.length})`}
+                  </Text>
+                </Button>
+              ) : (
+                <Button
+                  key="attention"
+                  label={`${isAttentionOpen ? '▾' : '▸'} Needs your attention (${attention.length})`}
+                  plain
+                  onPress={() => void toggleRepo($, repoKey('attention', '*'), isAttentionOpen)}
+                />
+              )}
               {!isAttentionOpen && hasRunningCi(attention) && <Text color="yellow"> · CI running</Text>}
             </Box>
             {isAttentionOpen && repoBlocks('attention', attention, false)}
@@ -1442,15 +1473,23 @@ export const register: Register = on => {
         )}
         {reviews.length > 0 && (
           <Box flexDirection="column" marginTop={1}>
-            <Box flexDirection="row">
-              <Text color="yellow">● </Text>
-              <Button
-                key="reviews"
-                label={`${isReviewsOpen ? '▾' : '▸'} Waiting for my review (${reviews.length})`}
-                plain
-                onPress={() => void toggleRepo($, repoKey('reviews', '*'), isReviewsOpen)}
-              />
-            </Box>
+            {styled ? (
+              <Button key="reviews" plain onPress={() => void toggleRepo($, repoKey('reviews', '*'), isReviewsOpen)}>
+                <Text bold color="yellow">
+                  {`${isReviewsOpen ? '▾' : '▸'} Waiting for my review (${reviews.length})`}
+                </Text>
+              </Button>
+            ) : (
+              <Box flexDirection="row">
+                <Text color="yellow">● </Text>
+                <Button
+                  key="reviews"
+                  label={`${isReviewsOpen ? '▾' : '▸'} Waiting for my review (${reviews.length})`}
+                  plain
+                  onPress={() => void toggleRepo($, repoKey('reviews', '*'), isReviewsOpen)}
+                />
+              </Box>
+            )}
             {isReviewsOpen &&
               byRepo(reviews).map(([repo, requests]) => {
                 const key = repoKey('reviews', repo)

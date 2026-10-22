@@ -309,6 +309,77 @@ test('a command name already taken does not stop the session start', async ($, o
   expect(calls).toContainEqual(['bash', REMINDERS, 'json', '/home/someone/dev/shop'])
 })
 
+test('refresh reads the lists, syncs, reads them again, and says when', async ($, on) => {
+  const calls: string[][] = []
+  const world: World = { reminders: [LATER], handoffs: [], installed: [REMINDERS] }
+  const clock = answerBeneath(on, world, calls)
+  await clock.set(new Date(2026, 9, 22, 18, 7).getTime())
+
+  await $.session.start(START)
+  await $.command.run(command('reminders-pane'))
+  const pane = await mountPane($)
+
+  expect(await pane.find({ text: 'live at 18:07' })).toBeDefined()
+
+  await clock.advance(5 * 60_000)
+  world.reminders = [LATER, WEEKLY]
+  const before = calls.length
+  await pane.press({ key: 'refresh' })
+  const after = calls.slice(before).map(argv => argv.join(' '))
+
+  expect(after.filter(argv => argv.endsWith('json /home/someone/dev/shop'))).toHaveLength(2)
+  expect(after.some(argv => argv.includes('.claude-sync/sync.sh" now'))).toBe(true)
+  expect(await pane.find({ text: 'live at 18:12' })).toBeDefined()
+  expect(await pane.find({ text: '▸ Now (1)' })).toBeDefined()
+})
+
+test('a skill found again later brings the band button back', async ($, on) => {
+  const world: World = { reminders: [WEEKLY], handoffs: [], installed: [] }
+  const clock = answerBeneath(on, world, [])
+
+  await $.session.start(START)
+  await clock.advance(0)
+
+  expect(await (await mountBand($)).find({ key: 'reminders-handoffs' })).toBeUndefined()
+
+  world.installed = [REMINDERS]
+  await clock.advance(60_000)
+  await mountBand($)
+  await clock.advance(0)
+
+  expect(await (await mountBand($)).find({ key: 'reminders-handoffs', text: 'Reminders 1 now' })).toBeDefined()
+})
+
+const lookOn = async (on: On, $: Engine, base: string) => {
+  on('session.version', () => ({ value: { version: base, base } }))
+  answerBeneath(on, { reminders: [WEEKLY], handoffs: [NOTE], installed: [REMINDERS, HANDOFF] }, [])
+
+  await $.session.start(START)
+  await $.command.run(command('reminders-pane'))
+  const pane = await mountPane($)
+
+  return [
+    await pane.find({ type: 'Text', text: '▸ Now (1)' }),
+    await pane.find({ type: 'Text', text: 'Reminders (1, 1 now)' }),
+    await pane.find({ key: 'now' }),
+  ]
+}
+
+test('from 2.1.306 the section titles and tabs are styled Text inside their buttons', async ($, on) => {
+  const [section, tab] = await lookOn(on, $, '2.1.306')
+
+  expect(section?.props.bold).toBe(true)
+  expect(tab?.props.underline).toBe(true)
+})
+
+test('before 2.1.306 every button has a plain label', async ($, on) => {
+  const [section, tab, button] = await lookOn(on, $, '2.1.192')
+
+  expect(section).toBeUndefined()
+  expect(tab).toBeUndefined()
+  expect(button?.props.label).toBe('▸ Now (1)')
+})
+
 test('with only the handoff skill, the band says Handoffs', async ($, on) => {
   answerBeneath(on, { reminders: [], handoffs: [NOTE], installed: [HANDOFF] }, [])
 
