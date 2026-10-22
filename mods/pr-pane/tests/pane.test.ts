@@ -1083,3 +1083,87 @@ test('the CI of a push of the user is listed with the runs, marked as a push', a
 
   expect(await pane.find({ text: /#71 tests · push to main · running/ })).toBeDefined()
 })
+
+test('a cached reload keeps what a live status found newer, and a failed live status still shows the record', async ($, on) => {
+  mock.clock(on)
+  const recorded = { live: false, prs: [row('1', { ci: 'CI running', waiting: 'CI' })], errors: [] }
+  const fetched = { live: true, prs: [row('1', { waiting: 'the merge', checked: '2026-01-01T11:00Z' })], errors: [] }
+  let isHostDown = false
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
+  on('process.run', ($, e) => {
+    const args = e.argv.slice(2).join(' ')
+
+    if (args === 'status --live') {
+      return isHostDown ? ran(1, '', 'gh: could not connect') : ran(0, JSON.stringify(fetched))
+    }
+
+    return ran(0, args === 'status' ? JSON.stringify(recorded) : '')
+  })
+  on('ui.render', () => Fragment({}))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  on('ui.toast', () => ({ value: undefined }))
+
+  await $.command.run(RUN)
+  const pane = await mountPane($, 'terminal', 100)
+
+  expect(await pane.find({ text: /1 ready to merge/ })).toBeDefined()
+
+  // The pane opened again reads the record first: the PR keeps what the live status found.
+  isHostDown = true
+  recorded.prs = [row('1', { ci: 'CI running', waiting: 'CI', note: 'after the release' })]
+  await $.command.run(RUN)
+
+  expect(await pane.find({ text: /1 ready to merge/ })).toBeDefined()
+  expect(await pane.find({ text: 'gh: could not connect' })).toBeDefined()
+
+  // Recorded later than the live status (another session checked it): the record wins.
+  recorded.prs = [row('1', { waiting: 'changes from us', checked: '2026-01-01T12:00Z' })]
+  await pane.press({ key: 'refresh' })
+
+  expect(await pane.find({ text: 'Needs your attention (1)' })).toBeDefined()
+})
+
+test('an unfolded run still going is read again with each live status, and the pane refreshes by itself', async ($, on) => {
+  const clock = mock.clock(on)
+  let liveCalls = 0
+  let stepState = 'running'
+  let status: typeof BUILDS = BUILDS
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
+  on('process.run', ($, e) => {
+    const command = e.argv.slice(2).join(' ')
+    liveCalls += e.argv.includes('--live') ? 1 : 0
+
+    if (command.startsWith('details')) {
+      return ran(0, JSON.stringify({ steps: [{ name: 'Package', job: 'build', state: stepState, errors: [] }] }))
+    }
+
+    return ran(0, JSON.stringify(status))
+  })
+  on('ui.render', () => Fragment({}))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  on('ui.panes', () => ({ value: [{ id: 'tracked-prs', title: 'Tracked PRs', isShown: true, isFocused: false, isPlaced: true }] }))
+
+  await $.command.run(RUN)
+  const pane = await mountPane($, 'terminal', 100)
+  await pane.press({ key: 'build-toggle-70125' })
+  await pane.press({ key: 'build-job-toggle-70125-0' })
+
+  expect(await pane.find({ text: /Package running$/ })).toBeDefined()
+
+  stepState = 'succeeded'
+  await clock.advance(60_000)
+
+  expect(await pane.find({ text: /Package succeeded$/ })).toBeDefined()
+
+  // Nothing running any more: the pane is still fetched live, every few minutes.
+  status = { ...BUILDS, builds: BUILDS.builds.filter(build => build.status !== 'running') }
+  await clock.advance(60_000)
+  const before = liveCalls
+  await clock.advance(60_000)
+
+  expect(liveCalls).toBe(before)
+
+  await clock.advance(4 * 60_000)
+
+  expect(liveCalls).toBe(before + 1)
+})

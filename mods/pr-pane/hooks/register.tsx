@@ -237,51 +237,102 @@ const bash = async ($: EngineInterface) => {
 const prWatch = async ($: EngineInterface, args: string[], timeoutMs = 30_000) =>
   $.process.run([await bash($), await script($), ...args], { timeoutMs })
 
+class StatusProblem extends Error {}
+
+const status = async ($: EngineInterface, isLive: boolean) => {
+  const ran = await prWatch($, isLive ? ['status', '--live'] : ['status'], isLive ? LIVE_TIMEOUT_MS : 30_000)
+
+  if (ran.exitCode !== 0) {
+    throw new StatusProblem((ran.stderr.trim() || `pr-watch exited with ${ran.exitCode}`).split('\n')[0])
+  }
+
+  return JSON.parse(ran.stdout) as Omit<PrSnapshot, 'isLive' | 'at'>
+}
+
+// pr-watch's cached status holds each PR as its last check recorded it, often older than the live
+// status on screen: a PR keeps the host's side of the newer of the two, and the user's side (note,
+// ack, park, review) from the record. The rest of the record is never older than a live status:
+// the tracked PRs, and the runs and review requests every live status saves there.
+const withCached = (shown: PrSnapshot | null, cached: PrSnapshot): PrSnapshot => {
+  if (shown === null || !shown.isLive) {
+    return cached
+  }
+
+  const fetched = new Map(shown.prs.map(pr => [pr.url, pr]))
+  const prs = cached.prs.map(recorded => {
+    const live = fetched.get(recorded.url)
+
+    if (live === undefined || live.checked <= recorded.checked) {
+      return recorded
+    }
+
+    const { note, reviewed, parked, parkedWhy, ack } = recorded
+
+    return { ...live, note, reviewed, parked, parkedWhy, ack, changes: parked === true ? [] : live.changes }
+  })
+
+  return { ...cached, prs, errors: shown.errors, isLive: true, at: shown.at }
+}
+
+// A live status still marked as running this long after it started was lost (the module reloaded
+// while it ran): the next refresh starts over instead of waiting for it forever.
+const LIVE_LOST_MS = LIVE_TIMEOUT_MS + 30_000
+let liveStartedAt = 0
+
 const load = async ($: EngineInterface, isLive: boolean) => {
   if (isLive) {
+    liveStartedAt = await $.clock.now()
     await update($, isRefreshing, () => true)
   }
 
   try {
-    const ran = await prWatch($, isLive ? ['status', '--live'] : ['status'], isLive ? LIVE_TIMEOUT_MS : 30_000)
-
-    if (ran.exitCode !== 0) {
-      await update($, problem, () => (ran.stderr.trim() || `pr-watch exited with ${ran.exitCode}`).split('\n')[0])
-
-      return
-    }
-
-    const parsed = JSON.parse(ran.stdout) as { prs: PrRow[]; errors: string[] }
-    const loaded: PrSnapshot = { ...parsed, isLive, at: clockTime(await $.clock.now()) }
-    await update($, snapshot, () => loaded)
+    const loaded: PrSnapshot = { ...(await status($, isLive)), isLive, at: clockTime(await $.clock.now()) }
+    await update($, snapshot, shown => (isLive ? loaded : withCached(shown, loaded)))
     await update($, isActive, () => true)
     await update($, problem, () => '')
+
+    return true
   } catch (error) {
-    await update($, problem, () => `pr-watch did not run: ${String(error)}`)
+    await update($, problem, () => (error instanceof StatusProblem ? error.message : `pr-watch did not run: ${String(error)}`))
+
+    // A live status that failed still shows what another session or the morning check recorded.
+    if (isLive) {
+      const cached = await status($, false).catch(() => undefined)
+
+      if (cached !== undefined) {
+        const at = clockTime(await $.clock.now())
+        await update($, snapshot, shown => withCached(shown, { ...cached, isLive: false, at }))
+      }
+    }
+
+    return false
   } finally {
     if (isLive) {
+      liveStartedAt = 0
       await update($, isRefreshing, () => false)
     }
   }
 }
 
-let whileRunning: { cancel: () => void } | undefined
+let nextRefresh: { cancel: () => void } | undefined
 
-// While a PR's CI or a pipeline run is in progress and the pane is open, it is fetched live again
-// every minute until it ends.
+// While the pane is open it is fetched live again, every minute while a PR's CI or a pipeline run is
+// in progress, every few minutes otherwise: what changed on the host shows without a press.
 const refresh = async ($: EngineInterface) => {
-  if (await read($, isRefreshing)) {
+  const isLost = liveStartedAt === 0 || (await $.clock.now()) - liveStartedAt > LIVE_LOST_MS
+
+  if ((await read($, isRefreshing)) && !isLost) {
     return
   }
 
-  await load($, true)
-  whileRunning?.cancel()
-  whileRunning = undefined
-  const shown = await read($, snapshot)
-
-  if (anyRunning(shown?.prs ?? [], shown?.builds ?? [])) {
-    whileRunning = $.clock.after(WHILE_RUNNING_EVERY_MS, () => void refreshIfShown($))
+  if (await load($, true)) {
+    await refreshOpenDetails($)
   }
+
+  nextRefresh?.cancel()
+  const shown = await read($, snapshot)
+  const every = anyRunning(shown?.prs ?? [], shown?.builds ?? []) ? WHILE_RUNNING_EVERY_MS : RELOAD_EVERY_MS
+  nextRefresh = $.clock.after(every, () => void refreshIfShown($))
 }
 
 const refreshIfShown = async ($: EngineInterface) => {
@@ -343,6 +394,12 @@ const toggleBuildDetails = async ($: EngineInterface, url: string) => {
   }
 
   await update($, buildDetails, shown => ({ ...shown, [url]: { isLoading: true, steps: [] } }))
+  await readRunSteps($, url, true)
+}
+
+// A run still going changes: only an ended one is kept. Read again for a run already unfolded, the
+// steps on screen stay until the new ones are read, and a failed read leaves them there.
+const readRunSteps = async ($: EngineInterface, url: string, isFirst: boolean) => {
   const problem = (text: string): BuildStep[] => [{ name: 'pr-watch', job: '', state: 'failed', errors: [text] }]
   let isRead = false
   const steps = await prWatch($, ['details', url], 120_000)
@@ -354,12 +411,35 @@ const toggleBuildDetails = async ($: EngineInterface, url: string) => {
         : problem(ran.stderr.trim() || `pr-watch exited with ${ran.exitCode}`)
     })
     .catch(error => problem(`pr-watch did not run: ${String(error)}`))
-  await update($, buildDetails, shown => ({ ...shown, [url]: { isLoading: false, steps } }))
 
-  // A run still going changes: only an ended one is kept.
+  if (!isRead && !isFirst) {
+    return
+  }
+
+  // Folded meanwhile: nothing to show.
+  await update($, buildDetails, shown => (shown[url] === undefined ? shown : { ...shown, [url]: { isLoading: false, steps } }))
+
   if (isRead && !steps.some(step => step.state === 'running')) {
     await update($, readSteps, kept => ({ ...kept, [url]: steps }))
   }
+}
+
+// After a live status, what is unfolded follows it: a run read while it was still going is read
+// again, a run going again (a re-run launched elsewhere) forgets the steps of its ended attempt, and
+// a check that no longer fails drops the errors read for it.
+const refreshOpenDetails = async ($: EngineInterface) => {
+  const shown = await read($, snapshot)
+  const running = new Set((shown?.builds ?? []).filter(isBuildRunning).map(build => build.url))
+  await update($, readSteps, kept => Object.fromEntries(Object.entries(kept).filter(([url]) => !running.has(url))))
+  const kept = await read($, readSteps)
+  const open = Object.entries(await read($, buildDetails))
+    .filter(([url, one]) => !one.isLoading && kept[url] === undefined)
+    .map(([url]) => url)
+  const failing = new Set(
+    (shown?.prs ?? []).flatMap(pr => (pr.checks ?? []).filter(check => FAILED.has(check.state)).map(check => checkKey(pr.url, check.name)))
+  )
+  await update($, details, all => Object.fromEntries(Object.entries(all).filter(([key, one]) => one.isLoading || failing.has(key))))
+  await Promise.all(open.map(url => readRunSteps($, url, false)))
 }
 
 const stepKey = (url: string, index: number | string) => `${url}|${index}`
