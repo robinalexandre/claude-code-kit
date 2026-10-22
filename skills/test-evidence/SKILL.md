@@ -5,7 +5,7 @@ description: Capture proof that a ticket works when tested locally (browser scre
 
 # Test evidence for a ticket or a PR
 
-Scripts are in `~/.claude/skills/test-evidence/scripts/` (`$SK` below). Run `bash $SK/capture.sh doctor` once to see what this machine can do, and `bash $SK/selftest.sh` after changing a script.
+Scripts are in the `scripts/` folder of this skill's base directory (`~/.claude/skills/test-evidence/` when installed by install.sh; `$SK` below is that `scripts/` folder). Run `bash $SK/capture.sh doctor` once to see what this machine can do, and `bash $SK/selftest.sh` after changing a script.
 
 ## 1. Agree on what to show
 

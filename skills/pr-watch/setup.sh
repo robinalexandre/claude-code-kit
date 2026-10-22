@@ -1,0 +1,44 @@
+#!/bin/bash
+# Sets up pr-watch: where it looks for your PRs and review requests, and which authors are bots.
+# Run it again any time: bash ~/.claude/skills/pr-watch/setup.sh
+set -eu
+. "$HOME/.claude/hooks/lib/jq.sh"
+. "$HOME/.claude/hooks/lib/ask.sh"
+dir=${PR_WATCH_DIR:-$HOME/.claude-sync/pr-watch}
+conf="$dir/config.json"
+
+command -v python3 > /dev/null 2>&1 || command -v python > /dev/null 2>&1 || echo "  Python 3 is missing: pr-watch needs it."
+if command -v gh > /dev/null 2>&1 && gh auth status > /dev/null 2>&1; then
+  echo "  GitHub: gh is signed in."
+else
+  echo "  GitHub: for GitHub PRs, install gh (https://cli.github.com) and run gh auth login."
+fi
+if [ -n "${AZURE_DEVOPS_PAT:-}" ] || command -v az > /dev/null 2>&1; then
+  echo "  Azure DevOps: found (az login, or AZURE_DEVOPS_PAT)."
+else
+  echo "  Azure DevOps: for Azure DevOps PRs, install the Azure CLI and run az login, or set AZURE_DEVOPS_PAT."
+fi
+
+echo "pr-watch tracks the PRs you add, and also finds your own PRs and the reviews you are asked for where"
+echo "you tell it to look. Lists are comma separated; Enter keeps what is shown, - empties it."
+now() { jq -r --arg k "$1" '.[$k] // [] | join(", ")' "$conf" 2> /dev/null || true; }
+list() {
+  local answer
+  answer=$(reply "pr-watch.$1" "$2" "$(now "$1")")
+  [ "$answer" = - ] && answer=""
+  printf '%s' "$answer"
+}
+github=$(list githubRepos "GitHub repos to look in (owner/repo):")
+orgs=$(list azureOrgs "Azure DevOps organizations to look in:")
+projects=$(list azureProjects "Azure DevOps projects whose pipeline runs you start by hand (org/project):")
+bots=$(list bots "Comment authors that are bots, reported apart (display name or login):")
+track='["opened", "assigned", "approved"]'
+ask pr-watch.autoTrack "Track your own open PRs by themselves (opened by you, assigned to you, approved by you)?" y || track='[]'
+
+mkdir -p "$dir"
+[ -f "$conf" ] || echo '{}' > "$conf"
+jq --indent 2 --arg g "$github" --arg o "$orgs" --arg p "$projects" --arg b "$bots" --argjson t "$track" '
+  def items: split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(. != ""));
+  .githubRepos = ($g | items) | .azureOrgs = ($o | items) | .azureProjects = ($p | items)
+  | .bots = ($b | items) | .autoTrack = $t' "$conf" > "$conf.tmp" && mv "$conf.tmp" "$conf"
+echo "  Saved in $conf. Ask Claude \"watch this PR\" with a link, or \"check my PRs\"."

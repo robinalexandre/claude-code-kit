@@ -2,7 +2,7 @@
 # Tries the installer the way a newcomer meets it, in a throwaway home folder: your own ~/.claude,
 # ~/.gitconfig and shell files are neither read nor changed (checked before and after).
 #   tests/install-sandbox.sh                  you answer the installer's questions yourself
-#   tests/install-sandbox.sh --auto [FILE]    answers from FILE, one per line in the order asked;
+#   tests/install-sandbox.sh --auto [FILE]    answers from FILE (key=value lines, see hooks/lib/ask.sh);
 #                                             without FILE: every part, English, 🌊, no ~/.zshrc line
 #   tests/install-sandbox.sh --claude DIR     opens Claude Code in a sandbox made earlier, for the
 #                                             first session (Claude asks you to sign in there)
@@ -42,15 +42,11 @@ in_sandbox() {
     GIT_CONFIG_GLOBAL="$home/.gitconfig" CLAUDE_DEV_ROOT="$home/dev" "$@"
 }
 
+# Every group and part, English, 🌊; every setup question keeps its default, except those that would
+# reach outside the sandbox.
 auto_answers() {
-  local file=$1
-  {
-    "$KIT/install.sh" --list | while read -r _; do echo y; done
-    echo English
-    echo "🌊"
-    echo y
-    echo n
-  } > "$file"
+  printf '%s\n' 'group.*=y' 'part.*=y' 'language=English' 'marker=🌊' 'marker.rule=y' 'zshrc=n' \
+    'test-evidence.mcp=n' 'git-identity.match1=github.com' 'git-identity.email1=me@example.com' > "$1"
 }
 
 report() {
@@ -87,11 +83,19 @@ report() {
   if [ -f "$sandbox/before.txt" ]; then
     if [ "$(fingerprint)" = "$(cat "$sandbox/before.txt")" ]; then
       echo "ok   your own ~/.claude, git and shell files are unchanged"
+    elif [ "$(fingerprint | grep -v '^\.claude\.json ')" = "$(grep -v '^\.claude\.json ' "$sandbox/before.txt")" ]; then
+      echo "note your ~/.claude.json changed during the test: a Claude Code session open meanwhile writes it too"
     else
       echo "!!   one of your own files changed during the test:"
       diff <(cat "$sandbox/before.txt") <(fingerprint) | sed 's/^/       /'
       problems=$((problems + 1))
     fi
+  fi
+  if [ -f "$sandbox/failed" ]; then echo "!!   the installer failed"; problems=$((problems + 1)); fi
+  if grep -q 'stopped; run it again' "$sandbox/install.log" 2> /dev/null; then
+    echo "!!   a setup stopped:"
+    grep 'stopped; run it again' "$sandbox/install.log" | sed 's/^/       /'
+    problems=$((problems + 1))
   fi
   [ -f "$sandbox/questions.txt" ] && { echo; echo "== Questions the installer asked"; cat "$sandbox/questions.txt"; }
   echo
@@ -140,9 +144,12 @@ if [ "${1:-}" = --auto ]; then
     answers="$SANDBOX/answers.txt"
     auto_answers "$answers"
   fi
-  in_sandbox "$SANDBOX/home" env KIT_INSTALL_ANSWERS="$answers" "$KIT/install.sh" 2> "$SANDBOX/questions.txt"
+  in_sandbox "$SANDBOX/home" env KIT_INSTALL_ANSWERS="$answers" bash "$KIT/install.sh" 2> "$SANDBOX/questions.txt" | tee "$SANDBOX/install.log"
+  status=${PIPESTATUS[0]}
 else
-  in_sandbox "$SANDBOX/home" "$KIT/install.sh"
+  in_sandbox "$SANDBOX/home" bash "$KIT/install.sh" | tee "$SANDBOX/install.log"
+  status=${PIPESTATUS[0]}
 fi
-echo "Installer exit code: $?"
+echo "Installer exit code: $status"
+[ "$status" -eq 0 ] || touch "$SANDBOX/failed"
 report "$SANDBOX"

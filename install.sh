@@ -1,11 +1,12 @@
 #!/bin/bash
-# Installs the parts of this kit you pick into ~/.claude.
-#   ./install.sh            asks about each part
-#   ./install.sh --all      installs every part
+# Installs the parts of this kit you pick into ~/.claude, then sets up each one.
+#   ./install.sh            explains each part (why, what, when, who) and asks
+#   ./install.sh --all      installs every part offered on this computer
 #   ./install.sh PART...    installs the named parts
 #   ./install.sh --list     lists the parts
-# Files it replaces and the previous settings.json are saved in
-# ~/.claude/backups/before-kit-<date>/. Running it again is safe.
+# On Windows, from PowerShell: .\install.ps1 (it runs this script in Git Bash).
+# Parts a picked one needs are installed with it. Files it replaces and the previous settings.json
+# are saved in ~/.claude/backups/before-kit-<date>/. Running it again is safe.
 set -eu
 KIT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 CLAUDE="$HOME/.claude"
@@ -13,34 +14,20 @@ SETTINGS="$CLAUDE/settings.json"
 
 case "$(uname -s)" in
   MINGW* | MSYS* | CYGWIN*)
+    os=windows
     home=$(cygpath -m "$HOME")
     sep=';'
     ;;
-  *)
-    home=$HOME
-    sep=':'
-    ;;
+  Darwin) os=darwin home=$HOME sep=':' ;;
+  *) os=linux home=$HOME sep=':' ;;
 esac
 
-PARTS="team:rules:Base rules added to ~/.claude/CLAUDE.md (one team; ask before production, commits, pushes, PRs and decisions that need your context)
-ci-review:skill:An AI review step on CI that checks each PR/MR against its proof (GitHub Actions, GitLab CI; API key or cloud provider)
-test-evidence:skill:Screenshots, video and network proof of a ticket, attached to Jira or the PR (chrome-devtools MCP, jq, perl; video needs ffmpeg)
-handoff:skill:Handoff notes between computers (needs the sync engine in sync/)
-daily-sync:skill:Syncs before the first session of the day and every morning at a set time (needs the sync engine in sync/)
-reminders:skill:Reminders for a later session, notified on the desktop and the phone every morning (needs daily-sync)
-pr-watch:skill:Tracks your PRs until merged: new comments, votes, CI results, checked at each session start (Azure DevOps, GitHub; needs Python 3)
-pr-pane:mod:A /prs pane of the PRs pr-watch tracks: status, CI, what each waits for, open in the browser, live refresh (needs pr-watch)
-paste-preview:mod:Pasted text shown in full, previews of pasted images (macOS, Windows)
-recent-prompts:mod:Your last two messages above the prompt, and a searchable history
-wave-check:mod:A self-check whenever a reply doesn't start with your marker emoji
-file-tools-guard:hook:Blocks shell workarounds (cat, sed -i, heredocs) for reading and editing files
-recent-activity:hook:A digest of your recent sessions across your dev folder, at session start
-session-registry:hook:Offers to resume the session left open in a terminal tab (zsh, JetBrains or Ghostty)
-wave-check-hook:hook:A warning whenever a reply doesn't start with your marker emoji
-nocturne-notify:hook:Keyboard-backlight signals through Agent Nocturne (github.com/taekchef/agent-nocturne)
-statusline:statusline:A status line with folder, branch, model, context, effort and rate limit
-video-montage:skill:Not dev, video montages from a folder of phone clips, Instagram Reel by default (ffmpeg; saving to Photos needs macOS)
-insta360-montage:skill:Not dev, video montages from raw Insta360 footage, Instagram Reel by default (ffmpeg, python3)"
+command -v jq > /dev/null || {
+  echo "Install jq first (macOS: brew install jq, Windows: winget install jqlang.jq, Linux: your package manager)." >&2
+  exit 1
+}
+. "$KIT/hooks/lib/jq.sh"
+. "$KIT/hooks/lib/ask.sh"
 
 source_of() {
   case "$2" in
@@ -52,50 +39,43 @@ source_of() {
   esac
 }
 
-# A copy of the kit that carries only some parts offers only those.
-PARTS=$(while IFS=: read -r name kind what; do
-  if [ -e "$KIT/$(source_of "$name" "$kind")" ]; then printf '%s:%s:%s\n' "$name" "$kind" "$what"; fi
-done <<< "$PARTS")
+# name, kind, group, os, tools, needs, setup, sync: one line per part this copy of the kit carries.
+PARTS=$(jq -r '.parts[] | [.name, .kind, .group, (.os // [] | join(",")), (.tools // [] | join(",")),
+  (.needs // [] | join(",")), (.setup // "-"), (.sync // false | tostring)] | @tsv' "$KIT/parts.json" |
+  while IFS=$'\t' read -r name kind rest; do
+    if [ -e "$KIT/$(source_of "$name" "$kind")" ]; then printf '%s\t%s\t%s\n' "$name" "$kind" "$rest"; fi
+  done)
 
-field() { awk -F: -v p="$1" -v f="$2" '$1 == p { print $f }' <<< "$PARTS"; }
+field() { awk -F'\t' -v p="$1" -v f="$2" '$1 == p { print $f }' <<< "$PARTS"; }
+about() { jq -r --arg p "$1" --arg k "$2" '.parts[] | select(.name == $p) | .[$k] // ""' "$KIT/parts.json"; }
+offered() {
+  local o
+  o=$(field "$1" 4)
+  [ -z "$o" ] || [[ ",$o," == *",$os,"* ]]
+}
 
 if [ "${1:-}" = --list ]; then
-  awk -F: '{ what = $0; sub(/^[^:]*:[^:]*:/, "", what); printf "%-17s %-10s %s\n", $1, $2, what }' <<< "$PARTS"
+  while IFS=$'\t' read -r name kind group _; do
+    printf '%-19s %-10s %-9s %s\n' "$name" "$kind" "$group" "$(about "$name" what)"
+  done <<< "$PARTS"
   exit 0
 fi
 
-command -v jq > /dev/null || {
-  echo "Install jq first." >&2
-  exit 1
-}
-. "$KIT/hooks/lib/jq.sh"
-
-# Questions are read from the terminal, or one answer per line from KIT_INSTALL_ANSWERS (tests).
-TTY=""
-if [ -n "${KIT_INSTALL_ANSWERS:-}" ]; then
-  exec 3< "$KIT_INSTALL_ANSWERS"
-  TTY=answers
-elif (: < /dev/tty) 2> /dev/null; then
-  exec 3< /dev/tty
-  TTY=/dev/tty
-fi
-
-# reply PROMPT: prints the answer, empty when there is no one to ask.
-reply() {
-  local answer=""
-  [ -n "$TTY" ] || return 0
-  read -r -u 3 -p "$1 " answer || answer=""
-  [ "$TTY" = answers ] && printf '%s %s\n' "$1" "$answer" >&2
-  printf '%s' "$answer"
-}
-
-ask() {
-  case "$(reply "$1 [y/N]")" in [yY]*) return 0 ;; *) return 1 ;; esac
+describe() {
+  local p=$1 needs tools t missing=""
+  printf '\n  %s (%s): %s\n' "$p" "$(field "$p" 2)" "$(about "$p" what)"
+  printf '    Why:  %s\n    When: %s\n    Who:  %s\n' "$(about "$p" why)" "$(about "$p" when)" "$(about "$p" who)"
+  needs=$(field "$p" 6)
+  [ -n "$needs" ] && printf '    Needs %s, installed with it.\n' "${needs//,/, }"
+  tools=$(field "$p" 5)
+  for t in ${tools//,/ }; do command -v "$t" > /dev/null 2>&1 || missing="$missing $t"; done
+  [ -n "$missing" ] && printf '    Not found on this computer:%s (install it before using %s).\n' "$missing" "$p"
+  return 0
 }
 
 picked=""
 if [ "${1:-}" = --all ]; then
-  picked=$(cut -d: -f1 <<< "$PARTS")
+  picked=$(while IFS=$'\t' read -r name _; do offered "$name" && echo "$name"; done <<< "$PARTS")
 elif [ $# -gt 0 ]; then
   for p in "$@"; do
     [ -n "$(field "$p" 1)" ] || {
@@ -105,15 +85,38 @@ elif [ $# -gt 0 ]; then
     picked="$picked$p"$'\n'
   done
 else
-  while IFS=: read -r name kind what; do
-    ask "Install the $kind $name: $what?" && picked="$picked$name"$'\n'
-  done <<< "$PARTS"
+  echo "The kit's parts, by group. For each: what it does, why you'd want it, when it acts and who it's for."
+  for group in $(jq -r '.groups[].id' "$KIT/parts.json"); do
+    names=$(awk -F'\t' -v g="$group" '$3 == g { print $1 }' <<< "$PARTS")
+    here="" elsewhere=""
+    for p in $names; do if offered "$p"; then here="$here $p"; else elsewhere="$elsewhere $p"; fi; done
+    [ -n "$here" ] || continue
+    printf '\n== %s:%s\n' "$(jq -r --arg g "$group" '.groups[] | select(.id == $g) | .title' "$KIT/parts.json")" "$here"
+    [ -n "$elsewhere" ] && printf '   (not offered on %s:%s)\n' "$os" "$elsewhere"
+    ask "group.$group" "Go through this group?" y || continue
+    for p in $here; do
+      describe "$p"
+      ask "part.$p" "  Install $p?" && picked="$picked$p"$'\n'
+    done
+  done
 fi
 picked=$(grep . <<< "$picked" || true)
 [ -n "$picked" ] || {
   echo "Nothing picked."
   exit 0
 }
+
+# What a picked part needs is picked too, until nothing changes.
+while :; do
+  added=""
+  for p in $picked; do
+    for n in $(field "$p" 6 | tr ',' ' '); do
+      grep -qx "$n" <<< "$picked" || { picked="$picked"$'\n'"$n"; added="$added $n"; echo "Adding $n: $p needs it."; }
+    done
+  done
+  [ -z "$added" ] && break
+done
+picked=$(while IFS=$'\t' read -r name _; do grep -qx "$name" <<< "$picked" && echo "$name"; done <<< "$PARTS")
 
 BACKUP="$CLAUDE/backups/before-kit-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$CLAUDE"
@@ -137,9 +140,8 @@ fragments=()
 mods=()
 marker_wanted=""
 zsh_resume=""
-hook_lib=""
+echo
 for p in $picked; do
-  case "$(field "$p" 2)" in hook | statusline) hook_lib=1 ;; esac
   case "$(field "$p" 2)" in
     skill)
       put "skills/$p" "skills/$p"
@@ -160,6 +162,8 @@ for p in $picked; do
           ;;
         *) put "hooks/$p.sh" "hooks/$p.sh" && fragments+=("$KIT/settings/$p.json") ;;
       esac
+      setup=$(field "$p" 7)
+      if [ "$setup" != - ]; then put "$setup" "$setup"; fi
       ;;
     statusline) put statusline-command.sh statusline-command.sh && fragments+=("$KIT/settings/statusline.json") ;;
     rules)
@@ -168,8 +172,7 @@ for p in $picked; do
         echo "~/.claude/CLAUDE.md already has \"$heading\"; left as is."
       else
         [ -f "$CLAUDE/CLAUDE.md" ] && cp -p "$CLAUDE/CLAUDE.md" "$BACKUP/CLAUDE.md"
-        language=$(reply "Which language should Claude talk to you in (e.g. English, Français, Español)? [English]")
-        language=${language:-English}
+        language=$(reply language "Which language should Claude talk to you in (e.g. English, Français, Español)?" English)
         awk -v l="$language" '{ gsub(/__LANGUAGE__/, l) } 1' "$KIT/rules/$p.md" >> "$CLAUDE/CLAUDE.md"
       fi
       ;;
@@ -177,17 +180,18 @@ for p in $picked; do
   case "$p" in wave-check | wave-check-hook) marker_wanted=1 ;; esac
   echo "Installed $p"
 done
-if [ -n "$hook_lib" ]; then put hooks/lib hooks/lib; fi
-chmod +x "$CLAUDE"/hooks/*.sh 2> /dev/null || true
+# The setup scripts and every hook read these.
+put hooks/lib hooks/lib
+chmod +x "$CLAUDE"/hooks/*.sh "$CLAUDE"/hooks/setup/*.sh "$CLAUDE"/skills/*/*.sh 2> /dev/null || true
 
 # The wave-check parts check replies against an emoji the user picks once.
 marker=$(jq -r '.env.CLAUDE_REPLY_MARKER // empty' "$SETTINGS")
 if [ -n "$marker_wanted" ] && [ -z "$marker" ]; then
-  marker=$(reply "Which emoji should start every reply from Claude (e.g. 🌊, 🦊, ✅)?")
+  marker=$(reply marker "Which emoji should start every reply from Claude (e.g. 🌊, 🦊, ✅)?")
   marker=${marker//[[:space:]]/}
   if [ -z "$marker" ]; then
     echo "No emoji given: wave-check stays idle until you set CLAUDE_REPLY_MARKER in $SETTINGS (env)."
-  elif ask "Add \"Start every message with $marker\" to ~/.claude/CLAUDE.md? wave-check relies on that rule."; then
+  elif ask marker.rule "Add \"Start every message with $marker\" to ~/.claude/CLAUDE.md? wave-check relies on that rule." y; then
     [ -f "$CLAUDE/CLAUDE.md" ] && [ ! -f "$BACKUP/CLAUDE.md" ] && cp -p "$CLAUDE/CLAUDE.md" "$BACKUP/CLAUDE.md"
     printf '\n- **Start every message with %s.** That includes one-line replies, questions back\n  to me, error reports, and the message after a long run of tool calls.\n' "$marker" >> "$CLAUDE/CLAUDE.md"
   fi
@@ -213,9 +217,25 @@ jq --arg h "$home" --arg sep "$sep" --arg marker "$marker" --argjson mods "$(jq 
 rm -f "$SETTINGS.fragments"
 
 if [ -n "$zsh_resume" ] && ! grep -qs claude-resume-here.zsh "$HOME/.zshrc"; then
-  if ask "Source claude-resume-here.zsh from ~/.zshrc, so a new terminal tab offers to resume the session left open there?"; then
+  if ask zshrc "Source claude-resume-here.zsh from ~/.zshrc, so a new terminal tab offers to resume the session left open there?" y; then
     printf '\n[ -f ~/.claude/hooks/claude-resume-here.zsh ] && source ~/.claude/hooks/claude-resume-here.zsh\n' >> "$HOME/.zshrc"
   fi
 fi
 
+# Each part's own questions, once its files and settings are in place. Run one again any time:
+# bash ~/.claude/<its setup>.
+for p in $picked; do
+  setup=$(field "$p" 7)
+  [ "$setup" != - ] || continue
+  printf '\n== Setting up %s\n' "$p"
+  bash "$CLAUDE/$setup" || echo "Setting up $p stopped; run it again with: bash ~/.claude/$setup"
+done
+
+sync_parts=$(for p in $picked; do [ "$(field "$p" 8)" = true ] && printf ' %s' "$p"; done || true)
+if [ -n "$sync_parts" ] && [ ! -d "$HOME/.claude-sync/.git" ]; then
+  printf '\n%s need the sync engine, not set up on this computer yet: see %s/sync/README.md\n' "${sync_parts# }" "$KIT"
+  echo "(a private GitHub repo of your own cloned to ~/.claude-sync, then its install.sh, or install.ps1 on Windows)."
+fi
+
+echo
 echo "Done. Previous files are in $BACKUP. Start a new Claude Code session to load them."

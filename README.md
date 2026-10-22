@@ -1,21 +1,37 @@
 # claude-code-kit
 
-Skills, mods, hooks and a status line for [Claude Code](https://claude.com/claude-code), plus a sync engine that keeps your Claude Code config the same on all your computers.
+[![tests](https://github.com/robinalexandre/claude-code-kit/actions/workflows/tests.yml/badge.svg)](https://github.com/robinalexandre/claude-code-kit/actions/workflows/tests.yml)
+
+Skills, mods, hooks and a status line for [Claude Code](https://claude.com/claude-code), plus a sync engine that keeps your Claude Code config the same on all your computers. Every part is tested on macOS, Linux and Windows on each change.
 
 ## Install
 
 ```sh
 git clone https://github.com/robinalexandre/claude-code-kit.git
 cd claude-code-kit
-./install.sh            # asks about each part
+./install.sh            # explains each part (why, what, when, who) and asks
 ./install.sh --list     # lists the parts
-./install.sh --all      # installs every part
+./install.sh --all      # installs every part offered on this computer
 ./install.sh statusline file-tools-guard   # installs the named parts
 ```
 
+On Windows, from Git Bash the same, or from PowerShell: `powershell -ExecutionPolicy Bypass -File .\install.ps1` (it installs git and jq with winget when missing, then runs `install.sh` in Git Bash).
+
+The installer goes through the parts by group (every day, development, several computers, not dev), skips those that don't apply to this computer, adds what a picked part needs (pr-pane brings pr-watch, reminders brings daily-sync), then sets up each part it installed: the emails for the email guard, where pr-watch looks for your PRs, the phone for reminders, the browser tool for test-evidence. Run a part's setup again any time with `bash ~/.claude/<part>/setup.sh` (hooks: `bash ~/.claude/hooks/setup/<hook>.sh`). It copies each part into `~/.claude`, adds its hooks to `~/.claude/settings.json` and saves whatever it replaces in `~/.claude/backups/before-kit-<date>/`. Running it again is safe. Start a new Claude Code session afterwards. Needs `jq`.
+
 To try it first without touching your own setup, `tests/install-sandbox.sh` runs the installer in a throwaway home folder, shows what it left and checks your files are unchanged; `--claude <sandbox>` then opens a first Claude Code session there.
 
-Needs `jq`. Works on macOS and Linux, and on Windows from Git Bash. The installer copies each part into `~/.claude`, adds its hooks to `~/.claude/settings.json` and saves whatever it replaces in `~/.claude/backups/before-kit-<date>/`. Running it again is safe. Start a new Claude Code session afterwards.
+**As plugins:** the parts that need no setup also install from Claude Code itself:
+
+```
+/plugin marketplace add robinalexandre/claude-code-kit
+/plugin install capability-builder@claude-code-kit
+/plugin install test-evidence@claude-code-kit
+/plugin install ci-review@claude-code-kit
+/plugin install file-tools-guard@claude-code-kit
+/plugin install paste-preview@claude-code-kit
+/plugin install recent-prompts@claude-code-kit
+```
 
 The sync engine installs differently: see [sync/README.md](sync/README.md).
 
@@ -31,6 +47,7 @@ The sync engine installs differently: see [sync/README.md](sync/README.md).
 |---|---|---|
 | [test-evidence](skills/test-evidence/SKILL.md) | Captures proof that a ticket works locally: browser screenshots, a short video of the flow, the network requests and console behind it (through the chrome-devtools MCP), or one app window or screen region, never the whole screen unless asked. Masks tokens and cookies, writes a short test report and, after your yes, attaches it to the Jira issue or as a resolved comment on the Azure DevOps PR. | [chrome-devtools MCP](https://github.com/ChromeDevTools/chrome-devtools-mcp), `jq`, `perl`; video needs `ffmpeg` |
 | [ci-review](skills/ci-review/SKILL.md) | Proposes, once per repo, an AI review step on the CI and sets it up with you: an agent reads each PR/MR's diff and its proof (what test-evidence captures) and posts a verdict (works / doesn't / can't tell, with what to capture). Templates for `anthropics/claude-code-action`, the CLI in headless mode (`claude -p`) on GitHub Actions and GitLab CI, and cloud providers; the review prompt is a plain file any agent CLI can take. | an API key or a cloud provider account, set as a CI secret |
+| [capability-builder](skills/capability-builder/SKILL.md) | Turns a request you keep making into a capability: picks the right kind (rule, skill, hook, mod or plain script), interviews you, scaffolds it with its tests and setup, checks it against a macOS / Linux / Windows checklist, and runs the publish checklist (nothing personal, tool-agnostic) before it goes to a kit. How this kit's own parts are built. | |
 | [handoff](skills/handoff/SKILL.md) | Writes a handoff note so you can continue the current work on your other computer, and picks it up there. | the [sync engine](sync/README.md) |
 | [daily-sync](skills/daily-sync/SKILL.md) | Schedules a sync every morning (09:00 by default) with launchd, cron or the Windows Task Scheduler, so each computer gets what the others left even with no session open. Other skills can hook a `morning.sh` onto it. | the [sync engine](sync/README.md) |
 | [reminders](skills/reminders/SKILL.md) | "Remind me tomorrow to…": leaves a global or repo-specific reminder that every new session, on any of your computers, brings up first thing, without slowing the start: what the background sync brings arrives with your next message. Due reminders also go to the desktop and, through [ntfy](https://ntfy.sh), to your phone every morning and at the first session of the day. | daily-sync; `curl` for the phone |
@@ -51,6 +68,7 @@ Mods change Claude Code's own interface. The installer loads them through `CLAUD
 
 | Hook | Events | What it does |
 |---|---|---|
+| [git-identity-guard](hooks/git-identity-guard.sh) | PreToolUse (Bash); git pre-push | Refuses a `git commit` or `git push` whose author or committer email isn't the one you chose for that remote: rules per host or path prefix (`github.com`, `gitlab.com/client-x`, `dev.azure.com/my-org`, longest match wins), else the email you committed with most in that repo (teammates' commits not counted). The refusal tells Claude to ask you before changing anything. The setup asks your rules and offers git's global pre-push, so pushes made outside Claude (you, other agents, your editor) are checked too, each repo's own hooks still running. For anyone with work, personal or client emails, even on a single host. Rules in `~/.claude/git-identity.json`, or in the sync repo when you use the sync engine. |
 | [file-tools-guard](hooks/file-tools-guard.sh) | PreToolUse (Bash) | Denies shell workarounds for files (`cat`/`head`/`tail` to read, `sed -i`, `sed -n`, heredocs, `cat > file`, `python -c`) so Claude uses its Read, Edit and Write tools. Pipelines are still allowed. |
 | [recent-activity](hooks/recent-activity.sh) | Stop, SessionStart | Keeps a small record of each session under your dev folder (`CLAUDE_DEV_ROOT`, default `~/dev`) and starts every session with a digest of the last 14 days: titles, branches, PRs, last asks. Lets Claude resolve "the bug from yesterday" across repos. |
 | [session-registry](hooks/session-registry.sh) + [claude-resume-here.zsh](hooks/claude-resume-here.zsh) | SessionStart, SessionEnd | Records open sessions. In a new JetBrains or Ghostty terminal tab (zsh), offers to resume the session that was left open in that folder. |
@@ -89,6 +107,10 @@ Skills from the same kit for life outside code.
 |---|---|---|
 | [video-montage](skills/video-montage/SKILL.md) | Edits a video montage from a folder of phone videos (a vertical Instagram Reel by default): reviews every clip, proposes numbered candidates, assembles once, checks the result frame by frame. Can save the result to the Photos library with write-only access. | `ffmpeg`; Photos saving needs macOS and Xcode's `swiftc` |
 | [insta360-montage](skills/insta360-montage/SKILL.md) | Edits a video montage straight from raw Insta360 X-series `.insv` files, no Insta360 Studio: calibrates the camera mount, finds every action with a motion analysis, lets you pick from numbered candidate clips, then renders them with a rider-locked horizon, as a vertical Instagram Reel by default. Tuned on wingfoil sessions. | `ffmpeg`, `python3` |
+
+## Contributing
+
+Each part is described once in [parts.json](parts.json) (what, why, when, who), which the installer shows. To build a new one, install [capability-builder](skills/capability-builder/SKILL.md) and say "make this a skill", or follow [CONTRIBUTING.md](CONTRIBUTING.md). Questions, ideas and bugs: [issues](https://github.com/robinalexandre/claude-code-kit/issues).
 
 ## License
 

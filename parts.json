@@ -1,0 +1,157 @@
+{
+  "groups": [
+    {"id": "base", "title": "Every day, for anyone"},
+    {"id": "dev", "title": "Development work"},
+    {"id": "computers", "title": "Several computers (needs the sync engine, sync/)"},
+    {"id": "not-dev", "title": "Not dev"}
+  ],
+  "parts": [
+    {
+      "name": "team", "kind": "rules", "group": "base",
+      "what": "Base rules added to ~/.claude/CLAUDE.md: Claude works as a teammate, challenges you, and asks before production, commits, pushes, PRs and decisions that need your context.",
+      "why": "Claude stops taking risky steps on its own and stops agreeing just to please.",
+      "when": "Every session.",
+      "who": "Anyone."
+    },
+    {
+      "name": "statusline", "kind": "statusline", "group": "base",
+      "what": "A status line with folder, branch, model, context used, effort and rate limit.",
+      "why": "You see when the context fills up or a limit comes, before it bites.",
+      "when": "Always on, under the prompt.",
+      "who": "Anyone."
+    },
+    {
+      "name": "file-tools-guard", "kind": "hook", "group": "base",
+      "what": "Blocks shell workarounds (cat, sed -i, heredocs) for reading and editing files.",
+      "why": "Claude's own file tools show clickable line numbers and fail loudly instead of mangling a file.",
+      "when": "Each time Claude runs a shell command.",
+      "who": "Anyone."
+    },
+    {
+      "name": "recent-prompts", "kind": "mod", "group": "base",
+      "what": "Your last two messages above the prompt, and a searchable history pane.",
+      "why": "You find again what you asked without scrolling a long session.",
+      "when": "Always on; /prompts for the pane.",
+      "who": "Anyone."
+    },
+    {
+      "name": "paste-preview", "kind": "mod", "group": "base", "os": ["darwin", "windows"],
+      "what": "Pasted text shown in full, and previews of pasted images.",
+      "why": "You check what you pasted before sending it.",
+      "when": "Each paste.",
+      "who": "macOS and Windows."
+    },
+    {
+      "name": "recent-activity", "kind": "hook", "group": "base", "setup": "hooks/setup/recent-activity.sh",
+      "what": "A digest of your recent sessions across your dev folder, at session start.",
+      "why": "Claude knows what you did lately in your other repos when you mention them.",
+      "when": "Each session start.",
+      "who": "Anyone with several repos in one folder."
+    },
+    {
+      "name": "session-registry", "kind": "hook", "group": "base", "tools": ["zsh"],
+      "what": "Offers to resume the session left open in a terminal tab.",
+      "why": "A closed tab or a reboot no longer loses the session you were in.",
+      "when": "Each new terminal tab.",
+      "who": "zsh users (JetBrains or Ghostty terminals)."
+    },
+    {
+      "name": "wave-check", "kind": "mod", "group": "base",
+      "what": "A self-check whenever a reply doesn't start with your marker emoji.",
+      "why": "A missing emoji is the first sign Claude stopped following your CLAUDE.md; the check makes it fix that.",
+      "when": "After each reply.",
+      "who": "Anyone; pick this or wave-check-hook."
+    },
+    {
+      "name": "wave-check-hook", "kind": "hook", "group": "base",
+      "what": "A warning whenever a reply doesn't start with your marker emoji (the hook form of wave-check).",
+      "why": "Same as wave-check, for setups without mods.",
+      "when": "After each reply.",
+      "who": "Anyone who doesn't load mods."
+    },
+    {
+      "name": "nocturne-notify", "kind": "hook", "group": "base", "tools": ["nocturne"],
+      "what": "Keyboard-backlight signals of Claude's state through Agent Nocturne (github.com/taekchef/agent-nocturne).",
+      "why": "You see from across the room when Claude waits for you.",
+      "when": "Most events.",
+      "who": "Agent Nocturne users."
+    },
+    {
+      "name": "git-identity-guard", "kind": "hook", "group": "dev", "setup": "hooks/setup/git-identity-guard.sh",
+      "what": "Refuses a commit or push whose email isn't the one you chose for that host (GitHub, GitLab, Azure DevOps, any), or, with no rule, the one you used most in that repo. Can also check every push made outside Claude.",
+      "why": "One work email on a personal or public repo can expose your employer, or make a security team think secrets leaked.",
+      "when": "Each git commit and push.",
+      "who": "Anyone committing with different emails (work, personal, clients), even on a single host."
+    },
+    {
+      "name": "pr-watch", "kind": "skill", "group": "dev", "setup": "skills/pr-watch/setup.sh", "tools": ["python3"],
+      "what": "Tracks your PRs until merged: new comments, votes, CI results, merges; your own PRs and review requests too.",
+      "why": "You know when a PR needs you without refreshing pages.",
+      "when": "Each session start, and when you ask.",
+      "who": "GitHub (gh) or Azure DevOps (az or a PAT) users."
+    },
+    {
+      "name": "pr-pane", "kind": "mod", "group": "dev", "needs": ["pr-watch"],
+      "what": "A /prs pane of the PRs pr-watch tracks: status, CI, what each waits for, open in the browser, live refresh.",
+      "why": "All your PRs at a glance, colored by what you have to do.",
+      "when": "The PRs button above the prompt, or /prs.",
+      "who": "pr-watch users."
+    },
+    {
+      "name": "test-evidence", "kind": "skill", "group": "dev", "setup": "skills/test-evidence/setup.sh", "tools": ["jq", "perl"],
+      "what": "Screenshots, a short video and network proof of a ticket tested locally, attached to Jira or the PR.",
+      "why": "A reviewer trusts what they can see working.",
+      "when": "After testing a change: \"take screenshots\", \"proof for the PR\".",
+      "who": "Web developers (needs the chrome-devtools MCP; video needs ffmpeg)."
+    },
+    {
+      "name": "ci-review", "kind": "skill", "group": "dev",
+      "what": "An AI review step on CI that checks each PR/MR against its proof (GitHub Actions, GitLab CI).",
+      "why": "Nobody reviews a PR by hand just to check that it works.",
+      "when": "Once per repo: \"set up AI review on CI\".",
+      "who": "Teams with CI and an API key or a cloud provider."
+    },
+    {
+      "name": "capability-builder", "kind": "skill", "group": "dev",
+      "what": "Turns a request you keep making into a skill, hook or mod: picks the right kind, scaffolds it with tests, checks it on macOS, Linux and Windows, and runs the publish checklist.",
+      "why": "A capability that works everywhere and others can use, instead of a one-off prompt.",
+      "when": "\"Make this a skill\", or when Claude notices you asking the same thing again.",
+      "who": "Anyone who wants to build their own, or contribute to this kit."
+    },
+    {
+      "name": "handoff", "kind": "skill", "group": "computers", "sync": true,
+      "what": "Handoff notes between computers.",
+      "why": "You continue on the other computer without explaining everything again.",
+      "when": "\"I'll continue on the other computer\".",
+      "who": "People working on two computers or more."
+    },
+    {
+      "name": "daily-sync", "kind": "skill", "group": "computers", "sync": true, "setup": "skills/daily-sync/setup.sh",
+      "what": "Syncs before the first session of the day and every morning at a time you pick.",
+      "why": "Each computer starts the day with what the others left.",
+      "when": "Every morning, by itself.",
+      "who": "Sync engine users."
+    },
+    {
+      "name": "reminders", "kind": "skill", "group": "computers", "sync": true, "needs": ["daily-sync"], "setup": "skills/reminders/setup.sh",
+      "what": "Reminders for a later session, notified on the desktop and the phone every morning.",
+      "why": "What you mean to do tomorrow, or on the other computer, doesn't get lost.",
+      "when": "\"Remind me tomorrow to…\".",
+      "who": "Sync engine users."
+    },
+    {
+      "name": "video-montage", "kind": "skill", "group": "not-dev", "tools": ["ffmpeg"],
+      "what": "Video montages from a folder of phone clips, an Instagram Reel by default.",
+      "why": "A finished reel from raw clips without an editing app.",
+      "when": "\"Make a reel from these videos\".",
+      "who": "Anyone with ffmpeg (saving to Photos needs macOS)."
+    },
+    {
+      "name": "insta360-montage", "kind": "skill", "group": "not-dev", "tools": ["ffmpeg", "python3"],
+      "what": "Video montages from raw Insta360 footage, an Instagram Reel by default.",
+      "why": "The best moments of a session found and cut without Insta360 Studio.",
+      "when": "\"Make a reel of the jumps\".",
+      "who": "Insta360 X-series owners."
+    }
+  ]
+}
