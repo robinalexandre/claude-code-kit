@@ -46,6 +46,8 @@ jobs:
         run: |
           bash tests/install-sandbox.sh --auto
           bash tests/install-sandbox.sh --auto tests/answers-skip-a-group.txt
+      - name: Updates of an install.sh install
+        run: bash tests/kit-update-check.sh
       - name: Mods
         working-directory: mods
         run: for m in */; do claude plugin test "${m%/}" || exit 1; done

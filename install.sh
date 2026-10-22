@@ -6,13 +6,18 @@
 #   ./install.sh --all      installs every part offered on this computer
 #   ./install.sh PART...    installs the named parts
 #   ./install.sh --list     lists the parts
+#   ./install.sh --update [PART...]   pulls this clone, installs again the parts it changed, and
+#                           the named parts new in it
 # On Windows, from PowerShell: .\install.ps1 (it runs this script in Git Bash).
 # Parts a picked one needs are installed with it. Files it replaces and the previous settings.json
 # are saved in ~/.claude/backups/before-kit-<date>/. Running it again is safe.
+# What it installed, and from which commit, goes to ~/.claude/kit-install.json: kit-update-check.sh
+# reads it at session start to tell when this clone has changes for them.
 set -eu
 KIT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 CLAUDE="$HOME/.claude"
 SETTINGS="$CLAUDE/settings.json"
+RECORD="$CLAUDE/kit-install.json"
 
 case "$(uname -s)" in
   MINGW* | MSYS* | CYGWIN*)
@@ -208,9 +213,47 @@ pick_parts() {
   for ((j = 0; j < ${#row[@]}; j++)); do if [ "${kind[j]}" = p ] && is_on "${row[j]}"; then echo "${row[j]}"; fi; done
 }
 
+update=""
+was_installed=""
+if [ "${1:-}" = --update ]; then
+  [ -f "$RECORD" ] || {
+    echo "Nothing was installed on this computer with install.sh: nothing to update."
+    exit 0
+  }
+  recorded=$(jq -r '.kit // empty' "$RECORD")
+  [ "$recorded" = "$(kit_path "$KIT")" ] || {
+    echo "This computer's parts come from another clone: run $recorded/install.sh --update instead." >&2
+    exit 1
+  }
+  shift
+  if [ "${1:-}" = --pulled ]; then
+    shift
+  else
+    git -C "$KIT" pull --ff-only --quiet || {
+      echo "Couldn't bring $KIT up to date (local changes, or it has diverged): pull it yourself, then run ./install.sh --update again." >&2
+      exit 1
+    }
+    # The pull may have changed this very script, and bash reads a running script as it goes.
+    exec bash "$KIT/install.sh" --update --pulled "$@"
+  fi
+  update=1
+  was_installed=$(jq -r '.parts // {} | keys[]' "$RECORD")
+fi
+
 [ "${1:-}" = --plain ] && { KIT_INSTALL_PLAIN=1; shift; }
 picked=""
-if [ "${1:-}" = --all ]; then
+if [ -n "$update" ]; then
+  picked=$(bash "$KIT/hooks/kit-update-check.sh" changed HEAD | grep -vx kit-update-check || true)
+  if [ -n "$picked" ]; then echo "Updating: $(echo $picked)"; else echo "No installed part changed."; fi
+  # Parts new in the kit, named after --update.
+  for p in "$@"; do
+    [ -n "$(field "$p" 1)" ] || {
+      echo "Unknown part: $p (see ./install.sh --list)" >&2
+      exit 1
+    }
+    picked="$picked"$'\n'"$p"
+  done
+elif [ "${1:-}" = --all ]; then
   picked=$(while IFS=$'\t' read -r name _; do if offered "$name"; then echo "$name"; fi; done <<< "$PARTS")
 elif [ $# -gt 0 ]; then
   for p in "$@"; do
@@ -241,7 +284,7 @@ else
   done
 fi
 picked=$(grep . <<< "$picked" || true)
-[ -n "$picked" ] || {
+[ -n "$picked" ] || [ -n "$update" ] || {
   echo "Nothing picked."
   exit 0
 }
@@ -271,13 +314,17 @@ for p in $plugins; do
     picked=$(grep -vx "$p" <<< "$picked" || true)
   fi
 done
-[ -n "$picked" ] || exit 0
+[ -n "$picked" ] || [ -n "$update" ] || exit 0
 
 BACKUP="$CLAUDE/backups/before-kit-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$CLAUDE"
 [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
 mkdir -p "$BACKUP"
 cp -p "$SETTINGS" "$BACKUP/settings.json"
+
+# The kit's files each part came from, "part<TAB>path" lines, for the record.
+installed=""
+note() { installed="$installed$current"$'\t'"$1"$'\n'; }
 
 # put SRC DEST: copies SRC (file or folder) to ~/.claude/DEST, saving what it replaces.
 put() {
@@ -289,6 +336,13 @@ put() {
   fi
   mkdir -p "$(dirname "$dest")"
   cp -R "$KIT/$1" "$dest"
+  note "$1"
+}
+
+# frag FILE: merges the kit's settings FILE into settings.json.
+frag() {
+  fragments+=("$KIT/$1")
+  note "$1"
 }
 
 fragments=()
@@ -298,14 +352,16 @@ zsh_resume=""
 sync_wanted=""
 echo
 for p in $picked; do
+  current=$p
   case "$(field "$p" 2)" in
     sync)
       sync_wanted=1
+      note sync
       continue
       ;;
     skill)
       put "skills/$p" "skills/$p"
-      if [ -f "$KIT/settings/$p.json" ]; then fragments+=("$KIT/settings/$p.json"); fi
+      if [ -f "$KIT/settings/$p.json" ]; then frag "settings/$p.json"; fi
       ;;
     mod)
       put "mods/$p" "mods/$p"
@@ -313,23 +369,25 @@ for p in $picked; do
       ;;
     hook)
       case "$p" in
-        wave-check-hook) put hooks/wave-check.sh hooks/wave-check.sh && fragments+=("$KIT/settings/wave-check.json") ;;
+        wave-check-hook) put hooks/wave-check.sh hooks/wave-check.sh && frag settings/wave-check.json ;;
         session-registry)
           put hooks/session-registry.sh hooks/session-registry.sh
           put hooks/claude-resume-here.zsh hooks/claude-resume-here.zsh
-          fragments+=("$KIT/settings/session-registry.json")
+          frag settings/session-registry.json
           zsh_resume=1
           ;;
-        *) put "hooks/$p.sh" "hooks/$p.sh" && fragments+=("$KIT/settings/$p.json") ;;
+        *) put "hooks/$p.sh" "hooks/$p.sh" && frag "settings/$p.json" ;;
       esac
       setup=$(field "$p" 7)
       if [ "$setup" != - ]; then put "$setup" "$setup"; fi
       ;;
-    statusline) put statusline-command.sh statusline-command.sh && fragments+=("$KIT/settings/statusline.json") ;;
+    statusline) put statusline-command.sh statusline-command.sh && frag settings/statusline.json ;;
     rules)
+      note "rules/$p.md"
       heading=$(grep -m1 '^## ' "$KIT/rules/$p.md")
       if grep -qxF -- "$heading" "$CLAUDE/CLAUDE.md" 2> /dev/null; then
         echo "~/.claude/CLAUDE.md already has \"$heading\"; left as is."
+        [ -n "$update" ] && echo "  It changed in the kit: compare it with $KIT/rules/$p.md."
       else
         [ -f "$CLAUDE/CLAUDE.md" ] && cp -p "$CLAUDE/CLAUDE.md" "$BACKUP/CLAUDE.md"
         language=$(reply language "Which language should Claude talk to you in (e.g. English, Français, Español)?" English)
@@ -340,8 +398,11 @@ for p in $picked; do
   case "$p" in wave-check | wave-check-hook) marker_wanted=1 ;; esac
   echo "Installed $p"
 done
-# The setup scripts and every hook read these.
+# The setup scripts and every hook read these. The update check comes with every install.
+current=kit-update-check
 put hooks/lib hooks/lib
+put hooks/kit-update-check.sh hooks/kit-update-check.sh
+frag settings/kit-update-check.json
 chmod +x "$CLAUDE"/hooks/*.sh "$CLAUDE"/hooks/setup/*.sh "$CLAUDE"/skills/*/*.sh 2> /dev/null || true
 
 # The wave-check parts check replies against an emoji the user picks once.
@@ -376,6 +437,20 @@ jq --arg h "$home" --arg sep "$sep" --arg marker "$marker" --argjson mods "$(jq 
   "$BACKUP/settings.json" > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
 rm -f "$SETTINGS.fragments"
 
+# A kit that isn't a git clone can't be checked for updates: no record.
+if commit=$(git -C "$KIT" rev-parse -q --verify HEAD 2> /dev/null); then
+  if [ -f "$RECORD" ]; then cp -p "$RECORD" "$BACKUP/kit-install.json"; else echo '{}' > "$RECORD"; fi
+  jq --indent 2 --arg kit "$(kit_path "$KIT")" --arg commit "$commit" --arg installed "$installed" \
+    --arg offered "$(cut -f1 <<< "$PARTS")" '
+    (if .kit == $kit then .parts // {} else {} end) as $old
+    | .known = ((if .kit == $kit then .known // [] else [] end) + ($offered | split("\n") | map(select(. != ""))) | unique)
+    | .kit = $kit
+    | .parts = $old + ($installed | split("\n") | map(select(. != "") | split("\t")) | group_by(.[0])
+        | map({key: .[0][0], value: {commit: $commit, files: (map(.[1]) | unique)}}) | from_entries)' \
+    "$RECORD" > "$RECORD.tmp" && mv "$RECORD.tmp" "$RECORD"
+  rm -f "$CLAUDE/kit-update/report"
+fi
+
 if [ -n "$zsh_resume" ] && ! grep -qs claude-resume-here.zsh "$HOME/.zshrc"; then
   if ask zshrc "Source claude-resume-here.zsh from ~/.zshrc, so a new terminal tab offers to resume the session left open there?" y; then
     printf '\n[ -f ~/.claude/hooks/claude-resume-here.zsh ] && source ~/.claude/hooks/claude-resume-here.zsh\n' >> "$HOME/.zshrc"
@@ -385,16 +460,19 @@ fi
 # Before the parts' own setups: some keep their data in the sync repo once it is there. The sync is
 # set up from the kit itself (sync/setup.sh, shared with the config-sync plugin): it goes to
 # ~/.claude-sync, not ~/.claude.
-if [ -n "$sync_wanted" ]; then
+if [ -n "$sync_wanted" ] && [ -n "$update" ] && grep -qx config-sync <<< "$was_installed"; then
+  bash "$KIT/sync/setup.sh" refresh
+elif [ -n "$sync_wanted" ]; then
   printf '\n== Setting up config-sync\n'
   bash "$KIT/sync/setup.sh" || echo "Setting up config-sync stopped; run it again with: bash $KIT/sync/setup.sh"
 fi
 
-# Each part's own questions, once its files and settings are in place. Run one again any time:
-# bash ~/.claude/<its setup>.
+# Each part's own questions, once its files and settings are in place; an update doesn't ask again
+# for a part set up before. Run one again any time: bash ~/.claude/<its setup>.
 for p in $picked; do
   setup=$(field "$p" 7)
   [ "$setup" != - ] && [ "$(field "$p" 2)" != sync ] || continue
+  if [ -n "$update" ] && grep -qx "$p" <<< "$was_installed"; then continue; fi
   printf '\n== Setting up %s\n' "$p"
   bash "$CLAUDE/$setup" || echo "Setting up $p stopped; run it again with: bash ~/.claude/$setup"
 done

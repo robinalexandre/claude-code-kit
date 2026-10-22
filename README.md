@@ -62,7 +62,9 @@ By hand: `claude plugin marketplace update claude-code-kit`, then `claude plugin
 
 ### With install.sh
 
-The installer copies the parts you pick into `~/.claude` instead. Use it to pick from a checklist, to install without a marketplace, or to edit your copies; it doesn't update them by itself: `git pull` and run it again. A part already installed as a plugin is skipped.
+The installer copies the parts you pick into `~/.claude` instead. Use it to pick from a checklist, to install without a marketplace, or to edit your copies. A part already installed as a plugin is skipped.
+
+**Keep them up to date:** the installer also adds a small session-start check ([kit-update-check](hooks/kit-update-check.sh)). Once a day, in the background, it fetches the clone you installed from. When that clone has changes for the parts you installed, or new parts you could add, Claude tells you at the next session start what changed and offers to update. `./install.sh --update` pulls the clone and installs the changed parts again, without asking their setup questions again; `./install.sh --update <new part>…` adds new ones too. Each new part is mentioned once. Turn the check off with `bash ~/.claude/hooks/kit-update-check.sh off` (`on` to resume). What came from where is recorded in `~/.claude/kit-install.json`.
 
 ```sh
 git clone https://github.com/robinalexandre/claude-code-kit.git
@@ -72,6 +74,7 @@ cd claude-code-kit
 ./install.sh --list     # lists the parts
 ./install.sh --all      # installs every part offered on this computer
 ./install.sh statusline file-tools-guard   # installs the named parts
+./install.sh --update   # pulls, then installs again the parts that changed
 ```
 
 On Windows, from Git Bash the same, or from PowerShell: `powershell -ExecutionPolicy Bypass -File .\install.ps1` (it installs git and jq with winget when missing, then runs `install.sh` in Git Bash).

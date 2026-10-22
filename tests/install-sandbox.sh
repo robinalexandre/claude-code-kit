@@ -75,9 +75,10 @@ report() {
     [ -z "$path" ] && continue
     if [ -d "$path" ]; then echo "ok   mod $path"; else echo "!!   mod folder $path is missing"; problems=$((problems + 1)); fi
   done < <(jq -r '.env.CLAUDE_CODE_PLUGIN_DIRS // empty' "$home/.claude/settings.json" | tr -d '\r' | tr "$PATH_SEP" '\n')
-  if grep -rIl --exclude-dir=backups -- "$REAL_HOME/" "$home/.claude" 2> /dev/null | grep -q .; then
+  # kit-install.json names the clone the kit was installed from, wherever it is.
+  if grep -rIl --exclude-dir=backups --exclude=kit-install.json -- "$REAL_HOME/" "$home/.claude" 2> /dev/null | grep -q .; then
     echo "!!   files in the sandbox name your real home folder:"
-    grep -rIl --exclude-dir=backups -- "$REAL_HOME/" "$home/.claude" | sed 's/^/       /'
+    grep -rIl --exclude-dir=backups --exclude=kit-install.json -- "$REAL_HOME/" "$home/.claude" | sed 's/^/       /'
     problems=$((problems + 1))
   else
     echo "ok   nothing in the sandbox points at your real home folder"
