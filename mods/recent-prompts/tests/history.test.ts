@@ -150,7 +150,9 @@ test('an unfolded message shows it whole, then each reply folded until opened, t
 
   // Wrapped to the pane, every word there.
   expect(await details()).toContain('word29 the end')
-  expect(await details()).toContain('my message.▸')
+  expect(await details()).toContain('my message.↗')
+  // Each reply has its own way to its place in the conversation.
+  expect(await pane.find({ key: 'answer-jump-look', text: '↗' })).toBeDefined()
   expect(await pane.find({ key: 'answer-toggle-look' })).toBeDefined()
   expect(await pane.find({ key: 'answer-toggle-tool-only' })).toBeUndefined()
   expect(await details()).not.toContain('git status')

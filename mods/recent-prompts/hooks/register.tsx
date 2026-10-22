@@ -12,6 +12,7 @@ const WAITING_KEPT = 20
 const ANSWERS_KEPT = 40
 const ANSWER_CHARS = 20_000
 const JUMP_ICON = '↗'
+const HOVER_COLOR = 'gray'
 
 // The band's buttons share one row under everything above the prompt, whatever order the mods
 // draw in: each takes that row out of what the mods beneath drew, adds its own button, and sorts
@@ -367,6 +368,8 @@ export const register: Register = on => {
     const open = await read($, unfolded)
     const toggle = (id: string) => void update($, unfolded, all => ({ ...all, [id]: !(all[id] ?? false) }))
     const styled = await isStyled($)
+    // The line under the pointer lights up, from its jump arrow to the end of its text.
+    const lit = { hover: { backgroundColor: HOVER_COLOR } }
     // What a line leaves for its text: the jump arrow, the fold arrow and the time take 10 columns,
     // a lesson's 💡 three more.
     const width = Math.max(10, e.props.bodyColumns - 12)
@@ -408,8 +411,9 @@ export const register: Register = on => {
 
           return (
             <Box key={`answer-${answer.id}`} flexDirection="column">
-              <Box flexDirection="row">
-                <Button key={`answer-toggle-${answer.id}`} label={isAnswerOpen ? '▾' : '▸'} plain onPress={() => toggle(answer.id)} />
+              <Box key={`answer-line-${answer.id}`} flexDirection="row" hover={lit.hover}>
+                <Button key={`answer-jump-${answer.id}`} label={JUMP_ICON} plain dimColor onPress={() => void jump($, answer.id)} />
+                <Button key={`answer-toggle-${answer.id}`} label={isAnswerOpen ? ' ▾' : ' ▸'} plain onPress={() => toggle(answer.id)} />
                 <Text> </Text>
                 {foldText(`answer-text-${answer.id}`, label, label, () => toggle(answer.id), true)}
               </Box>
@@ -444,7 +448,7 @@ export const register: Register = on => {
 
           return (
             <Box key={`entry-${prompt.id}`} flexDirection="column">
-              <Box key={`line-${prompt.id}`} flexDirection="row">
+              <Box key={`line-${prompt.id}`} flexDirection="row" hover={lit.hover}>
                 <Button key={`row-${prompt.id}`} label={JUMP_ICON} plain dimColor onPress={() => void jump($, prompt.id)} />
                 <Button key={`toggle-${prompt.id}`} label={isOpen ? ' ▾' : ' ▸'} plain onPress={() => toggle(prompt.id)} />
                 <Text dimColor> {prompt.time ?? '--:--'} </Text>

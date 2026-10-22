@@ -165,6 +165,8 @@ const wrap = (line: string, width: number): string[] => {
 }
 
 const DESCRIPTION_LINES = 40
+// A line that folds lights up under the pointer, its arrow included.
+const LIT = { backgroundColor: 'gray' }
 
 // The PR's body as plain lines: blank lines out, each wrapped to the pane's width.
 const descriptionLines = (text: string, width: number) => {
@@ -1008,7 +1010,7 @@ export const register: Register = on => {
 
       return (
         <Box key={`pr-${group}-${pr.number}`} flexDirection="column" paddingLeft={2}>
-          <Box flexDirection="row" justifyContent="space-between">
+          <Box key={`pr-line-${group}-${pr.number}`} flexDirection="row" justifyContent="space-between" hover={LIT}>
             <Box flexDirection="row">
               <Button
                 key={`pr-toggle-${group}-${pr.number}`}
@@ -1219,7 +1221,7 @@ export const register: Register = on => {
 
         return (
           <Box key={`build-step-${build.number}-${index}`} flexDirection="column">
-            <Box flexDirection="row">
+            <Box key={`build-step-line-${build.number}-${index}`} flexDirection="row" hover={hasLines ? LIT : undefined}>
               {hasLines ? (
                 <Button
                   key={`build-step-toggle-${build.number}-${index}`}
@@ -1273,7 +1275,7 @@ export const register: Register = on => {
 
         return (
           <Box key={`build-job-${build.number}-${jobIndex}`} flexDirection="column">
-            <Box flexDirection="row">
+            <Box key={`build-job-line-${build.number}-${jobIndex}`} flexDirection="row" hover={LIT}>
               <Button
                 key={`build-job-toggle-${build.number}-${jobIndex}`}
                 label={`${isOpen ? '▾' : '▸'} ${truncate(group.job || 'steps', Math.max(8, inner - count.length - 12))}`}
@@ -1299,7 +1301,7 @@ export const register: Register = on => {
       // when it did not succeed), then its steps by job.
       return (
         <Box key={`build-${build.number}`} flexDirection="column" paddingLeft={2}>
-          <Box flexDirection="row" justifyContent="space-between">
+          <Box key={`build-line-${build.number}`} flexDirection="row" justifyContent="space-between" hover={LIT}>
             <Box flexDirection="row">
               <Button
                 key={`build-toggle-${build.number}`}
@@ -1380,7 +1382,7 @@ export const register: Register = on => {
     // One block per repo, in the order its rows come; `hint` is said beside a folded one.
     const repoBlock = (key: string, buttonKey: string, repo: string, count: number, isOpen: boolean, hint: RenderChildren, body: () => RenderChildren, color = 'gray') => (
       <Box key={`block-${key}`} flexDirection="column" paddingLeft={2}>
-        <Box flexDirection="row">
+        <Box key={`block-line-${key}`} flexDirection="row" hover={LIT}>
           <Text color={color}>● </Text>
           <Button
             key={buttonKey}

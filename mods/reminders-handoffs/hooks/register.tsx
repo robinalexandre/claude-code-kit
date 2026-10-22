@@ -6,6 +6,8 @@ import type { Handoff, Reminder, Source } from '../types'
 const PANE = 'reminders-handoffs'
 const RELOAD_EVERY_MS = 60_000
 const BODY_LINES = 40
+// The line under the pointer lights up, its arrow included.
+const LIT = { backgroundColor: 'gray' }
 
 const reminders = atom({ plugin: 'reminders-handoffs', key: 'reminders' } as const, null)
 const handoffs = atom({ plugin: 'reminders-handoffs', key: 'handoffs' } as const, null)
@@ -580,7 +582,7 @@ export const register: Register = on => {
       // The whole line folds and unfolds the row, not only its arrow.
       return (
         <Box key={`row-${id}`} flexDirection="column" paddingLeft={2}>
-          <Box flexDirection="row" justifyContent="space-between">
+          <Box key={`line-${id}`} flexDirection="row" justifyContent="space-between" hover={LIT}>
             <Box flexDirection="row" flexShrink={1}>
               <Button key={`toggle-${id}`} label={isOpen ? '▾' : '▸'} plain onPress={toggle} />
               <Text>
