@@ -22,6 +22,8 @@ Write `~/.claude-sync/reminders/<YYYY-MM-DD>-<short-slug>.md`:
 title: <one line the user will read in a notification, in their language>
 on: <YYYY-MM-DD, or YYYY-MM-DD HH:MM: when it starts showing>
 until: <YYYY-MM-DD: last day it shows (optional)>
+every: <repeating only: friday, or several days "monday, thursday", or day, or weekday (optional)>
+group: <what the reminders pane files it under: an organization, a client, a project (optional)>
 where: <repo-specific only: the folder the session must be in, as a path or its tail like "dev/shop"; leave out for a global reminder>
 machine: <a name from ~/.claude-sync/machines/ (optional: every computer)>
 created: <YYYY-MM-DD HH:MM>
@@ -33,6 +35,8 @@ Enough for a session in a few days, without this conversation, to help.>
 
 - **Always ask whether the reminder is global or for one repo/folder**, unless the user already said it: "Global (every session, any repo, any computer) or only in <the folder/repo in question>?", and say which you'd pick and why (work on this repo's code fits the repo; a call, a meeting or an errand is global). Global leaves `where` out. Opening a session in a folder is not a reason to tie the reminder to it. A repo-specific reminder sets `where` to that repo or folder.
 - **Ask whether they want it at a set time**, unless they gave one: "At a set time, or with the morning notification?". A day alone ("tomorrow", "Thursday") means `on:` that day, shown from the start of the day and notified with the morning run. A time means `on: YYYY-MM-DD HH:MM`; when the phone notification goes through a dedicated session (below), also schedule a one-shot wake-up of that session at that time (`create_trigger` with `persistent_session_id` and `run_once_at`) so the push lands then.
+- **Repeating** ("every Friday", "each morning"): `every:` with the days, in English. `on:` is when the series starts, and its time of day, if any, is the time it shows each of those days, else 09:00 (`REMINDERS_AT`), when the morning sync notifies; `until:` ends the series.
+- **Group**: when the reminder clearly belongs to an organization, a client or a project the user works for (their employer, a customer), set `group:` to its name, the same spelling each time, so the pane files them together. Otherwise leave it out: the pane files it by folder, then computer, then "General". Closing it for the day (`done`) brings it back on its next day; `stop` ends it.
 - Ask only these and what you can't infer. "Tomorrow" means `on:` the next day; a meeting on a date means `until:` that date. When the user says "this morning" or "now", use today.
 - Every new session gets each due reminder (global ones everywhere, repo-specific ones in their folder) until it's done or past `until`.
 - Never put secrets in it: the file goes to GitHub.
@@ -40,9 +44,11 @@ Enough for a session in a few days, without this conversation, to help.>
 
 ## Manage them
 
-- `bash $SK/reminders.sh list`: every reminder with its state (`due`, `later`, `expired`).
+- `bash $SK/reminders.sh list`: every reminder with its state (`due`, `later`, `expired`), and for a repeating one when it shows next.
 - `bash $SK/reminders.sh due [DIR]`: the files due for a session in DIR.
-- When the user says a reminder is done or no longer needed: `bash $SK/reminders.sh done <id>` (the file name without `.md`), then `bash ~/.claude-sync/sync.sh now`. Offer to delete expired ones when you see them.
+- When the user says a reminder is done: `bash $SK/reminders.sh done <id>` (the file name without `.md`); a repeating one is closed for today only. When they no longer want a repeating one: `stop <id>`. Then `bash ~/.claude-sync/sync.sh now`. Offer to close expired ones when you see them.
+- Closed reminders move to `past/` with a `closed:` line and stay there 60 days; `delete <id>` removes one for good.
+- `bash $SK/reminders.sh json [DIR]`: all of them, past ones included, as JSON. The [reminders-handoffs](../../mods/reminders-handoffs) mod reads it: `/reminders` or the band button above the prompt.
 
 ## Notifications
 

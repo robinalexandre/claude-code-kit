@@ -424,6 +424,12 @@
       "source": "./mods/pr-pane"
     },
     {
+      "name": "reminders-handoffs",
+      "description": "One pane with a tab for each of reminders and handoff you have: reminders due now, upcoming and past; handoff notes open and done; filed by group, with done, stop, pick, cancel and delete.",
+      "category": "productivity",
+      "source": "./mods/reminders-handoffs"
+    },
+    {
       "name": "learn",
       "description": "Learn while working: Claude ends a reply with a short point on the security, architecture or pattern behind the code at hand; /learn off|brief|normal|deep.",
       "category": "learning",
@@ -502,7 +508,7 @@
     {
       "name": "handoff",
       "description": "Handoff notes between your computers: continue on the other one without explaining everything again.",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "category": "productivity",
       "source": ".",
       "strict": false,
@@ -542,8 +548,8 @@
     },
     {
       "name": "reminders",
-      "description": "Reminders for a later session, on any of your computers, notified on the desktop and the phone every morning.",
-      "version": "1.0.1",
+      "description": "Reminders for a later session, on any of your computers, notified on the desktop and the phone every morning; one-off or repeating, filed by group.",
+      "version": "1.1.0",
       "category": "productivity",
       "source": ".",
       "strict": false,

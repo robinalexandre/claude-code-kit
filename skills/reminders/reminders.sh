@@ -6,12 +6,22 @@
 #   reminders.sh morning         after the morning sync: notifies the due reminders
 #   reminders.sh due [DIR]       due reminders for a session in DIR (default: all of them)
 #   reminders.sh list            every reminder, with its state
-#   reminders.sh done ID         deletes a reminder
+#   reminders.sh json [DIR]      every reminder, the past ones too, as JSON (the reminders pane)
+#   reminders.sh done ID         closes a reminder; a repeating one only for today
+#   reminders.sh stop ID         closes a reminder, a repeating one for good
+#   reminders.sh delete ID       deletes a reminder, a past one too
 #   reminders.sh notify [TEXT]   sends TEXT to the desktop and the phone (to test)
+# A repeating reminder has `every: friday` (days in English, comma-separated, or `day` or
+# `weekday`) and shows on those days from `on` until `until`, at the time of day `on` gives, else
+# at REMINDERS_AT (09:00, when the morning sync notifies). Closing one moves it to past/ with a
+# `closed:` line, where it stays PAST_DAYS days.
 set -u
 SK=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SYNC="$HOME/.claude-sync"
 DIR=${CLAUDE_REMINDERS_DIR:-$SYNC/reminders}
+PAST="$DIR/past"
+PAST_DAYS=60
+DEFAULT_AT=${REMINDERS_AT:-09:00}
 STATE="$HOME/.claude/.reminders-state"
 CONF="$HOME/.claude/reminders.json"
 
@@ -46,6 +56,51 @@ in_place() {
 
 machine() { tr -d '[:space:]' < "$SYNC/.machine" 2> /dev/null; }
 
+# weekdays EVERY: the ISO weekday numbers (1 = Monday) that EVERY names.
+weekdays() {
+  local d out=""
+  for d in $(printf '%s' "$1" | lower | tr ',' ' '); do
+    case "$d" in
+      day | daily) out="1 2 3 4 5 6 7" ;;
+      weekday | weekdays) out="$out 1 2 3 4 5" ;;
+      mon*) out="$out 1" ;;
+      tue*) out="$out 2" ;;
+      wed*) out="$out 3" ;;
+      thu*) out="$out 4" ;;
+      fri*) out="$out 5" ;;
+      sat*) out="$out 6" ;;
+      sun*) out="$out 7" ;;
+    esac
+  done
+  printf '%s' "${out# }"
+}
+
+# GNU date first, then BSD date (macOS).
+shift_day() { date -d "$1 +$2 days" +%Y-%m-%d 2> /dev/null || date -j -v+"$2"d -f %Y-%m-%d "$1" +%Y-%m-%d; }
+weekday_of() { date -d "$1" +%u 2> /dev/null || date -j -f %Y-%m-%d "$1" +%u; }
+
+# next_time FILE: "YYYY-MM-DD HH:MM" a repeating reminder shows next, today's while it isn't closed.
+next_time() {
+  local f=$1 days on at closed base first k day
+  days=$(weekdays "$(frontmatter "$f" every)")
+  [ -n "$days" ] || return 0
+  on=$(frontmatter "$f" on)
+  at=$DEFAULT_AT
+  [ ${#on} -gt 10 ] && at=${on:11:5}
+  closed=$(frontmatter "$f" done)
+  base=$(date +%Y-%m-%d)
+  [ -n "$on" ] && [[ "$base" < "${on:0:10}" ]] && base=${on:0:10}
+  first=$(weekday_of "$base")
+  for k in 0 1 2 3 4 5 6 7; do
+    case " $days " in *" $(((first + k - 1) % 7 + 1)) "*) ;; *) continue ;; esac
+    day=$base
+    [ "$k" -gt 0 ] && day=$(shift_day "$base" "$k")
+    [ "$day" = "$closed" ] && continue
+    printf '%s %s' "$day" "$at"
+    return 0
+  done
+}
+
 # state FILE [DIR]: due, later or expired; "elsewhere" when the reminder is
 # for another folder or computer than a session in DIR.
 state() {
@@ -57,7 +112,10 @@ state() {
   where=$(frontmatter "$f" where)
   for=$(frontmatter "$f" machine)
   [ ${#on} -eq 10 ] && on="$on 00:00"
-  if [ -n "$until" ] && [[ "$until" < "$today" ]]; then
+  [ -n "$(frontmatter "$f" every)" ] && on=$(next_time "$f")
+  if [ -n "$until" ] && { [[ "$until" < "$today" ]] || [[ "$until" < "${on:0:10}" ]]; }; then
+    echo expired
+  elif [ -n "$(frontmatter "$f" every)" ] && [ -z "$on" ]; then
     echo expired
   elif [ -n "$on" ] && [[ "$now" < "$on" ]]; then
     echo later
@@ -80,10 +138,55 @@ due() {
 }
 
 list() {
-  local f
+  local f every
   files | while IFS= read -r f; do
-    printf '%s\t%s\t%s\n' "$(basename "$f" .md)" "$(state "$f")" "$(frontmatter "$f" title)"
+    every=$(frontmatter "$f" every)
+    printf '%s\t%s\t%s%s\n' "$(basename "$f" .md)" "$(state "$f")" "$(frontmatter "$f" title)" \
+      "${every:+ (every $every, next $(next_time "$f"))}"
   done
+}
+
+# one FILE STATE: a reminder as one JSON object, its empty fields left out.
+one() {
+  local f=$1
+  jq -n --arg id "$(basename "$f" .md)" --arg state "$2" --arg title "$(frontmatter "$f" title)" \
+    --arg on "$(frontmatter "$f" on)" --arg until "$(frontmatter "$f" until)" --arg every "$(frontmatter "$f" every)" \
+    --arg where "$(frontmatter "$f" where)" --arg machine "$(frontmatter "$f" machine)" \
+    --arg group "$(frontmatter "$f" group)" --arg done "$(frontmatter "$f" done)" \
+    --arg closed "$(frontmatter "$f" closed)" --arg next "$(next_time "$f")" --arg body "$(body "$f")" \
+    '{$id, $state, $title, $on, $until, $every, $where, $machine, $group, $done, $closed, $next, $body}
+     | with_entries(select(.value != ""))'
+}
+
+json() {
+  local f
+  {
+    files | while IFS= read -r f; do one "$f" "$(state "$f" "${1:-}")"; done
+    for f in "$PAST"/*.md; do [ -f "$f" ] && one "$f" past; done
+  } | jq -s .
+}
+
+# set_field FILE KEY VALUE: sets KEY in FILE's front matter, added before its end if missing.
+set_field() {
+  awk -v k="$2" -v v="$3" '{ sub(/\r$/, "") }
+    NR == 1 { print; next }
+    !end && $0 == "---" { if (!set) print k ": " v; end = 1; print; next }
+    !end && index($0, k ":") == 1 { print k ": " v; set = 1; next }
+    { print }' "$1" > "$1.tmp" && mv "$1.tmp" "$1"
+}
+
+# close ID: moves the reminder to past/, with when it was closed.
+close() {
+  mkdir -p "$PAST"
+  set_field "$DIR/$1.md" closed "$(date '+%Y-%m-%d %H:%M')"
+  mv "$DIR/$1.md" "$PAST/$1.md"
+}
+
+reminder_file() {
+  [ -n "${1:-}" ] && [ -f "$DIR/$1.md" ] || {
+    echo "no reminder ${1:-}; see: reminders.sh list" >&2
+    exit 1
+  }
 }
 
 conf() { [ -f "$CONF" ] && jq -r --arg k "$1" '.[$k] // empty' "$CONF" 2> /dev/null; }
@@ -164,13 +267,13 @@ show() {
     shown="$shown 🔔 $(frontmatter "$f" title)"
     context="$context
 
-### $id: $(frontmatter "$f" title)$([ -n "$(frontmatter "$f" until)" ] && printf ' (until %s)' "$(frontmatter "$f" until)")
+### $id: $(frontmatter "$f" title)$([ -n "$(frontmatter "$f" every)" ] && printf ' (every %s)' "$(frontmatter "$f" every)")$([ -n "$(frontmatter "$f" until)" ] && printf ' (until %s)' "$(frontmatter "$f" until)")
 $(body "$f")"
   done
   jq -n --arg ctx "$context" --arg shown "${shown# }" --arg sk "$SK" --arg ev "$event" '{
     systemMessage: $shown,
     hookSpecificOutput: {hookEventName: $ev, additionalContext: (
-      "Reminders the user left for this session (reminders skill). In your next reply, before anything else, remind the user of each one in their own language, with what it involves, and offer to help with it. When the user says one is done or no longer needed, run: bash \"\($sk)/reminders.sh\" done <id>" + $ctx)}}'
+      "Reminders the user left for this session (reminders skill). In your next reply, before anything else, remind the user of each one in their own language, with what it involves, and offer to help with it. When the user says one is done, run: bash \"\($sk)/reminders.sh\" done <id> (a repeating one is then closed for today only); when they no longer want a repeating one: reminders.sh stop <id>" + $ctx)}}'
 }
 
 # The session starts at once with what is already here. The day's sync runs in
@@ -181,6 +284,7 @@ start() {
   read_input
   mkdir -p "$STATE"
   find "$STATE" -maxdepth 1 \( -name 'shown-*' -o -name 'pending-*' \) -mtime +2 -exec rm -f {} + 2> /dev/null
+  [ -d "$PAST" ] && find "$PAST" -maxdepth 1 -name '*.md' -mtime +"$PAST_DAYS" -exec rm -f {} + 2> /dev/null
   (nohup bash "$SK/reminders.sh" after-sync "$SID" "$CWD" > /dev/null 2>&1 < /dev/null &)
   set --
   while IFS= read -r f; do set -- "$@" "$f"; done < <(unseen "$SID" "$CWD")
@@ -227,13 +331,33 @@ morning() {
 }
 
 done_() {
-  local f="$DIR/${1:-}.md"
-  [ -n "${1:-}" ] && [ -f "$f" ] || {
-    echo "no reminder ${1:-}; see: reminders.sh list" >&2
-    exit 1
-  }
-  rm -f "$f"
-  echo "deleted $1"
+  reminder_file "${1:-}"
+  if [ -n "$(frontmatter "$DIR/$1.md" every)" ]; then
+    set_field "$DIR/$1.md" done "$(date +%Y-%m-%d)"
+    echo "done for today: $1 (next: $(next_time "$DIR/$1.md"))"
+  else
+    close "$1"
+    echo "done: $1"
+  fi
+}
+
+stop() {
+  reminder_file "${1:-}"
+  close "$1"
+  echo "stopped: $1"
+}
+
+delete() {
+  local f
+  for f in "$DIR/${1:-}.md" "$PAST/${1:-}.md"; do
+    if [ -n "${1:-}" ] && [ -f "$f" ]; then
+      rm -f "$f"
+      echo "deleted $1"
+      return 0
+    fi
+  done
+  echo "no reminder ${1:-}; see: reminders.sh list" >&2
+  exit 1
 }
 
 case "${1:-}" in
@@ -243,10 +367,13 @@ case "${1:-}" in
   morning) morning ;;
   due) due "${2:-}" ;;
   list) list ;;
+  json) json "${2:-}" ;;
   done) done_ "${2:-}" ;;
+  stop) stop "${2:-}" ;;
+  delete) delete "${2:-}" ;;
   notify) notify "Reminder" "${2:-Test from the reminders skill}" ;;
   *)
-    echo "usage: reminders.sh start|prompt|morning|due [DIR]|list|done ID|notify [TEXT]" >&2
+    echo "usage: reminders.sh start|prompt|morning|due [DIR]|list|json [DIR]|done ID|stop ID|delete ID|notify [TEXT]" >&2
     exit 2
     ;;
 esac

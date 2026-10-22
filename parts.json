@@ -250,6 +250,15 @@
       "who": "Sync engine users."
     },
     {
+      "name": "reminders-handoffs",
+      "kind": "mod",
+      "group": "computers",
+      "what": "One pane for your reminders (due now, upcoming and repeating, past) and your handoff notes (open, done), a tab each, filed by group, with done, stop, pick, cancel and delete.",
+      "why": "What you left for later, on any computer, at a glance, and one click to close it or pick it up.",
+      "when": "The button above the prompt, /reminders or /handoffs.",
+      "who": "People who use reminders, handoff or both: it shows whichever is installed."
+    },
+    {
       "name": "video-montage",
       "kind": "skill",
       "group": "not-dev",

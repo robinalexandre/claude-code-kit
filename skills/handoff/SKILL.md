@@ -29,7 +29,7 @@ Notes live in `~/.claude-sync/handoffs/`, a git repo that syncs the Claude Code 
    ```
 
    Keep it short and concrete: PR and ticket numbers, commands to run, files as repo-relative paths. Say what the user already approved or rejected so the next session doesn't ask again.
-3. Never put secrets in the note: tokens, passwords, API keys, connection strings, customer data. Say where they live instead ("the API key is in the MCP server's config"). The sync refuses to push anything that looks like a key, and the note would stay stuck on this machine.
+3. Never put secrets in the note: tokens, passwords, API keys, connection strings, customer data. Say where they live instead ("the Brevo key is in the Brevo MCP config"). The sync refuses to push anything that looks like a key, and the note would stay stuck on this machine.
 4. Run `bash ~/.claude-sync/sync.sh now` so the note reaches GitHub right away, and tell the user it's ready to pick up on the other computer.
 
 ## Pick up a note
@@ -38,4 +38,11 @@ Notes live in `~/.claude-sync/handoffs/`, a git repo that syncs the Claude Code 
 2. List `~/.claude-sync/handoffs/*.md`. If several are open, ask which one, and suggest the likeliest (the one for the current repo, or the newest).
 3. Read it, then get the code in place: clone or fetch the repo and check out the branch. If that would switch branches or touch uncommitted local work, ask first.
 4. Sum up the goal and the next step in a few lines, and continue from there. If something in the note no longer holds (the code or the PR moved on, a next step now looks wrong), say so before carrying on.
-5. Once the user is continuing the work, move the note to `~/.claude-sync/handoffs/done/` so it stops showing up at session start.
+5. Once the user is continuing the work, close the note so it stops showing up at session start: `bash <this skill's folder>/handoff.sh done <id>` (the file name without `.md`; the folder is `~/.claude/skills/handoff/`, or the handoff plugin's). It moves to `handoffs/done/`.
+
+## Manage notes
+
+- `handoff.sh cancel <id>`: a note no one will pick up; it moves to `done/`, marked canceled.
+- `handoff.sh delete <id>`: deletes a note, a done one too. `done/` keeps notes 60 days.
+- `handoff.sh json`: every note, open and done, as JSON. The [reminders-handoffs](../../mods/reminders-handoffs) mod reads it: `/handoffs`, or the button above the prompt, with `pick` to pick one up now.
+- After any of these, `bash ~/.claude-sync/sync.sh now` so the other computer sees it.
