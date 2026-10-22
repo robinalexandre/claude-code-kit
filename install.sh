@@ -365,6 +365,10 @@ for p in $picked; do
       ;;
     mod)
       put "mods/$p" "mods/$p"
+      # A copied mod loads from its folder, where Claude Code would look for its plugin
+      # dependencies as installed plugins: what it needs is copied by this installer instead.
+      manifest="$CLAUDE/mods/$p/.claude-plugin/plugin.json"
+      jq --indent 2 'del(.dependencies)' "$manifest" > "$manifest.tmp" && mv "$manifest.tmp" "$manifest"
       mods+=("$home/.claude/mods/$p")
       ;;
     hook)
