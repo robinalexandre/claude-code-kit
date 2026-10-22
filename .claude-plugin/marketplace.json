@@ -56,7 +56,7 @@
               {
                 "type": "command",
                 "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/kit-session.sh\" statusline 2>/dev/null || true",
-                "timeout": 5
+                "timeout": 15
               }
             ]
           }
@@ -122,7 +122,7 @@
               {
                 "type": "command",
                 "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/kit-session.sh\" recent-activity 2>/dev/null || true",
-                "timeout": 5
+                "timeout": 15
               }
             ]
           }
@@ -162,7 +162,7 @@
               {
                 "type": "command",
                 "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/kit-session.sh\" session-registry 2>/dev/null || true",
-                "timeout": 5
+                "timeout": 15
               }
             ]
           }
@@ -370,7 +370,7 @@
               {
                 "type": "command",
                 "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/kit-session.sh\" git-identity-guard 2>/dev/null || true",
-                "timeout": 5
+                "timeout": 15
               }
             ]
           }
@@ -399,7 +399,7 @@
               {
                 "type": "command",
                 "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/kit-session.sh\" pr-watch 2>/dev/null || true",
-                "timeout": 5
+                "timeout": 15
               }
             ]
           }
@@ -446,7 +446,7 @@
               {
                 "type": "command",
                 "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/kit-session.sh\" test-evidence 2>/dev/null || true",
-                "timeout": 5
+                "timeout": 15
               }
             ]
           }
@@ -492,7 +492,7 @@
               {
                 "type": "command",
                 "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/kit-session.sh\" config-sync 2>/dev/null || true",
-                "timeout": 10
+                "timeout": 15
               }
             ]
           }
@@ -533,7 +533,7 @@
               {
                 "type": "command",
                 "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/kit-session.sh\" daily-sync 2>/dev/null || true",
-                "timeout": 10
+                "timeout": 15
               }
             ]
           }
@@ -565,7 +565,7 @@
               {
                 "type": "command",
                 "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/kit-session.sh\" reminders 2>/dev/null || true",
-                "timeout": 5
+                "timeout": 15
               }
             ]
           }
