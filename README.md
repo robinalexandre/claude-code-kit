@@ -13,6 +13,8 @@ cd claude-code-kit
 ./install.sh statusline file-tools-guard   # installs the named parts
 ```
 
+To try it first without touching your own setup, `tests/install-sandbox.sh` runs the installer in a throwaway home folder, shows what it left and checks your files are unchanged; `--claude <sandbox>` then opens a first Claude Code session there.
+
 Needs `jq`. Works on macOS and Linux, and on Windows from Git Bash. The installer copies each part into `~/.claude`, adds its hooks to `~/.claude/settings.json` and saves whatever it replaces in `~/.claude/backups/before-kit-<date>/`. Running it again is safe. Start a new Claude Code session afterwards.
 
 The sync engine installs differently: see [sync/README.md](sync/README.md).

@@ -70,14 +70,27 @@ command -v jq > /dev/null || {
 }
 . "$KIT/hooks/lib/jq.sh"
 
+# Questions are read from the terminal, or one answer per line from KIT_INSTALL_ANSWERS (tests).
 TTY=""
-(: < /dev/tty) 2> /dev/null && TTY=/dev/tty
+if [ -n "${KIT_INSTALL_ANSWERS:-}" ]; then
+  exec 3< "$KIT_INSTALL_ANSWERS"
+  TTY=answers
+elif (: < /dev/tty) 2> /dev/null; then
+  exec 3< /dev/tty
+  TTY=/dev/tty
+fi
+
+# reply PROMPT: prints the answer, empty when there is no one to ask.
+reply() {
+  local answer=""
+  [ -n "$TTY" ] || return 0
+  read -r -u 3 -p "$1 " answer || answer=""
+  [ "$TTY" = answers ] && printf '%s %s\n' "$1" "$answer" >&2
+  printf '%s' "$answer"
+}
 
 ask() {
-  local answer
-  [ -n "$TTY" ] || return 1
-  read -r -p "$1 [y/N] " answer < "$TTY" || return 1
-  case "$answer" in [yY]*) return 0 ;; *) return 1 ;; esac
+  case "$(reply "$1 [y/N]")" in [yY]*) return 0 ;; *) return 1 ;; esac
 }
 
 picked=""
@@ -155,10 +168,7 @@ for p in $picked; do
         echo "~/.claude/CLAUDE.md already has \"$heading\"; left as is."
       else
         [ -f "$CLAUDE/CLAUDE.md" ] && cp -p "$CLAUDE/CLAUDE.md" "$BACKUP/CLAUDE.md"
-        language=""
-        if [ -n "$TTY" ]; then
-          read -r -p "Which language should Claude talk to you in (e.g. English, Français, Español)? [English] " language < "$TTY" || language=""
-        fi
+        language=$(reply "Which language should Claude talk to you in (e.g. English, Français, Español)? [English]")
         language=${language:-English}
         awk -v l="$language" '{ gsub(/__LANGUAGE__/, l) } 1' "$KIT/rules/$p.md" >> "$CLAUDE/CLAUDE.md"
       fi
@@ -173,9 +183,7 @@ chmod +x "$CLAUDE"/hooks/*.sh 2> /dev/null || true
 # The wave-check parts check replies against an emoji the user picks once.
 marker=$(jq -r '.env.CLAUDE_REPLY_MARKER // empty' "$SETTINGS")
 if [ -n "$marker_wanted" ] && [ -z "$marker" ]; then
-  if [ -n "$TTY" ]; then
-    read -r -p "Which emoji should start every reply from Claude (e.g. 🌊, 🦊, ✅)? " marker < "$TTY" || marker=""
-  fi
+  marker=$(reply "Which emoji should start every reply from Claude (e.g. 🌊, 🦊, ✅)?")
   marker=${marker//[[:space:]]/}
   if [ -z "$marker" ]; then
     echo "No emoji given: wave-check stays idle until you set CLAUDE_REPLY_MARKER in $SETTINGS (env)."
