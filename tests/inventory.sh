@@ -24,6 +24,10 @@ printf '{"name": "my-kit", "plugins": []}\n' > "$HOME/my dev/kit/.claude-plugin/
 git -C "$HOME/my dev/kit" init -q && git -C "$HOME/my dev/kit" add -A &&
   git -C "$HOME/my dev/kit" -c user.email=t@t -c user.name=t commit -q -m "first"
 touch "$HOME/my dev/kit/new-file"
+mkdir -p "$HOME/my dev/team-kit" "$HOME/my dev/app"
+echo '{"parts": []}' > "$HOME/my dev/team-kit/parts.json"
+git -C "$HOME/my dev/team-kit" init -q
+git -C "$HOME/my dev/app" init -q
 
 I write
 F="$SYNC_DIR/inventory/laptop.json"
@@ -32,6 +36,7 @@ check "with the tools it finds" '[ -n "$(jq -r .tools.bash "$F")" ] && [ "$(jq -
 check "the plugins with their version, never their paths" '[ "$(jq -r ".plugins[\"notes@kit\"].version" "$F")" = 1.2.0 ] && ! grep -q secret "$F"'
 check "the mods" '[ "$(jq -r .mods.pane "$F")" = 0.3.0 ]'
 check "each kit in a dev folder with a space, and its changed files" '[ "$(jq -r ".kits[0].name" "$F")" = my-kit ] && [ "$(jq -r ".kits[0].changed" "$F")" = 1 ]'
+check "a kit installed by install.sh too, but no other repo" '[ "$(jq -r "[.kits[].name] | join(\",\")" "$F")" = my-kit,team-kit ]'
 
 jq '.collected = "old"' "$F" > "$F.x" && mv "$F.x" "$F"
 I write

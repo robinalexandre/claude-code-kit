@@ -63,13 +63,15 @@ dev_dir() {
   printf '%s' "${d/#\~/$HOME}"
 }
 
-# Every kit cloned in the dev folder (a repo holding .claude-plugin/marketplace.json): its
-# marketplace name, branch, commit and how far it is from its upstream, as git last knew it.
+# Every kit cloned in the dev folder (a repo holding .claude-plugin/marketplace.json, or the
+# parts.json of a kit installed by install.sh): its name, branch, commit and how far it is from its
+# upstream, as git last knew it.
 kits() {
   local root=$1 m dir
-  for m in "$root"/*/.claude-plugin/marketplace.json; do
-    [ -f "$m" ] || continue
-    dir=${m%/.claude-plugin/marketplace.json}
+  for dir in "$root"/*/; do
+    dir=${dir%/}
+    m="$dir/.claude-plugin/marketplace.json"
+    [ -f "$m" ] || [ -f "$dir/parts.json" ] || continue
     git -C "$dir" rev-parse --git-dir > /dev/null 2>&1 || continue
     jq -n --arg name "$(jq -r '.name // empty' "$m" 2> /dev/null)" --arg folder "${dir##*/}" \
       --arg branch "$(git -C "$dir" rev-parse --abbrev-ref HEAD 2> /dev/null)" \

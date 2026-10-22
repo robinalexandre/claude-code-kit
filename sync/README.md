@@ -104,7 +104,7 @@ Edits to `~/.claude/settings.json` (from `/config`, permission prompts, by hand)
 
 ## What each computer runs
 
-Every sync (at most every 30 minutes) writes `inventory/<computer>.json` in the repo: the system and its version, the architecture, Claude Code, git, node, jq, gh, python and bash versions, the plugins and mods installed with their versions, each kit cloned in the dev folder (any repo with a `.claude-plugin/marketplace.json`: branch, last commit, how far from its upstream, files changed) and the last sync commit. So any computer can tell what the others run and when each last synced:
+Every sync (at most every 30 minutes) writes `inventory/<computer>.json` in the repo: the system and its version, the architecture, Claude Code, git, node, jq, gh, python and bash versions, the plugins and mods installed with their versions, each kit cloned in the dev folder (any repo with a `.claude-plugin/marketplace.json` or a kit's `parts.json`: branch, last commit, how far from its upstream, files changed) and the last sync commit. So any computer can tell what the others run and when each last synced:
 
 ```sh
 bash ~/.claude-sync/inventory.sh show    # one block per computer, then what differs between them
