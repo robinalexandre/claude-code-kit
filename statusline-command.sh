@@ -95,8 +95,8 @@ out=""
 [ -n "$model" ]      && out="$out $(printf '🤖 \033[35m%s\033[0m' "$model")"
 [ -n "$ctx_str" ]   && out="$out $ctx_str"
 [ -n "$eff_str" ]   && out="$out $eff_str"
-[ -n "$learn_str" ] && out="$out $learn_str"
 [ -n "$rate_str" ]  && out="$out $rate_str"
+[ -n "$learn_str" ] && out="$out $learn_str"
 
 # Trim leading space
 out="${out# }"
