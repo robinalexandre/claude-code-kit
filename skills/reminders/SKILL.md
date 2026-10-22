@@ -5,7 +5,7 @@ description: Leaves a reminder for a later Claude Code session, on this computer
 
 # Reminders
 
-A reminder is one Markdown file in `~/.claude-sync/reminders/` (or `$CLAUDE_REMINDERS_DIR`), the config sync repo, so every computer of the user gets it. Scripts are in `~/.claude/skills/reminders/` (`$SK` below).
+A reminder is one Markdown file in `~/.claude-sync/reminders/` (or `$CLAUDE_REMINDERS_DIR`), the config sync repo, so every computer of the user gets it. Scripts are in this skill's base directory (`~/.claude/skills/reminders/` when installed by install.sh; `$SK` below).
 
 It needs the sync engine (`~/.claude-sync`) and the daily-sync skill:
 
@@ -56,4 +56,4 @@ Enough for a session in a few days, without this conversation, to help.>
   - Check that the test notification reached the phone.
 - **Phone, alternative: [ntfy](https://ntfy.sh)**, when the user doesn't want the Claude app or wants the computer itself to push. They install the ntfy app and subscribe to a topic name that is hard to guess (anyone who knows it can read it); you write it on each computer to `~/.claude/reminders.json`: `{"ntfy": "https://ntfy.sh/<topic>"}` (or a self-hosted server URL). That file stays on the computer.
 - Test both with `bash $SK/reminders.sh notify "test"`.
-- If the morning run isn't scheduled on this computer (`bash ~/.claude/skills/daily-sync/schedule.sh status`), offer to turn it on with the daily-sync skill.
+- If the morning run isn't scheduled on this computer (`bash <daily-sync skill folder>/schedule.sh status`; the folder is `~/.claude/skills/daily-sync/`, or the daily-sync plugin's), offer to turn it on with the daily-sync skill.

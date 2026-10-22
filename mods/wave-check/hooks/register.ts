@@ -11,7 +11,8 @@ export const checkPrompt = (marker: string) =>
     `with ${marker}: what you corrected, or that the rest holds. ${TAG}`,
   ].join(' ')
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  const optionMarker = typeof options.marker === 'string' ? options.marker.trim() : ''
   // A self-check reply that misses the marker too must not trigger another check.
   const checkTurns = new Set<string>()
 
@@ -23,7 +24,7 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
     const isCheckTurn = checkTurns.delete(e.turnId)
-    const marker = (await $.env.get('CLAUDE_REPLY_MARKER'))?.trim()
+    const marker = (await $.env.get('CLAUDE_REPLY_MARKER'))?.trim() || optionMarker
     if (!marker) return result
 
     const answer = e.answer.trimStart()

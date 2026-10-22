@@ -5,8 +5,9 @@
 SK=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 out=$(bash "$SK/pr-watch.sh" check --peek 2> /dev/null) || exit 0
 [ -n "$out" ] && [ "$out" != "No change." ] || exit 0
-notify="$HOME/.claude/skills/reminders/reminders.sh"
-[ -f "$notify" ] || exit 0
+. "$SK/../../hooks/lib/jq.sh"
+. "$SK/../../hooks/lib/kit.sh"
+notify=$(kit_find reminders skills/reminders/reminders.sh) || exit 0
 count=$(printf '%s\n' "$out" | grep -c .)
 first=$(printf '%s\n' "$out" | head -1 | cut -c1-150)
 [ "$count" -gt 1 ] && first="$first (+$((count - 1)))"

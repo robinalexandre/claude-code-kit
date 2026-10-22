@@ -2,8 +2,10 @@
 # Sets up pr-watch: where it looks for your PRs and review requests, and which authors are bots.
 # Run it again any time: bash ~/.claude/skills/pr-watch/setup.sh
 set -eu
-. "$HOME/.claude/hooks/lib/jq.sh"
-. "$HOME/.claude/hooks/lib/ask.sh"
+LIB=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../hooks/lib" && pwd)
+. "$LIB/jq.sh"
+. "$LIB/ask.sh"
+. "$LIB/kit.sh"
 dir=${PR_WATCH_DIR:-$HOME/.claude-sync/pr-watch}
 conf="$dir/config.json"
 
@@ -42,3 +44,4 @@ jq --indent 2 --arg g "$github" --arg o "$orgs" --arg p "$projects" --arg b "$bo
   .githubRepos = ($g | items) | .azureOrgs = ($o | items) | .azureProjects = ($p | items)
   | .bots = ($b | items) | .autoTrack = $t' "$conf" > "$conf.tmp" && mv "$conf.tmp" "$conf"
 echo "  Saved in $conf. Ask Claude \"watch this PR\" with a link, or \"check my PRs\"."
+kit_setup_mark pr-watch done

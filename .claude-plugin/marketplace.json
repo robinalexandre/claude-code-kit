@@ -1,48 +1,78 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "claude-code-kit",
-  "description": "Skills, mods and hooks for Claude Code that work on macOS, Linux and Windows. The parts that need setup (pr-watch, reminders, the email guard, the sync) install with install.sh instead.",
+  "description": "Skills, mods, hooks, a status line and a config sync for Claude Code that work on macOS, Linux and Windows. Every part of the kit is a plugin; the parts that need a few answers ask for them at the first session.",
   "owner": {
     "name": "robinalexandre",
     "url": "https://github.com/robinalexandre/claude-code-kit"
   },
   "plugins": [
     {
-      "name": "capability-builder",
-      "description": "Turns a request you keep making into a skill, hook or mod, with tests, checked on macOS, Linux and Windows.",
-      "category": "development",
+      "name": "team",
+      "description": "Base rules: Claude works as a teammate, challenges you, and asks before production, commits, pushes, PRs and decisions that need your context.",
+      "version": "1.0.0",
+      "category": "productivity",
       "source": ".",
       "strict": false,
       "skills": [
-        "./skills/capability-builder"
-      ]
+        "./hooks"
+      ],
+      "userConfig": {
+        "language": {
+          "type": "string",
+          "title": "Language",
+          "description": "The language Claude talks to you in by default (e.g. English, Français, Español).",
+          "default": "English"
+        }
+      },
+      "hooks": {
+        "SessionStart": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/team-rules.sh\" 2>/dev/null || true",
+                "timeout": 5
+              }
+            ]
+          }
+        ]
+      }
     },
     {
-      "name": "test-evidence",
-      "description": "Screenshots, a short video and network proof of a ticket tested locally, attached to Jira or the PR (needs the chrome-devtools MCP).",
-      "category": "development",
+      "name": "statusline",
+      "description": "A status line with folder, branch, model, context used, effort and rate limit (asks once to set it in your settings).",
+      "version": "1.0.0",
+      "category": "productivity",
       "source": ".",
       "strict": false,
       "skills": [
-        "./skills/test-evidence"
-      ]
-    },
-    {
-      "name": "ci-review",
-      "description": "An AI review step on CI that checks each PR/MR against the proof it carries (GitHub Actions, GitLab CI).",
-      "category": "development",
-      "source": ".",
-      "strict": false,
-      "skills": [
-        "./skills/ci-review"
-      ]
+        "./hooks"
+      ],
+      "hooks": {
+        "SessionStart": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/kit-session.sh\" statusline 2>/dev/null || true",
+                "timeout": 5
+              }
+            ]
+          }
+        ]
+      }
     },
     {
       "name": "file-tools-guard",
       "description": "Blocks shell workarounds (cat, sed -i, heredocs) for reading and editing files, so Claude uses its own file tools.",
+      "version": "1.0.0",
       "category": "productivity",
       "source": ".",
       "strict": false,
+      "skills": [
+        "./hooks"
+      ],
       "hooks": {
         "PreToolUse": [
           {
@@ -59,22 +89,521 @@
       }
     },
     {
-      "name": "paste-preview",
-      "description": "Pasted text shown in full, and previews of pasted images (macOS, Windows).",
-      "category": "productivity",
-      "source": "./mods/paste-preview"
-    },
-    {
       "name": "recent-prompts",
       "description": "Your last two messages above the prompt, and a searchable history pane (/prompts).",
       "category": "productivity",
       "source": "./mods/recent-prompts"
     },
     {
+      "name": "paste-preview",
+      "description": "Pasted text shown in full, and previews of pasted images (macOS, Windows).",
+      "category": "productivity",
+      "source": "./mods/paste-preview"
+    },
+    {
+      "name": "recent-activity",
+      "description": "A digest of your recent sessions across your dev folder at each session start, so Claude knows what you did lately in your other repos.",
+      "version": "1.0.0",
+      "category": "productivity",
+      "source": ".",
+      "strict": false,
+      "skills": [
+        "./hooks"
+      ],
+      "hooks": {
+        "SessionStart": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/recent-activity.sh\" digest 2>/dev/null || true",
+                "timeout": 5
+              },
+              {
+                "type": "command",
+                "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/kit-session.sh\" recent-activity 2>/dev/null || true",
+                "timeout": 5
+              }
+            ]
+          }
+        ],
+        "Stop": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/recent-activity.sh\" record 2>/dev/null || true",
+                "timeout": 5
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "session-registry",
+      "description": "Offers to resume the session left open in a terminal tab (zsh, JetBrains or Ghostty terminals).",
+      "version": "1.0.0",
+      "category": "productivity",
+      "source": ".",
+      "strict": false,
+      "skills": [
+        "./hooks"
+      ],
+      "hooks": {
+        "SessionStart": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/session-registry.sh\" start 2>/dev/null || true",
+                "timeout": 5
+              },
+              {
+                "type": "command",
+                "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/kit-session.sh\" session-registry 2>/dev/null || true",
+                "timeout": 5
+              }
+            ]
+          }
+        ],
+        "SessionEnd": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/session-registry.sh\" end 2>/dev/null || true",
+                "timeout": 5
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "wave-check",
+      "description": "When a reply doesn't start with your marker emoji, asks Claude to check it against your CLAUDE.md and fix what slipped.",
+      "category": "productivity",
+      "source": "./mods/wave-check"
+    },
+    {
+      "name": "wave-check-hook",
+      "description": "A warning whenever a reply doesn't start with your marker emoji (the hook form of wave-check, for setups without mods).",
+      "version": "1.0.0",
+      "category": "productivity",
+      "source": ".",
+      "strict": false,
+      "skills": [
+        "./hooks"
+      ],
+      "userConfig": {
+        "marker": {
+          "type": "string",
+          "title": "Marker emoji",
+          "description": "The emoji every reply must start with (e.g. 🌊). Add the rule \"Start every message with <emoji>\" to your CLAUDE.md. Empty: the check stays idle. CLAUDE_REPLY_MARKER in settings.json env takes precedence.",
+          "default": ""
+        }
+      },
+      "hooks": {
+        "UserPromptSubmit": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/wave-check.sh\" prompt 2>/dev/null || true",
+                "timeout": 5
+              }
+            ]
+          }
+        ],
+        "Stop": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/wave-check.sh\" stop 2>/dev/null || true",
+                "timeout": 5
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "nocturne-notify",
+      "description": "Keyboard-backlight signals of Claude's state through Agent Nocturne (github.com/taekchef/agent-nocturne).",
+      "version": "1.0.0",
+      "category": "productivity",
+      "source": ".",
+      "strict": false,
+      "skills": [
+        "./hooks"
+      ],
+      "hooks": {
+        "UserPromptSubmit": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/nocturne-notify.sh\" idle",
+                "timeout": 5
+              }
+            ]
+          }
+        ],
+        "PreToolUse": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/nocturne-notify.sh\" idle",
+                "timeout": 5
+              }
+            ]
+          }
+        ],
+        "PostToolUse": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/nocturne-notify.sh\" idle",
+                "timeout": 5
+              }
+            ]
+          }
+        ],
+        "PermissionRequest": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/nocturne-notify.sh\" permission --ttl 180000",
+                "timeout": 5
+              }
+            ]
+          }
+        ],
+        "Notification": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/nocturne-notify.sh\" permission --ttl 180000",
+                "timeout": 5
+              }
+            ]
+          }
+        ],
+        "PermissionDenied": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/nocturne-notify.sh\" blocked",
+                "timeout": 5
+              }
+            ]
+          }
+        ],
+        "Stop": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/nocturne-notify.sh\" done",
+                "timeout": 5
+              }
+            ]
+          }
+        ],
+        "StopFailure": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/nocturne-notify.sh\" error --terminal",
+                "timeout": 5
+              }
+            ]
+          }
+        ],
+        "SessionEnd": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/nocturne-notify.sh\" idle",
+                "timeout": 5
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "git-identity-guard",
+      "description": "Refuses a commit or push whose email isn't the one you chose for that host, or the one you used most in that repo; can check commits made outside Claude too.",
+      "version": "1.0.0",
+      "category": "development",
+      "source": ".",
+      "strict": false,
+      "skills": [
+        "./hooks"
+      ],
+      "hooks": {
+        "PreToolUse": [
+          {
+            "matcher": "Bash",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/git-identity-guard.sh\" 2>/dev/null || true",
+                "timeout": 10
+              }
+            ]
+          }
+        ],
+        "SessionStart": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/kit-session.sh\" git-identity-guard 2>/dev/null || true",
+                "timeout": 5
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "pr-watch",
+      "description": "Tracks your PRs until merged: new comments, votes, CI results, merges, review requests and your pipeline runs (GitHub, Azure DevOps).",
+      "version": "1.0.0",
+      "category": "development",
+      "source": ".",
+      "strict": false,
+      "skills": [
+        "./skills/pr-watch"
+      ],
+      "hooks": {
+        "SessionStart": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "bash \"${CLAUDE_PLUGIN_ROOT}/skills/pr-watch/session.sh\" start 2>/dev/null || true",
+                "timeout": 10
+              },
+              {
+                "type": "command",
+                "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/kit-session.sh\" pr-watch 2>/dev/null || true",
+                "timeout": 5
+              }
+            ]
+          }
+        ],
+        "UserPromptSubmit": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "bash \"${CLAUDE_PLUGIN_ROOT}/skills/pr-watch/session.sh\" prompt 2>/dev/null || true",
+                "timeout": 5
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "pr-pane",
+      "description": "A /prs pane of the PRs and pipeline runs pr-watch tracks, colored by what you have to do, with merge, approve, rerun and fix actions.",
+      "category": "development",
+      "source": "./mods/pr-pane"
+    },
+    {
       "name": "learn",
-      "description": "Short, precise lessons on the security, architecture or patterns behind the code at hand, at the end of a reply. /learn off|brief|normal|deep per session.",
+      "description": "Learn while working: Claude ends a reply with a short point on the security, architecture or pattern behind the code at hand; /learn off|brief|normal|deep.",
       "category": "learning",
       "source": "./mods/learn"
+    },
+    {
+      "name": "test-evidence",
+      "description": "Screenshots, a short video and network proof of a ticket tested locally, attached to Jira or the PR (needs the chrome-devtools MCP).",
+      "version": "1.0.0",
+      "category": "development",
+      "source": ".",
+      "strict": false,
+      "skills": [
+        "./skills/test-evidence"
+      ],
+      "hooks": {
+        "SessionStart": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/kit-session.sh\" test-evidence 2>/dev/null || true",
+                "timeout": 5
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "ci-review",
+      "description": "An AI review step on CI that checks each PR/MR against the proof it carries (GitHub Actions, GitLab CI).",
+      "version": "1.0.0",
+      "category": "development",
+      "source": ".",
+      "strict": false,
+      "skills": [
+        "./skills/ci-review"
+      ]
+    },
+    {
+      "name": "capability-builder",
+      "description": "Turns a request you keep making into a skill, hook or mod, with tests, checked on macOS, Linux and Windows.",
+      "version": "1.0.0",
+      "category": "development",
+      "source": ".",
+      "strict": false,
+      "skills": [
+        "./skills/capability-builder"
+      ]
+    },
+    {
+      "name": "config-sync",
+      "description": "Keeps your Claude Code config the same on all your computers through a private GitHub repo of your own; sets it up at the first session and keeps the engine current.",
+      "version": "1.0.0",
+      "category": "productivity",
+      "source": ".",
+      "strict": false,
+      "skills": [
+        "./hooks"
+      ],
+      "hooks": {
+        "SessionStart": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/kit-session.sh\" config-sync 2>/dev/null || true",
+                "timeout": 10
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "handoff",
+      "description": "Handoff notes between your computers: continue on the other one without explaining everything again.",
+      "version": "1.0.0",
+      "category": "productivity",
+      "source": ".",
+      "strict": false,
+      "dependencies": [
+        "config-sync"
+      ],
+      "skills": [
+        "./skills/handoff"
+      ]
+    },
+    {
+      "name": "daily-sync",
+      "description": "Syncs your config before the first session of the day and every morning at a time you pick, even with no session open.",
+      "version": "1.0.0",
+      "category": "productivity",
+      "source": ".",
+      "strict": false,
+      "dependencies": [
+        "config-sync"
+      ],
+      "skills": [
+        "./skills/daily-sync"
+      ],
+      "hooks": {
+        "SessionStart": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/kit-session.sh\" daily-sync 2>/dev/null || true",
+                "timeout": 10
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "reminders",
+      "description": "Reminders for a later session, on any of your computers, notified on the desktop and the phone every morning.",
+      "version": "1.0.0",
+      "category": "productivity",
+      "source": ".",
+      "strict": false,
+      "dependencies": [
+        "daily-sync"
+      ],
+      "skills": [
+        "./skills/reminders"
+      ],
+      "hooks": {
+        "SessionStart": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "bash \"${CLAUDE_PLUGIN_ROOT}/skills/reminders/reminders.sh\" start 2>/dev/null || true",
+                "timeout": 10
+              },
+              {
+                "type": "command",
+                "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/kit-session.sh\" reminders 2>/dev/null || true",
+                "timeout": 5
+              }
+            ]
+          }
+        ],
+        "UserPromptSubmit": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "bash \"${CLAUDE_PLUGIN_ROOT}/skills/reminders/reminders.sh\" prompt 2>/dev/null || true",
+                "timeout": 5
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "video-montage",
+      "description": "Video montages from a folder of phone clips, an Instagram Reel by default (needs ffmpeg).",
+      "version": "1.0.0",
+      "category": "productivity",
+      "source": ".",
+      "strict": false,
+      "skills": [
+        "./skills/video-montage"
+      ]
+    },
+    {
+      "name": "insta360-montage",
+      "description": "Video montages from raw Insta360 X-series footage, an Instagram Reel by default (needs ffmpeg and python3).",
+      "version": "1.0.0",
+      "category": "productivity",
+      "source": ".",
+      "strict": false,
+      "skills": [
+        "./skills/insta360-montage"
+      ]
     }
   ]
 }

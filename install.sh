@@ -37,7 +37,7 @@ source_of() {
     mod) echo "mods/$1" ;;
     rules) echo "rules/$1.md" ;;
     statusline) echo statusline-command.sh ;;
-    sync) echo sync ;;
+    sync) echo sync/setup.sh ;;
     hook) if [ "$1" = wave-check-hook ]; then echo hooks/wave-check.sh; else echo "hooks/$1.sh"; fi ;;
   esac
 }
@@ -252,7 +252,7 @@ while :; do
   added=""
   for p in $picked; do
     needs=$(field "$p" 6 | tr ',' ' ')
-    if [ "$(field "$p" 8)" = true ] && [ -n "$(field sync 1)" ]; then needs="$needs sync"; fi
+    if [ "$(field "$p" 8)" = true ] && [ -n "$(field config-sync 1)" ]; then needs="$needs config-sync"; fi
     for n in $needs; do
       grep -qx "$n" <<< "$picked" || { picked="$picked"$'\n'"$n"; added="$added $n"; echo "Adding $n: $p needs it."; }
     done
@@ -260,6 +260,18 @@ while :; do
   [ -z "$added" ] && break
 done
 picked=$(while IFS=$'\t' read -r name _; do if grep -qx "$name" <<< "$picked"; then echo "$name"; fi; done <<< "$PARTS")
+
+# A part already installed as a plugin from the claude-code-kit marketplace stays a plugin: a copy too
+# would run its hooks twice.
+plugins=$(jq -r '.plugins // {} | keys[] | select(endswith("@claude-code-kit")) | sub("@.*"; "")' \
+  "${CLAUDE_CONFIG_DIR:-$CLAUDE}/plugins/installed_plugins.json" 2> /dev/null || true)
+for p in $plugins; do
+  if grep -qx "$p" <<< "$picked"; then
+    echo "Skipping $p: installed as a plugin (claude plugin uninstall $p@claude-code-kit to copy it instead)."
+    picked=$(grep -vx "$p" <<< "$picked" || true)
+  fi
+done
+[ -n "$picked" ] || exit 0
 
 BACKUP="$CLAUDE/backups/before-kit-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$CLAUDE"
@@ -277,40 +289,6 @@ put() {
   fi
   mkdir -p "$(dirname "$dest")"
   cp -R "$KIT/$1" "$dest"
-}
-
-# The sync engine lives in a private git repo of the user's own, cloned to ~/.claude-sync: the first
-# computer copies the engine into it, the next ones find it there. Its own install.sh does the rest.
-set_up_sync() {
-  local dir="$HOME/.claude-sync" url machine dev
-  printf '\n== Setting up sync\n'
-  if [ -d "$dir/.git" ]; then
-    echo "The sync engine is already set up in ~/.claude-sync."
-    return 0
-  fi
-  if [ -e "$dir" ]; then
-    echo "~/.claude-sync exists but is not a git repo: move it away, then run ./install.sh sync again."
-    return 0
-  fi
-  kit_has git || return 0
-  echo "It needs an empty private git repo of your own (GitHub, GitLab, Azure DevOps, any host). It will hold"
-  echo "your CLAUDE.md, memory, skills and settings, MCP secrets replaced by __SECRET__. On your next computer,"
-  echo "give the same repo: what the first one saved is installed there."
-  url=$(reply sync.url "Its clone URL (empty to set it up later)?")
-  if [ -z "$url" ]; then
-    echo "Skipped. Later: ./install.sh sync, or by hand as in $KIT/sync/README.md."
-    return 0
-  fi
-  if ! git clone -q "$url" "$dir"; then
-    rm -rf "$dir"
-    echo "Couldn't clone $url: check the URL and that you can read it, then run ./install.sh sync again."
-    return 0
-  fi
-  [ -f "$dir/sync.sh" ] || cp -R "$KIT/sync/." "$dir/"
-  case "$os" in windows) machine=windows ;; darwin) machine=mac ;; *) machine=linux ;; esac
-  machine=$(reply sync.machine "A name for this computer in the sync (e.g. work-pc, home-mac)?" "$machine")
-  dev=$(reply sync.dev "Folder that holds your git repos?" "${CLAUDE_DEV_ROOT:-~/dev}")
-  bash "$dir/install.sh" "$machine" "$dev" || echo "Setting up sync stopped; run it again with: bash ~/.claude-sync/install.sh"
 }
 
 fragments=()
@@ -404,14 +382,19 @@ if [ -n "$zsh_resume" ] && ! grep -qs claude-resume-here.zsh "$HOME/.zshrc"; the
   fi
 fi
 
-# Before the parts' own setups: some keep their data in the sync repo once it is there.
-if [ -n "$sync_wanted" ]; then set_up_sync; fi
+# Before the parts' own setups: some keep their data in the sync repo once it is there. The sync is
+# set up from the kit itself (sync/setup.sh, shared with the config-sync plugin): it goes to
+# ~/.claude-sync, not ~/.claude.
+if [ -n "$sync_wanted" ]; then
+  printf '\n== Setting up config-sync\n'
+  bash "$KIT/sync/setup.sh" || echo "Setting up config-sync stopped; run it again with: bash $KIT/sync/setup.sh"
+fi
 
 # Each part's own questions, once its files and settings are in place. Run one again any time:
 # bash ~/.claude/<its setup>.
 for p in $picked; do
   setup=$(field "$p" 7)
-  [ "$setup" != - ] || continue
+  [ "$setup" != - ] && [ "$(field "$p" 2)" != sync ] || continue
   printf '\n== Setting up %s\n' "$p"
   bash "$CLAUDE/$setup" || echo "Setting up $p stopped; run it again with: bash ~/.claude/$setup"
 done

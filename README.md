@@ -6,6 +6,63 @@ Skills, mods, hooks and a status line for [Claude Code](https://claude.com/claud
 
 ## Install
 
+### As Claude Code plugins (recommended)
+
+Every part is a plugin of this repo's marketplace. Add it once, then install the parts you want, from Claude Code:
+
+```
+/plugin marketplace add robinalexandre/claude-code-kit
+
+# Every day, for anyone
+/plugin install team@claude-code-kit
+/plugin install statusline@claude-code-kit
+/plugin install file-tools-guard@claude-code-kit
+/plugin install recent-prompts@claude-code-kit
+/plugin install paste-preview@claude-code-kit
+/plugin install recent-activity@claude-code-kit
+/plugin install session-registry@claude-code-kit
+/plugin install wave-check@claude-code-kit
+/plugin install wave-check-hook@claude-code-kit
+/plugin install nocturne-notify@claude-code-kit
+
+# Development work
+/plugin install git-identity-guard@claude-code-kit
+/plugin install pr-watch@claude-code-kit
+/plugin install pr-pane@claude-code-kit
+/plugin install test-evidence@claude-code-kit
+/plugin install ci-review@claude-code-kit
+/plugin install capability-builder@claude-code-kit
+/plugin install learn@claude-code-kit
+
+# Several computers
+/plugin install config-sync@claude-code-kit
+/plugin install handoff@claude-code-kit
+/plugin install daily-sync@claude-code-kit
+/plugin install reminders@claude-code-kit
+
+# Not dev
+/plugin install video-montage@claude-code-kit
+/plugin install insta360-montage@claude-code-kit
+```
+
+From a terminal it's the same with `claude plugin marketplace add …` and `claude plugin install …`; or `/plugin` alone to browse the parts. What a part needs comes with it: pr-pane brings pr-watch; reminders brings daily-sync, which brings config-sync. Start a new session afterwards.
+
+**Keep them up to date:** Claude Code doesn't auto-update a marketplace other than Anthropic's own unless you turn it on, once: `/plugin` → Marketplaces → claude-code-kit → Enable auto-update. It then updates the parts in the background after a session starts (and asks for a restart). Or set it in `~/.claude/settings.json`:
+
+```json
+"extraKnownMarketplaces": {
+  "claude-code-kit": { "source": { "source": "github", "repo": "robinalexandre/claude-code-kit" }, "autoUpdate": true }
+}
+```
+
+By hand: `claude plugin marketplace update claude-code-kit`, then `claude plugin update <part>@claude-code-kit`.
+
+**Setup:** a part that needs a few answers (the status line in your settings, the emails for the email guard, where pr-watch looks, the phone for reminders, your private repo for config-sync, the zsh line for session-registry) says so at the first session after install, and Claude gives you the command to run in your terminal; it stops asking once it's done or you say no. Options: the language of the team rules and the emoji of wave-check are asked when you install from `/plugin`, and changed with `claude plugin configure <part>@claude-code-kit`.
+
+### With install.sh
+
+The installer copies the parts you pick into `~/.claude` instead. Use it to pick from a checklist, to install without a marketplace, or to edit your copies; it doesn't update them by itself: `git pull` and run it again. A part already installed as a plugin is skipped.
+
 ```sh
 git clone https://github.com/robinalexandre/claude-code-kit.git
 cd claude-code-kit
@@ -22,26 +79,13 @@ The installer shows the parts as a checklist by group (every day, development, s
 
 To try it first without touching your own setup, `tests/install-sandbox.sh` runs the installer in a throwaway home folder, shows what it left and checks your files are unchanged; `--claude <sandbox>` then opens a first Claude Code session there.
 
-**As plugins:** the parts that need no setup also install from Claude Code itself:
-
-```
-/plugin marketplace add robinalexandre/claude-code-kit
-/plugin install capability-builder@claude-code-kit
-/plugin install test-evidence@claude-code-kit
-/plugin install ci-review@claude-code-kit
-/plugin install file-tools-guard@claude-code-kit
-/plugin install paste-preview@claude-code-kit
-/plugin install recent-prompts@claude-code-kit
-/plugin install learn@claude-code-kit
-```
-
-The sync engine is a part too (`./install.sh sync`), added on its own when you pick handoff, daily-sync or reminders: the installer asks for the clone URL of an empty private git repo of your own (any host), clones it to `~/.claude-sync` and sets it up; on your next computer, give the same URL. By hand: [sync/README.md](sync/README.md).
+The sync engine is a part too (`./install.sh config-sync`), added on its own when you pick handoff, daily-sync or reminders: the installer asks for the clone URL of an empty private git repo of your own (any host), clones it to `~/.claude-sync` and sets it up; on your next computer, give the same URL. By hand: [sync/README.md](sync/README.md).
 
 ## What's inside
 
 ### Base rules
 
-[rules/team.md](rules/team.md) is the base of everything here: Claude and you work as one team that builds, thinks things through and challenges each other. It asks before touching production or shared infrastructure (in two lines, not twenty), before each commit, push and PR, and before decisions that need context only you have, with the options and a recommendation. It proposes a skill, mod or hook when you keep asking for the same thing, and an AI review step with proof (screenshots, videos) on the CI of repos that don't have one. The installer asks which language Claude should talk to you in and adds the rules to `~/.claude/CLAUDE.md` once (part `team`); a capability can use another language when you say so.
+[rules/team.md](rules/team.md) is the base of everything here: Claude and you work as one team that builds, thinks things through and challenges each other. It asks before touching production or shared infrastructure (in two lines, not twenty), before each commit, push and PR, and before decisions that need context only you have, with the options and a recommendation. It proposes a skill, mod or hook when you keep asking for the same thing, and an AI review step with proof (screenshots, videos) on the CI of repos that don't have one. The `team` plugin hands them to Claude at each session start, in the language you pick in its options, so they update with the plugin; install.sh asks for the language and adds them to `~/.claude/CLAUDE.md` once instead. A capability can use another language when you say so.
 
 ### Skills
 
@@ -57,7 +101,7 @@ The sync engine is a part too (`./install.sh sync`), added on its own when you p
 
 ### Mods
 
-Mods change Claude Code's own interface. The installer loads them through `CLAUDE_CODE_PLUGIN_DIRS`. Run a mod's tests with `claude plugin test mods/<name>`.
+Mods change Claude Code's own interface. They install as plugins like the other parts; install.sh loads its copies through `CLAUDE_CODE_PLUGIN_DIRS`. Run a mod's tests with `claude plugin test mods/<name>`.
 
 | Mod | What it does |
 |---|---|
@@ -84,7 +128,7 @@ Mods change Claude Code's own interface. The installer loads them through `CLAUD
 
 ### Sync engine
 
-[sync/](sync/README.md): keeps `CLAUDE.md`, skills, mods, hooks, settings, MCP servers (without their secrets), memory and the untracked agent files of your repos the same on every computer, through a private git repo of your own (any host). Secrets are replaced by `__SECRET__` before anything leaves the computer.
+[sync/](sync/README.md): keeps `CLAUDE.md`, skills, mods, hooks, settings (the plugins you installed and their options included), MCP servers (without their secrets), memory and the untracked agent files of your repos the same on every computer, through a private git repo of your own (any host). Secrets are replaced by `__SECRET__` before anything leaves the computer. The config-sync plugin sets it up for you (it takes the clone URL of a repo you made, or creates one on GitHub with `gh`) and keeps the engine in that repo up to date, unless you changed it there yourself; install.sh does the same setup once.
 
 ## Projects
 

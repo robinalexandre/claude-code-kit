@@ -1,14 +1,16 @@
 # Contributing
 
-A part earns its place when it answers a request people keep making, works on its own after `install.sh`, and works the same on macOS, Linux and Windows (Git Bash). The [capability-builder](skills/capability-builder/SKILL.md) skill walks Claude (or you) through all of this; below is the short version.
+A part earns its place when it answers a request people keep making, works on its own as a plugin and after `install.sh`, and works the same on macOS, Linux and Windows (Git Bash). The [capability-builder](skills/capability-builder/SKILL.md) skill walks Claude (or you) through all of this; below is the short version.
 
 ## Add a part
 
 1. **Pick the kind**: a rule (one line in `CLAUDE.md`), a skill (`skills/<name>/SKILL.md`), a hook (`hooks/<name>.sh` + `settings/<name>.json`), a mod (`mods/<name>/`), or a plain script. The lightest one that works; the logic in a plain script other agents can run too.
 2. **Describe it** in [parts.json](parts.json): `what`, `why`, `when`, `who` in one sentence each, its `group`, and `needs`, `tools`, `os`, `setup`, `sync` when they apply. The installer shows those lines to whoever installs it.
-3. **Setup** (only when it needs configuration): `setup.sh` in the part (hooks: `hooks/setup/<name>.sh`) using `reply` and `ask` from [hooks/lib/ask.sh](hooks/lib/ask.sh), every question with a default.
-4. **Test**: a script in `tests/` (hooks: JSON on stdin, check the output), `claude plugin test <mod>` for a mod, and `tests/install-sandbox.sh --auto`, which must end on `0 problem(s)`.
-5. **README**: one row in the right table. A part that needs no setup can also go in [.claude-plugin/marketplace.json](.claude-plugin/marketplace.json); check it with `claude plugin validate .`.
+3. **Setup** (only when it needs configuration): `setup.sh` in the part (hooks: `hooks/setup/<name>.sh`) using `reply` and `ask` from [hooks/lib/ask.sh](hooks/lib/ask.sh), every question with a default. It sources the kit's libs relative to itself (never `~/.claude/hooks/lib`) and ends with `kit_setup_mark <part> done` ([hooks/lib/kit.sh](hooks/lib/kit.sh)). For the plugin, add the part to [hooks/kit-session.sh](hooks/kit-session.sh), which offers the setup at session start until it's done or declined.
+4. **Plugin**: an entry in [.claude-plugin/marketplace.json](.claude-plugin/marketplace.json) with a `version`. A mod is its own plugin (`"source": "./mods/<name>"`, version in its `plugin.json`). Any other part uses `"source": "."` and `"strict": false`, lists its skills (`"skills": ["./skills/<name>"]`, or `["./hooks"]` when it has none: without a list it would load every skill of the kit), its hooks with `${CLAUDE_PLUGIN_ROOT}/…` paths, and `dependencies` for what it `needs`. Never point at another part through `~/.claude/...`: find it with `kit_find` (bash) or `installed_plugins.json` (mods). A program outside Claude Code (git, zsh, the status line) runs a copy that `kit-session.sh` keeps in the plugin's data folder.
+5. **Bump the version** of every plugin whose files or entry you change (`tests/plugin-versions.sh` fails otherwise): Claude Code updates a plugin only when its version moves. Patch for a fix, minor for a feature.
+6. **Test**: a script in `tests/` (hooks: JSON on stdin, check the output), `claude plugin test <mod>` for a mod, `tests/plugins.sh` and `tests/install-sandbox.sh --auto`, which must end on `0 problem(s)`, and `claude plugin validate .`.
+7. **README**: one row in the right table, and its `/plugin install` line.
 
 ## Rules for every file
 

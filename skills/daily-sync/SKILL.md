@@ -8,13 +8,13 @@ description: Sets up and checks the daily run of the Claude Code config sync (~/
 The sync engine (`~/.claude-sync/sync.sh`, see `~/.claude-sync/README.md`) does two things each day:
 
 - **Every session start:** a full sync runs in the background, so the session starts at once. A skill that needs the result waits for it in the background with `sync.sh fresh` (it returns once a full sync has succeeded today); the reminders skill does that, then notifies what came in and hands it to the session with the user's next message.
-- **Every morning at a set time (default 09:00):** the computer's own scheduler runs `sync.sh morning`, which syncs and then runs each `~/.claude/skills/*/morning.sh`. That's how the reminders skill notifies the user even when no session is open.
+- **Every morning at a set time (default 09:00):** the computer's own scheduler runs `sync.sh morning`, which syncs and then runs the `morning.sh` of each installed skill (copied in `~/.claude/skills/` or installed as a plugin). That's how the reminders skill notifies the user even when no session is open.
 
 The scheduled run needs the sync engine installed on the computer. It doesn't need Claude Code to be open.
 
 ## Turn it on, change the time, turn it off
 
-Scripts are in `~/.claude/skills/daily-sync/` (`$SK` below).
+Scripts are in this skill's base directory (`~/.claude/skills/daily-sync/` when installed by install.sh; `$SK` below).
 
 - `bash $SK/schedule.sh status`: whether the daily run is on, at what time, and the day of the last daily sync.
 - `bash $SK/schedule.sh on [HH:MM]`: every day at that time (24 h, default `09:00`). Running it again replaces the time.

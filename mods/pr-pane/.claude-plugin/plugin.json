@@ -1,10 +1,13 @@
 {
   "name": "pr-pane",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A pane listing the PRs pr-watch tracks: status, CI, votes and what each one waits for; open one in the browser, refresh them live.",
   "types": "./types/index.d.ts",
   "author": {
     "name": "robinalexandre",
     "url": "https://github.com/robinalexandre/claude-code-kit"
-  }
+  },
+  "dependencies": [
+    "pr-watch"
+  ]
 }

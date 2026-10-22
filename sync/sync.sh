@@ -44,7 +44,7 @@ esac
 
 CLAUDE="$HOME/.claude"
 CLAUDE_JSON="$HOME/.claude.json"
-PATHS="CLAUDE.md statusline-command.sh keybindings.json hooks mods skills agents commands output-styles"
+PATHS="CLAUDE.md statusline-command.sh keybindings.json reminders.json hooks mods skills agents commands output-styles"
 AGENT_FILES="CLAUDE.md CLAUDE.local.md AGENTS.md .mcp.json"
 MAX_FILE_KB=1024
 PRUNE=(-name node_modules -o -name .build -o -name DerivedData -o -name Pods -o -name .venv -o -name vendor -o -name dist -o -name build)
@@ -1028,11 +1028,29 @@ morning() {
   lock 60 || return 0
   sync_once force
   rm -rf "$STATE/lock"
-  for f in "$CLAUDE"/skills/*/morning.sh; do
+  {
+    for f in "$CLAUDE"/skills/*/morning.sh; do printf '%s\n' "$f"; done
+    plugin_mornings
+  } | while IFS= read -r f; do
     [ -f "$f" ] || continue
     say "morning: ${f#"$CLAUDE"/}"
     bash "$f" >> "$STATE/log" 2>&1 < /dev/null
   done
+  return 0
+}
+
+# The morning.sh of each skill installed as a plugin from the claude-code-kit marketplace, unless
+# a copy in ~/.claude/skills already runs.
+plugin_mornings() {
+  local name root
+  jq -r '.plugins // {} | to_entries[] | select(.key | endswith("@claude-code-kit"))
+    | [(.key | sub("@.*"; "")), ((.value | map(select(.scope == "user")) + .value)[0].installPath // "")] | @tsv' \
+    "${CLAUDE_CONFIG_DIR:-$CLAUDE}/plugins/installed_plugins.json" 2> /dev/null |
+    while IFS=$'\t' read -r name root; do
+      [ -f "$CLAUDE/skills/$name/morning.sh" ] && continue
+      command -v cygpath > /dev/null 2>&1 && root=$(cygpath -u "$root")
+      [ -f "$root/skills/$name/morning.sh" ] && printf '%s\n' "$root/skills/$name/morning.sh"
+    done
   return 0
 }
 

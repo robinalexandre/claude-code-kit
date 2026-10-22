@@ -15,8 +15,8 @@ DIR=${CLAUDE_REMINDERS_DIR:-$SYNC/reminders}
 STATE="$HOME/.claude/.reminders-state"
 CONF="$HOME/.claude/reminders.json"
 
-if [ -f "$HOME/.claude/hooks/lib/jq.sh" ]; then
-  . "$HOME/.claude/hooks/lib/jq.sh"
+if [ -f "$SK/../../hooks/lib/jq.sh" ]; then
+  . "$SK/../../hooks/lib/jq.sh"
 elif command -v cygpath > /dev/null 2>&1; then
   jq() { command jq -b "$@"; }
 fi

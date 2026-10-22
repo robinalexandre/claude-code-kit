@@ -1,9 +1,17 @@
 {
   "name": "wave-check",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "When a reply does not start with your marker emoji (CLAUDE_REPLY_MARKER), asks Claude to check that reply against CLAUDE.md and fix what slipped.",
   "author": {
     "name": "robinalexandre",
     "url": "https://github.com/robinalexandre/claude-code-kit"
+  },
+  "userConfig": {
+    "marker": {
+      "type": "string",
+      "title": "Marker emoji",
+      "description": "The emoji every reply must start with (e.g. 🌊). Add the rule \"Start every message with <emoji>\" to your CLAUDE.md. Empty: the check stays idle. CLAUDE_REPLY_MARKER in settings.json env takes precedence.",
+      "default": ""
+    }
   }
 }

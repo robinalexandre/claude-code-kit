@@ -5,7 +5,7 @@ description: Tracks the pull requests the user and Claude worked on together unt
 
 # PR watch
 
-A tracked PR is one JSON file in `~/.claude-sync/pr-watch/` (or `$PR_WATCH_DIR`): its URL, a note, and what was seen at the last check. The config sync carries the folder to every computer of the user; nothing is written in the project repos. Scripts are in `~/.claude/skills/pr-watch/` (`$SK` below).
+A tracked PR is one JSON file in `~/.claude-sync/pr-watch/` (or `$PR_WATCH_DIR`): its URL, a note, and what was seen at the last check. The config sync carries the folder to every computer of the user; nothing is written in the project repos. Scripts are in this skill's base directory (`~/.claude/skills/pr-watch/` when installed by install.sh; `$SK` below).
 
 ```sh
 bash $SK/pr-watch.sh add <PR URL> [--note "<what it is, what it waits for>"]

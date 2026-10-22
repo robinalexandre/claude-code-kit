@@ -2,8 +2,10 @@
 # Sets up reminders: phone notifications through ntfy. Run it again any time:
 #   bash ~/.claude/skills/reminders/setup.sh
 set -eu
-. "$HOME/.claude/hooks/lib/jq.sh"
-. "$HOME/.claude/hooks/lib/ask.sh"
+LIB=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../hooks/lib" && pwd)
+. "$LIB/jq.sh"
+. "$LIB/ask.sh"
+. "$LIB/kit.sh"
 conf="$HOME/.claude/reminders.json"
 
 echo "Reminders show at session start and as a desktop notification every morning (with daily-sync)."
@@ -19,3 +21,4 @@ if ask reminders.ntfy "Send reminders to your phone through ntfy?"; then
   jq --indent 2 --arg u "$topic" '.ntfy = $u' "$conf" > "$conf.tmp" && mv "$conf.tmp" "$conf"
   echo "  Install the ntfy app on your phone and subscribe to ${topic##*/} (server ${topic%/*})."
 fi
+kit_setup_mark reminders done

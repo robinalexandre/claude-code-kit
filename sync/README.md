@@ -6,7 +6,7 @@ Keeps your global Claude Code config the same on every computer through a privat
 
 | Synced | Where it lives locally |
 |---|---|
-| `CLAUDE.md`, hooks, mods, skills, status line (and agents, commands, output styles, keybindings) | `~/.claude/` |
+| `CLAUDE.md`, hooks, mods, skills, status line (and agents, commands, output styles, keybindings, the reminders' phone setting) | `~/.claude/` |
 | Settings, including the plugins and marketplaces you enabled | `~/.claude/settings.json`, built from `settings.shared.json` + `machines/<machine>.json` |
 | MCP servers added for all projects (`claude mcp add -s user`), without their secrets | `~/.claude.json`, one file per server in `mcp/` |
 | Agent config that no repo's git tracks: `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.mcp.json`, everything in `.claude/` (except `worktrees/`), nested `CLAUDE.md` and `AGENTS.md`, and a project's own MCP servers | each repo in the dev folder, stored in `repos/<host>/<owner>/<name>/`; the dev folder itself and its folders that aren't repos, stored in `folders/` |
@@ -16,7 +16,7 @@ Keeps your global Claude Code config the same on every computer through a privat
 
 Not synced: sessions, history, credentials and login, claude.ai connectors and skills (`skills/synced`), repos outside the dev folder, and anything a repo tracks itself (that travels with the repo).
 
-**Plugins:** Claude Code installs the plugins enabled in `settings.json` by itself, in the background after a session starts. So a plugin installed on one computer shows up on the others at their next session.
+**Plugins:** the plugins you installed, the marketplaces they come from and their options all live in `settings.json`, so they sync with it; Claude Code installs the plugins enabled there by itself, in the background after a session starts. So a plugin installed on one computer shows up on the others, set up the same way, at their next session. Options marked sensitive stay in each computer's secure storage. A [claude-code-kit](../README.md) part whose setup is shared (the status line, the email rules, pr-watch's config, the phone for reminders, the chrome-devtools MCP) isn't asked again on the next computer; only what lives on one computer is: the morning schedule, the `~/.zshrc` line, git's hooks.
 
 **MCP servers:** keys and tokens stay on each computer. In `mcp/`, every header value, every env value whose name looks like a secret (key, token, password, auth…), every `--token`-style argument and every `?api_key=`-style URL parameter is replaced by `__SECRET__`. A server that comes from another computer arrives with `__SECRET__` in those places and won't connect until you set the real value on this computer (ask Claude "set the <server> MCP key"). Your own values are kept when the server is later updated from another computer, unless its host or command changed: a key is never sent to a new address. Deleting a server takes it out of `mcp/`, but the other computers keep their copy until you delete it there too.
 
@@ -44,9 +44,11 @@ Safety checks: secrets are replaced by `__SECRET__` in every synced file and eac
 
 ## Install
 
-The kit's installer does all of this: `./install.sh sync` (or pick handoff, daily-sync or reminders) asks for the repo's clone URL, clones it, copies the engine in on the first computer and runs its install. The steps below do the same by hand.
-
 Needs Git, jq and Claude Code.
+
+**The easy way:** install the `config-sync` plugin of [claude-code-kit](../README.md) on each computer (`/plugin install config-sync@claude-code-kit`; handoff, daily-sync and reminders bring it too). At the first session it offers its setup: it asks for the clone URL of an empty private repo on any git host (or creates one on GitHub with `gh`), clones it to `~/.claude-sync`, puts the engine in it on the first computer and runs the install below. Its later versions update the engine in your repo, which the sync then carries to your other computers; once you change an engine file there yourself, it tells you about new versions instead. `kit-engine.json` in the repo records what it put there. The kit's installer runs the same setup: `./install.sh config-sync` (or pick handoff, daily-sync or reminders), or `bash sync/setup.sh` from a clone of the kit.
+
+**By hand:**
 
 1. Create an empty **private** repo on any git host (GitHub, GitLab, Azure DevOps...), for example `claude-config`. The examples below use GitHub's URL; use your host's.
 2. On your first computer, clone it to `~/.claude-sync`, copy this folder into it and run the install:

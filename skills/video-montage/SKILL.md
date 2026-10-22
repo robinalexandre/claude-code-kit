@@ -5,7 +5,8 @@ description: Edit a short video montage from a folder of phone videos with ffmpe
 
 # Video montage from a folder of clips
 
-Everything runs locally with `ffmpeg` / `ffprobe` (Homebrew). No plugin or MCP is needed.
+Everything runs locally with `ffmpeg` / `ffprobe` (Homebrew). No plugin or MCP is needed. The scripts are in this
+skill's base directory (`~/.claude/skills/video-montage/` when installed by install.sh; `$VM` below).
 
 ## Inputs to get from the user
 
@@ -78,7 +79,7 @@ Turn the best moments from step 2 into numbered candidates in
 `# <n> <what> <seconds>s` label. Then render them as one labelled reel:
 
 ```zsh
-LABEL=1 SRC=<folder> zsh ~/.claude/skills/video-montage/build.sh $S/candidates.txt $S/candidates.mp4
+LABEL=1 SRC=<folder> zsh $VM/build.sh $S/candidates.txt $S/candidates.mp4
 ffmpeg -v error -y -i $S/candidates.mp4 -vf scale=720:1280 -c:v libx264 -crf 24 -c:a aac -b:a 128k -movflags +faststart $S/candidates_preview.mp4
 ```
 
@@ -111,7 +112,7 @@ scratchpad (`clip start duration`, clip name without extension), in the agreed
 order. Then:
 
 ```zsh
-SRC=<folder> zsh ~/.claude/skills/video-montage/build.sh <scratch>/brand.txt <folder>/reel_brand.mp4
+SRC=<folder> zsh $VM/build.sh <scratch>/brand.txt <folder>/reel_brand.mp4
 ```
 
 It renders each shot as its own normalised segment (crop to fill 1080x1920,
@@ -138,7 +139,7 @@ Only once the user says the **final** reel is good (not the selection, and not
 while asking for another version):
 
 1. **Save it where the brief said.** For the Photos library (macOS):
-   `zsh ~/.claude/skills/video-montage/to_photos.sh <reel.mp4>...`. It
+   `zsh $VM/to_photos.sh <reel.mp4>...`. It
    saves with "Add Photos Only" access and deletes the local copies once Photos
    confirms. Then tell the user the reels are in Recents: no script can write
    to a shared album, so adding them to one is theirs to do. Never read, list

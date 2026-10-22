@@ -6,7 +6,8 @@ description: Edit a video montage straight from raw Insta360 .insv recordings wi
 # Video montage from raw Insta360 footage
 
 Everything runs locally with `ffmpeg`/`ffprobe` (Homebrew) and `python3` (stdlib only). Scripts live in
-`~/.claude/skills/insta360-montage/scripts/` (`$SK` below). Work in the session scratchpad (`$S`).
+the `scripts/` folder of this skill's base directory (`~/.claude/skills/insta360-montage/` when installed
+by install.sh; `$SK` below is that `scripts/` folder). Work in the session scratchpad (`$S`).
 Read the card **read-only**: never write to or delete anything on the camera.
 
 The flow: brief → calibrate the mount → find every action → the user picks clips from a numbered
@@ -201,7 +202,8 @@ Only once the user says the **final** reel is good (not the selection, and not w
 another version):
 
 1. **Save it where the brief said.** For the Photos library (macOS, needs the `video-montage` skill):
-   `zsh ~/.claude/skills/video-montage/to_photos.sh <final.mp4> <cover.jpg>`. It saves with "Add
+   `zsh <video-montage skill folder>/to_photos.sh <final.mp4> <cover.jpg>` (the folder is
+   `~/.claude/skills/video-montage/`, or the video-montage plugin's folder). It saves with "Add
    Photos Only" access and deletes the local copies once Photos confirms. Then tell the user both are in
    Recents: no script can write to a shared album, so adding them to one is theirs to do.
    Never read, list or export anything from the Photos library; the skill only asks for write access.

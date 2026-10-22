@@ -18,6 +18,8 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -28,6 +30,12 @@ jobs:
           claude --version
       - name: Marketplace
         run: claude plugin validate .
+      - name: Plugin versions bumped
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
+        run: bash tests/plugin-versions.sh "${BASE:-origin/main}"
+      - name: Every plugin installed and run
+        run: bash tests/plugins.sh
       - name: Email guard
         run: bash tests/git-identity-guard.sh
       - name: Install in a sandbox

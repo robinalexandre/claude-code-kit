@@ -17,7 +17,9 @@
 # same; else in ~/.claude/git-identity.json; GIT_IDENTITY_FILE overrides both.
 set -u
 . "$(dirname "$0")/lib/jq.sh"
-SELF="$HOME/.claude/hooks/git-identity-guard.sh"
+SELF="$(cd "$(dirname "$0")" && pwd)/git-identity-guard.sh"
+# Where git's hooks find this script for good: ~/.claude for a copy, the plugin's data folder for a plugin.
+KIT_HOME=${KIT_HOME:-$(cd "$(dirname "$0")/.." && pwd)}
 if [ -n "${GIT_IDENTITY_FILE:-}" ]; then
   RULES=$GIT_IDENTITY_FILE
 elif [ -d "$HOME/.claude-sync/.git" ]; then
@@ -244,7 +246,9 @@ pre_commit() {
 HOOK_NAMES="applypatch-msg pre-applypatch post-applypatch pre-commit pre-merge-commit prepare-commit-msg commit-msg
 post-commit pre-rebase post-checkout post-merge pre-push post-rewrite pre-auto-gc push-to-checkout sendemail-validate"
 git_hooks() {
-  local dir="$HOME/.claude/hooks/git" name current
+  local dir="$KIT_HOME/hooks/git" name current guard
+  guard="\$HOME${KIT_HOME#"$HOME"}/hooks/git-identity-guard.sh"
+  case "$KIT_HOME" in "$HOME"/*) ;; *) guard="$KIT_HOME/hooks/git-identity-guard.sh" ;; esac
   # git.exe on Windows reads C:/Users/..., not Git Bash's /c/Users/...
   command -v cygpath > /dev/null 2>&1 && dir=$(cygpath -m "$dir")
   current=$(git config --global --get core.hooksPath)
@@ -262,10 +266,10 @@ git_hooks() {
     {
       printf '#!/bin/sh\n# Written by git-identity-guard.sh git-hooks on: runs the repo'"'"'s own %s hook.\n' "$name"
       if [ "$name" = pre-push ]; then
-        printf 'input=$(cat)\nprintf "%%s\\n" "$input" | bash "$HOME/.claude/hooks/git-identity-guard.sh" pre-push "$@" || exit 1\n'
+        printf 'input=$(cat)\nprintf "%%s\\n" "$input" | bash "%s" pre-push "$@" || exit 1\n' "$guard"
         printf 'own="$(git rev-parse --git-common-dir 2> /dev/null)/hooks/%s"\n[ -x "$own" ] || exit 0\nprintf "%%s\\n" "$input" | "$own" "$@"\n' "$name"
       elif [ "$name" = pre-commit ]; then
-        printf 'bash "$HOME/.claude/hooks/git-identity-guard.sh" pre-commit || exit 1\n'
+        printf 'bash "%s" pre-commit || exit 1\n' "$guard"
         printf 'own="$(git rev-parse --git-common-dir 2> /dev/null)/hooks/%s"\n[ -x "$own" ] && exec "$own" "$@"\nexit 0\n' "$name"
       else
         printf 'own="$(git rev-parse --git-common-dir 2> /dev/null)/hooks/%s"\n[ -x "$own" ] && exec "$own" "$@"\nexit 0\n' "$name"

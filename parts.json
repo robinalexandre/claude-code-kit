@@ -10,7 +10,7 @@
     },
     {
       "id": "computers",
-      "title": "Several computers (needs the sync engine, sync/)"
+      "title": "Several computers (with the sync engine, config-sync)"
     },
     {
       "id": "not-dev",
@@ -22,7 +22,7 @@
       "name": "team",
       "kind": "rules",
       "group": "base",
-      "what": "Base rules added to ~/.claude/CLAUDE.md: Claude works as a teammate, challenges you, and asks before production, commits, pushes, PRs and decisions that need your context.",
+      "what": "Base rules given to Claude every session (added to ~/.claude/CLAUDE.md by install.sh): Claude works as a teammate, challenges you, and asks before production, commits, pushes, PRs and decisions that need your context.",
       "why": "Claude stops taking risky steps on its own and stops agreeing just to please.",
       "when": "Every session.",
       "who": "Anyone."
@@ -196,12 +196,15 @@
       "who": "Anyone who wants to learn from the work; pair it with statusline and recent-prompts."
     },
     {
-      "name": "sync",
+      "name": "config-sync",
       "kind": "sync",
       "group": "computers",
-      "tools": ["git"],
-      "what": "The sync engine: keeps your CLAUDE.md, skills, mods, hooks, settings, MCP servers (secrets left out) and memory the same on all your computers, through a private git repo of your own.",
-      "why": "Set Claude up once, and every computer works the same way, with the same memory.",
+      "setup": "sync/setup.sh",
+      "tools": [
+        "git"
+      ],
+      "what": "The sync engine: keeps your CLAUDE.md, skills, mods, hooks, plugins and their settings, MCP servers (secrets left out) and memory the same on all your computers, through a private git repo of your own (any host; created for you on GitHub with gh if you like).",
+      "why": "Set Claude up once, and every computer works the same way, with the same plugins and memory.",
       "when": "In the background at each session start, after each reply and at session end.",
       "who": "People who use Claude Code on two computers or more; handoff, daily-sync and reminders need it."
     },
@@ -210,6 +213,9 @@
       "kind": "skill",
       "group": "computers",
       "sync": true,
+      "needs": [
+        "config-sync"
+      ],
       "what": "Handoff notes between computers.",
       "why": "You continue on the other computer without explaining everything again.",
       "when": "\"I'll continue on the other computer\".",
@@ -220,6 +226,9 @@
       "kind": "skill",
       "group": "computers",
       "sync": true,
+      "needs": [
+        "config-sync"
+      ],
       "setup": "skills/daily-sync/setup.sh",
       "what": "Syncs before the first session of the day and every morning at a time you pick.",
       "why": "Each computer starts the day with what the others left.",

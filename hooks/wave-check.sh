@@ -3,7 +3,7 @@
 # Nudges, never blocks: warns when the last reply did not start with the
 # CLAUDE_REPLY_MARKER emoji. Does nothing until that variable is set.
 set -u
-MARKER=${CLAUDE_REPLY_MARKER:-}
+MARKER=${CLAUDE_REPLY_MARKER:-${CLAUDE_PLUGIN_OPTION_MARKER:-}}
 [ -n "$MARKER" ] || exit 0
 . "$(dirname "$0")/lib/jq.sh"
 input=$(cat)
