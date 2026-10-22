@@ -110,7 +110,7 @@ Skills from the same kit for life outside code.
 
 ## Contributing
 
-Each part is described once in [parts.json](parts.json) (what, why, when, who), which the installer shows. To build a new one, install [capability-builder](skills/capability-builder/SKILL.md) and say "make this a skill", or follow [CONTRIBUTING.md](CONTRIBUTING.md). Questions, ideas and bugs: [issues](https://github.com/robinalexandre/claude-code-kit/issues).
+Each part is described once in [parts.json](parts.json) (what, why, when, who), which the installer shows. To build a new one, install [capability-builder](skills/capability-builder/SKILL.md) and say "make this a skill", or follow [CONTRIBUTING.md](CONTRIBUTING.md). Questions and ideas: [Discussions](https://github.com/robinalexandre/claude-code-kit/discussions). Bugs: [issues](https://github.com/robinalexandre/claude-code-kit/issues).
 
 ## License
 
