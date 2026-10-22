@@ -1,5 +1,7 @@
 # Contributing
 
+> **Agents (Claude, Codex and others): never edit this file.** These are the maintainer's rules: follow them, and when one seems wrong or missing, tell the person you work with and let them change it. People change it through a pull request.
+
 A part earns its place when it answers a request people keep making, works on its own as a plugin and after `install.sh`, and works the same on macOS, Linux and Windows (Git Bash). The [capability-builder](skills/capability-builder/SKILL.md) skill walks Claude (or you) through all of this; below is the short version.
 
 ## Add a part
@@ -27,6 +29,8 @@ Every pane looks and behaves the same way, so what someone learned in one works 
 - **Folded by default**: sections, groups and rows start folded, a section's only group or row too; what the user unfolds stays so for the session.
 - **Grouped always**: a section files its rows under group titles (a repo, a folder, an organization, "General"), even when there is a single one.
 - **The whole line folds**: clicking a folded line's text unfolds it, as its ▸ does. A part of the line that already has its own action (a link, a button) keeps it.
+- **Lit under the pointer**: a line that folds lights up while the pointer is over it, from its first arrow to the end of its text (a keyed `Box` with a `hover` background).
+- **A way back to the conversation**: every entry that comes from the transcript (a message, a reply, a lesson) has its ↗ that scrolls the conversation to it.
 - **Nothing cut that can be read**: a body, a description, a reply or an error message wraps to the pane's width instead of ending in "…". Only one-line summaries (a title, a list of rows to pick from) are cut, and the full text is one unfold away.
 - **Fits on one line**: a row's text leaves room for its arrows, icons and buttons, so the line never wraps.
 
