@@ -10,7 +10,7 @@
     {
       "name": "team",
       "description": "Base rules: Claude works as a teammate, challenges you, and asks before production, commits, pushes, PRs and decisions that need your context.",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "category": "productivity",
       "source": ".",
       "strict": false,
@@ -32,7 +32,7 @@
               {
                 "type": "command",
                 "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/team-rules.sh\" 2>/dev/null || true",
-                "timeout": 5
+                "timeout": 15
               }
             ]
           }
@@ -103,7 +103,7 @@
     {
       "name": "recent-activity",
       "description": "A digest of your recent sessions across your dev folder at each session start, so Claude knows what you did lately in your other repos.",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "category": "productivity",
       "source": ".",
       "strict": false,
@@ -117,7 +117,7 @@
               {
                 "type": "command",
                 "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/recent-activity.sh\" digest 2>/dev/null || true",
-                "timeout": 5
+                "timeout": 15
               },
               {
                 "type": "command",
@@ -143,7 +143,7 @@
     {
       "name": "session-registry",
       "description": "Offers to resume the session left open in a terminal tab (zsh, JetBrains or Ghostty terminals).",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "category": "productivity",
       "source": ".",
       "strict": false,
@@ -157,7 +157,7 @@
               {
                 "type": "command",
                 "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/session-registry.sh\" start 2>/dev/null || true",
-                "timeout": 5
+                "timeout": 15
               },
               {
                 "type": "command",
@@ -380,7 +380,7 @@
     {
       "name": "pr-watch",
       "description": "Tracks your PRs until merged: new comments, votes, CI results, merges, review requests and your pipeline runs (GitHub, Azure DevOps).",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "category": "development",
       "source": ".",
       "strict": false,
@@ -394,7 +394,7 @@
               {
                 "type": "command",
                 "command": "bash \"${CLAUDE_PLUGIN_ROOT}/skills/pr-watch/session.sh\" start 2>/dev/null || true",
-                "timeout": 10
+                "timeout": 15
               },
               {
                 "type": "command",
@@ -543,7 +543,7 @@
     {
       "name": "reminders",
       "description": "Reminders for a later session, on any of your computers, notified on the desktop and the phone every morning.",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "category": "productivity",
       "source": ".",
       "strict": false,
@@ -560,7 +560,7 @@
               {
                 "type": "command",
                 "command": "bash \"${CLAUDE_PLUGIN_ROOT}/skills/reminders/reminders.sh\" start 2>/dev/null || true",
-                "timeout": 10
+                "timeout": 15
               },
               {
                 "type": "command",
