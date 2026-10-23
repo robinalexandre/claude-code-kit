@@ -22,9 +22,9 @@ type Files = Record<string, string>
 
 const HOME = '/home/someone'
 
-// Windows hands a path on in its own spelling, and the session's folder may come before one under
-// the home: the files are named from the ~.
-const at = (path: string) => path.replace(/\\/g, '/').replace(/^.*~\//, '~/').replace(new RegExp(`^${HOME}/`), '~/')
+// Windows hands a path on in its own spelling, with its drive before the fake home, and the
+// session's folder may come before one under the home: the files are named from the ~.
+const at = (path: string) => path.replace(/\\/g, '/').replace(/^.*~\//, '~/').replace(new RegExp(`^(?:[A-Za-z]:)?${HOME}/`), '~/')
 
 const ACTIVE_FILE = '~/.claude/.dnd/active.json'
 
