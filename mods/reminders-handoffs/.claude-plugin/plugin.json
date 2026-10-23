@@ -1,6 +1,6 @@
 {
   "name": "reminders-handoffs",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "One pane, with a tab for each of the reminders and handoff skills you have: reminders due now, upcoming and past; handoff notes open and done; filed by group, with done, stop, pick, cancel and delete.",
   "types": "./types/index.d.ts",
   "author": {

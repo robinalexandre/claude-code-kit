@@ -219,6 +219,12 @@ test("the arrow at the end of a message unfolds it with all its replies; the one
   expect(await pane.find({ type: 'Text', text: 'The remote is reachable.' })).toBeDefined()
   expect(await pane.find({ type: 'Text', text: 'Nothing was left behind.' })).toBeDefined()
   expect(await pane.find({ key: 'all-ask', text: '▴ all' })).toBeDefined()
+  // A hidden bar beside each open block, for the control that would fold it back: the message for
+  // the one beside the count, each reply for the message's.
+  const closingBars = async () =>
+    (await pane.findAll({ type: 'Box' })).filter(box => box.props?.display === 'none' && box.props?.backgroundColor === 'suggestion').length
+
+  expect(await closingBars()).toBe(3)
 
   // Folding back leaves the message open, its replies folded.
   await pane.press({ key: 'all-ask' })

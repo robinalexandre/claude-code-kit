@@ -310,6 +310,12 @@ test('the arrow at the end of a line unfolds all under it and folds it back; the
   expect(calls.filter(argv => argv[2] === 'read').map(argv => argv[3])).toEqual([NESTED.prs[0]?.url])
   expect(await pane.find({ key: 'all-waiting', text: '▴ all' })).toBeDefined()
   expect(await pane.find({ key: 'attention', text: '▸ Needs your attention (1)' })).toBeDefined()
+  // A hidden bar beside each open block, for the control that would fold it back: the section,
+  // its two repos, their two PRs and the one CI list.
+  const closingBars = async () =>
+    (await pane.findAll({ type: 'Box' })).filter(box => box.props?.display === 'none' && box.props?.backgroundColor === 'suggestion').length
+
+  expect(await closingBars()).toBe(6)
 
   // Folding back leaves the section open, its repos folded.
   await pane.press({ key: 'all-waiting' })

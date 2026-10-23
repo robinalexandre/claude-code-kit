@@ -20,6 +20,9 @@ const LIT_TEXT = { color: 'inverseText', dimColor: false }
 const UNFOLD_ALL = '▾ all'
 const FOLD_ALL = '▴ all'
 
+// The hover group a fold-all control lights, named after its key.
+const foldScope = (key: string) => `fold:${key}`.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 64)
+
 // The band's buttons share one row under everything above the prompt, whatever order the mods
 // draw in: each takes that row out of what the mods beneath drew, adds its own button, and sorts
 // them by key (band-1-history, band-2-prs, band-3-reminders).
@@ -401,14 +404,30 @@ export const register: Register = on => {
     const listed = rows.flatMap(({ prompt }) => foldsOf(prompt))
     const isListOpen = rows.some(({ prompt }) => isOpenId(prompt.id))
 
+    // A bar down the left edge of a block, shown only while the pointer is on the control that would
+    // fold the block back; hidden, it is never under the pointer itself.
+    const closingBar = (controlKey: string) => (
+      <Box
+        position="absolute"
+        top={0}
+        bottom={0}
+        left={0}
+        width={1}
+        display="none"
+        backgroundColor="suggestion"
+        hover={{ scope: foldScope(controlKey), display: 'flex' }}
+      />
+    )
+
     // Drawn in the accent color where the build styles a button's text, named in words for a reader.
+    // Under the pointer it lights the bar beside each block it would fold back (closingBar).
     const foldAllControl = (key: string, isOpen: boolean, drawn: string, onPress: () => void) =>
       styled ? (
-        <Button key={key} label={isOpen ? 'collapse all' : 'expand all'} onPress={onPress}>
+        <Button key={key} label={isOpen ? 'collapse all' : 'expand all'} hover={{ scope: foldScope(key) }} onPress={onPress}>
           <Text color="suggestion">{drawn}</Text>
         </Button>
       ) : (
-        <Button key={key} label={drawn} onPress={onPress} />
+        <Button key={key} label={drawn} hover={{ scope: foldScope(key) }} onPress={onPress} />
       )
 
     // A line's text folds and unfolds it, as its arrow does; a build that draws no styled button
@@ -449,15 +468,20 @@ export const register: Register = on => {
                   {foldText(`answer-text-${answer.id}`, label, label, () => toggle(answer.id), true)}
                 </Box>
               </Box>
-              {isAnswerOpen &&
-                paragraphs(answer.text, width - 6).map((line, index) => (
-                  <Box key={`reply-${answer.id}-${index}`} paddingLeft={2}>
-                    <Text>{line || ' '}</Text>
-                  </Box>
-                ))}
+              {isAnswerOpen && (
+                <Box flexDirection="column">
+                  {paragraphs(answer.text, width - 6).map((line, index) => (
+                    <Box key={`reply-${answer.id}-${index}`} paddingLeft={2}>
+                      <Text>{line || ' '}</Text>
+                    </Box>
+                  ))}
+                  {closingBar(`all-${prompt.id}`)}
+                </Box>
+              )}
             </Box>
           )
         })}
+        {closingBar('fold-all')}
       </Box>
     )
 

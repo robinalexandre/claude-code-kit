@@ -71,6 +71,10 @@ const answerBeneath = (on: On, world: World, calls: string[][], submitted: strin
 const mountPane = ($: Engine) =>
   $.ui.mount({ plugin: 'reminders-handoffs', surface: 'terminal', component: 'Pane', requestId: 'reminders-handoffs', props: PANE_PROPS })
 
+// The bars drawn hidden beside the blocks a fold-all control would fold back.
+const closingBars = async (pane: { findAll: (query: { type: string }) => Promise<{ props?: Record<string, unknown> }[]> }) =>
+  (await pane.findAll({ type: 'Box' })).filter(box => box.props?.display === 'none' && box.props?.backgroundColor === 'suggestion').length
+
 const mountBand = ($: Engine) => $.ui.mount({ plugin: 'reminders-handoffs', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
 
 test('/reminders lists them by section, done closes a repeating one for today', async ($, on) => {
@@ -144,8 +148,14 @@ test('the arrow at the end of a section line unfolds or folds all under it, the 
   expect(await pane.find({ text: '▸ Upcoming (1)' })).toBeDefined()
   expect(await pane.find({ key: 'all-now', text: '▴ all' })).toBeDefined()
 
+  // A hidden bar beside each open block marks it for the control that would fold it back: the
+  // section for the one beside refresh, the group for the section's, the details for the group's.
+  expect(await closingBars(pane)).toBe(3)
+
   // Folding back keeps the section open with everything under it folded.
   await pane.press({ key: 'all-now' })
+
+  expect(await closingBars(pane)).toBe(1)
 
   expect(await pane.find({ text: '▾ Now (1)' })).toBeDefined()
   expect(await pane.find({ text: '▸ General (1)' })).toBeDefined()

@@ -40,6 +40,9 @@ const RECENT_SHOWN = 8
 // At the end of a line that folds others: unfold everything under it, or fold it all back.
 const UNFOLD_ALL = '▾ all'
 const FOLD_ALL = '▴ all'
+
+// The hover group a fold-all control lights, named after its key.
+const foldScope = (key: string) => `fold:${key}`.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 64)
 const AFTER_RERUN_MS = 5_000
 
 const isRunning = (checks: CiCheck[]) => checks.some(check => !ENDED.has(check.state))
@@ -1041,14 +1044,37 @@ export const register: Register = on => {
         <Button key={key} label={plainLabel} plain hover={hover} onPress={onPress} />
       )
 
+    // A bar down the left edge of a block, shown only while the pointer is on the control that would
+    // fold the block back; hidden, it is never under the pointer itself.
+    const closingBar = (controlKey: string) => (
+      <Box
+        position="absolute"
+        top={0}
+        bottom={0}
+        left={0}
+        width={1}
+        display="none"
+        backgroundColor="suggestion"
+        hover={{ scope: foldScope(controlKey), display: 'flex' }}
+      />
+    )
+
+    const closingBlock = (controlKey: string, body: RenderChildren) => (
+      <Box flexDirection="column">
+        {body}
+        {closingBar(controlKey)}
+      </Box>
+    )
+
     // Drawn in the accent color where the build styles a button's text, named in words for a reader.
+    // Under the pointer it lights the bar beside each block it would fold back (closingBar).
     const foldAllControl = (key: string, isOpen: boolean, drawn: string, onPress: () => void) =>
       styled ? (
-        <Button key={key} label={isOpen ? 'collapse all' : 'expand all'} onPress={onPress}>
+        <Button key={key} label={isOpen ? 'collapse all' : 'expand all'} hover={{ scope: foldScope(key) }} onPress={onPress}>
           <Text color="suggestion">{drawn}</Text>
         </Button>
       ) : (
-        <Button key={key} label={drawn} onPress={onPress} />
+        <Button key={key} label={drawn} hover={{ scope: foldScope(key) }} onPress={onPress} />
       )
 
     // The control at the end of a line: with a line just under it open, it folds back all under it;
@@ -1132,8 +1158,8 @@ export const register: Register = on => {
 
     // One tracked PR on one line: a colored dot, its number, title and what it waits for, with `merge`
     // when that is all it waits for. Opened, it shows conflicts, CI checks, votes and the changes
-    // since the last check.
-    const prRow = (pr: PrRow, group: string, index: number, isStacked: boolean, withMerge = false) => {
+    // since the last check. `closedBy`: the control that would fold it back, its repo's.
+    const prRow = (pr: PrRow, group: string, index: number, isStacked: boolean, withMerge: boolean, closedBy: string) => {
       const isOpen = openDetails[pr.url] ?? isRunning(pr.checks ?? [])
       const color = prColor(pr)
       const acked = pr.ack ? ` · acked${pr.ack.until ? ` until ${pr.ack.until.slice(5)}` : ''}` : ''
@@ -1273,7 +1299,7 @@ export const register: Register = on => {
                 onPress={() => void toggleCi($, pr.url, isOpen)}
               />
               {isOpen &&
-                checks.map(check => {
+                closingBlock(`all-pr-${group}-${pr.number}`, checks.map(check => {
                   const { mark, color } = CHECK_MARKS[check.state] ?? { mark: '◌', color: 'yellow' }
                   const name = truncate(check.name, inner - 24)
                   const key = checkKey(pr.url, check.name)
@@ -1327,7 +1353,7 @@ export const register: Register = on => {
                       )}
                     </Box>
                   )
-                })}
+                }))}
             </Box>
           )
         })()}
@@ -1341,6 +1367,7 @@ export const register: Register = on => {
         {pr.changes.flatMap(change => wrap(`• ${change}`, inner)).map(line => (
           <Text color="cyan">{line}</Text>
         ))}
+        {closingBar(closedBy)}
           </Box>
           )}
         </Box>
@@ -1374,7 +1401,7 @@ export const register: Register = on => {
       const buildLit = litGroup(`build-${build.number}`)
 
       // One step per line; its messages fold under a toggle, closed at first.
-      const stepRow = (step: BuildStep, index: number) => {
+      const stepRow = (step: BuildStep, index: number, jobIndex: number) => {
         const key = stepKey(build.url, index)
         const isOpen = unfoldedSteps[key] ?? false
         const { mark, color } = STEP_MARKS[step.state] ?? { mark: '◌', color: 'yellow' }
@@ -1433,6 +1460,7 @@ export const register: Register = on => {
                     </Text>
                   ))
                 )}
+                {closingBar(`all-build-job-${build.number}-${jobIndex}`)}
               </Box>
             )}
           </Box>
@@ -1475,7 +1503,8 @@ export const register: Register = on => {
             </Box>
             {isOpen && (
               <Box flexDirection="column" paddingLeft={2}>
-                {group.steps.map(({ step, index }) => stepRow(step, index))}
+                {group.steps.map(({ step, index }) => stepRow(step, index, jobIndex))}
+                {closingBar(`all-build-${build.number}`)}
               </Box>
             )}
           </Box>
@@ -1608,7 +1637,7 @@ export const register: Register = on => {
           </Box>,
           hint,
         ])}
-        {isOpen && body()}
+        {isOpen && closingBlock(`all-${key.split('|')[0]}`, body())}
       </Box>
     )
 
@@ -1622,8 +1651,10 @@ export const register: Register = on => {
           ? isStacked && <Text dimColor> · merge top to bottom</Text>
           : hasRunningCi(prsOfRepo) && <Text color="yellow"> · CI running</Text>
 
-        return repoBlock(key, section === 'waiting' ? `repo-${repo}` : `${section}-repo-${repo}`, repo, prsOfRepo.length, isOpen, hint, () =>
-          prsOfRepo.map((pr, index) => prRow(pr, repo, index, isStacked, withMerge)),
+        const buttonKey = section === 'waiting' ? `repo-${repo}` : `${section}-repo-${repo}`
+
+        return repoBlock(key, buttonKey, repo, prsOfRepo.length, isOpen, hint, () =>
+          prsOfRepo.map((pr, index) => prRow(pr, repo, index, isStacked, withMerge, `all-${buttonKey}`)),
           worst(prsOfRepo.map(prColor)),
           prsOfRepo.flatMap(prFolds),
         )
@@ -1729,7 +1760,7 @@ export const register: Register = on => {
                 </Text>
               ),
             ])}
-            {isBuildsOpen && buildBlocks()}
+            {isBuildsOpen && closingBlock('fold-all', buildBlocks())}
           </Box>
         )}
         {attention.length > 0 && (
@@ -1752,7 +1783,7 @@ export const register: Register = on => {
               ),
               !isAttentionOpen && hasRunningCi(attention) && <Text color="yellow"> · CI running</Text>,
             ])}
-            {isAttentionOpen && repoBlocks('attention', attention, false)}
+            {isAttentionOpen && closingBlock('fold-all', repoBlocks('attention', attention, false))}
           </Box>
         )}
         {reviews.length > 0 && (
@@ -1778,12 +1809,15 @@ export const register: Register = on => {
               )
             )}
             {isReviewsOpen &&
-              byRepo(reviews).map(([repo, requests]) => {
-                const key = repoKey('reviews', repo)
-                const isOpen = expanded[key] ?? false
+              closingBlock(
+                'fold-all',
+                byRepo(reviews).map(([repo, requests]) => {
+                  const key = repoKey('reviews', repo)
+                  const isOpen = expanded[key] ?? false
 
-                return repoBlock(key, `reviews-repo-${repo}`, repo, requests.length, isOpen, null, () => requests.map(reviewRow), 'yellow')
-              })}
+                  return repoBlock(key, `reviews-repo-${repo}`, repo, requests.length, isOpen, null, () => requests.map(reviewRow), 'yellow')
+                })
+              )}
           </Box>
         )}
         {shown !== null && prs.length === 0 && <Text dimColor>No PR tracked. Ask Claude to watch one.</Text>}
@@ -1799,7 +1833,7 @@ export const register: Register = on => {
               />,
               !isWaitingOpen && hasRunningCi(ours) && <Text color="yellow"> · CI running</Text>,
             ])}
-            {isWaitingOpen && repoBlocks('waiting', ours, false)}
+            {isWaitingOpen && closingBlock('fold-all', repoBlocks('waiting', ours, false))}
           </Box>
         )}
         {approved.length > 0 && (
@@ -1815,7 +1849,7 @@ export const register: Register = on => {
               !isApprovedOpen && mergeable > 0 && <Text color="green"> · {mergeable} ready to merge</Text>,
               !isApprovedOpen && hasRunningCi(approved) && <Text color="yellow"> · CI running</Text>,
             ])}
-            {isApprovedOpen && repoBlocks('approved', approved, true)}
+            {isApprovedOpen && closingBlock('fold-all', repoBlocks('approved', approved, true))}
           </Box>
         )}
         {parked.length > 0 && (
@@ -1829,7 +1863,7 @@ export const register: Register = on => {
                 onPress={() => void toggleRepo($, repoKey('parked', '*'), isParkedOpen)}
               />,
             ])}
-            {isParkedOpen && repoBlocks('parked', parked, false)}
+            {isParkedOpen && closingBlock('fold-all', repoBlocks('parked', parked, false))}
           </Box>
         )}
         {recentCount > 0 && (
@@ -1844,41 +1878,47 @@ export const register: Register = on => {
               />,
             ])}
             {isRecentShown &&
-              recent.map(([repo, rows]) => {
-                const isOpen = expanded[repoKey('recent', repo)] ?? false
-                const latest = rows[0]
+              closingBlock(
+                'fold-all',
+                recent.map(([repo, rows]) => {
+                  const isOpen = expanded[repoKey('recent', repo)] ?? false
+                  const latest = rows[0]
 
-                return (
-                  <Box key={`recent-block-${repo}`} flexDirection="column" paddingLeft={2}>
-                    <Box flexDirection="row">
-                      <Button
-                        key={`recent-repo-${repo}`}
-                        label={`${isOpen ? '▾' : '▸'} ${truncate(repo, width - 36)} (${rows.length})`}
-                        plain
-                        onPress={() => void toggleRepo($, repoKey('recent', repo), isOpen)}
-                      />
-                      {!isOpen && latest !== undefined && (
-                        <Text dimColor>
-                          {' '}
-                          · last {latest.status} {endedText(latest.ended, nowMs)}
-                        </Text>
-                      )}
-                    </Box>
-                    {isOpen &&
-                      rows.map(pr => (
-                        <Text key={`recent-${pr.repo}-${pr.number}`}>
-                          <Text color={pr.status === 'merged' || pr.status === 'completed' ? 'green' : 'gray'}>  ✓ </Text>
-                          <Link href={pr.url} label={`#${pr.number}`} />
+                  return (
+                    <Box key={`recent-block-${repo}`} flexDirection="column" paddingLeft={2}>
+                      <Box flexDirection="row">
+                        <Button
+                          key={`recent-repo-${repo}`}
+                          label={`${isOpen ? '▾' : '▸'} ${truncate(repo, width - 36)} (${rows.length})`}
+                          plain
+                          onPress={() => void toggleRepo($, repoKey('recent', repo), isOpen)}
+                        />
+                        {!isOpen && latest !== undefined && (
                           <Text dimColor>
                             {' '}
-                            {pr.status} {endedText(pr.ended, nowMs)}
+                            · last {latest.status} {endedText(latest.ended, nowMs)}
                           </Text>
-                          <Text> {truncate(pr.title, Math.max(10, width - 32))}</Text>
-                        </Text>
-                      ))}
-                  </Box>
-                )
-              })}
+                        )}
+                      </Box>
+                      {isOpen &&
+                        closingBlock(
+                          'all-recent',
+                          rows.map(pr => (
+                            <Text key={`recent-${pr.repo}-${pr.number}`}>
+                              <Text color={pr.status === 'merged' || pr.status === 'completed' ? 'green' : 'gray'}>  ✓ </Text>
+                              <Link href={pr.url} label={`#${pr.number}`} />
+                              <Text dimColor>
+                                {' '}
+                                {pr.status} {endedText(pr.ended, nowMs)}
+                              </Text>
+                              <Text> {truncate(pr.title, Math.max(10, width - 32))}</Text>
+                            </Text>
+                          ))
+                        )}
+                    </Box>
+                  )
+                })
+              )}
           </Box>
         )}
       </Box>

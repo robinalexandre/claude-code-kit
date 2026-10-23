@@ -14,6 +14,9 @@ const LIT_TEXT = { color: 'inverseText', dimColor: false }
 const UNFOLD_ALL = '▾ all'
 const FOLD_ALL = '▴ all'
 
+// The hover group a fold-all control lights, named after its key.
+const foldScope = (key: string) => `fold:${key}`.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 64)
+
 const reminders = atom({ plugin: 'reminders-handoffs', key: 'reminders' } as const, null)
 const handoffs = atom({ plugin: 'reminders-handoffs', key: 'handoffs' } as const, null)
 const enabled = atom({ plugin: 'reminders-handoffs', key: 'enabled' } as const, [])
@@ -575,7 +578,7 @@ export const register: Register = on => {
 
     // The buttons' labels set what is left for the title; when that leaves too little, the line drops
     // its "when", which the details still show.
-    const row = (id: string, title: string, fullWhen: string, color: string, isStrong: boolean, isFaded: boolean, buttons: unknown[], labels: string[], details: () => unknown) => {
+    const row = (id: string, title: string, fullWhen: string, color: string, isStrong: boolean, isFaded: boolean, buttons: unknown[], labels: string[], details: () => unknown, closedBy: string) => {
       const isOpen = unfolded[id] ?? false
       const room = width - 6 - labels.reduce((sum, label) => sum + label.length + 3, 0)
       const when = room - fullWhen.length - 3 >= Math.min(title.length, 12) ? fullWhen : ''
@@ -618,7 +621,12 @@ export const register: Register = on => {
               {buttons as never}
             </Box>
           </Box>
-          {isOpen && (details() as never)}
+          {isOpen && (
+            <Box flexDirection="column">
+              {details() as never}
+              {closingBar(closedBy)}
+            </Box>
+          )}
         </Box>
       )
     }
@@ -635,7 +643,7 @@ export const register: Register = on => {
       labels: specs.map(([, label]) => label),
     })
 
-    const reminderRow = (one: Reminder, color: string) => {
+    const reminderRow = (one: Reminder, color: string, closedBy: string) => {
       const { buttons, labels } = buttonsFor(
         'reminders',
         one,
@@ -664,11 +672,12 @@ export const register: Register = on => {
             one.closed ? `Closed: ${one.closed}` : '',
           ],
           one.body ?? ''
-        )
+        ),
+        closedBy
       )
     }
 
-    const handoffRow = (note: Handoff, color: string) => {
+    const handoffRow = (note: Handoff, color: string, closedBy: string) => {
       const isOpenNote = note.state === 'open'
       const when = [note.from ? (note.isMine ? 'from this computer' : `from ${note.from}`) : '', note.date ? dayText(note.date) : '', note.state === 'canceled' ? 'canceled' : '']
         .filter(part => part !== '')
@@ -690,7 +699,8 @@ export const register: Register = on => {
             note.closed ? `${note.state === 'canceled' ? 'Canceled' : 'Done'}: ${note.closed}` : '',
           ],
           note.body ?? ''
-        )
+        ),
+        closedBy
       )
     }
 
@@ -718,14 +728,30 @@ export const register: Register = on => {
       await update($, openIds, all => ({ ...all, ...Object.fromEntries(folds.ids.map(id => [id, isOpen])) }))
     }
 
+    // A bar down the left edge of a block, shown only while the pointer is on the control that would
+    // fold the block back; hidden, it is never under the pointer itself.
+    const closingBar = (controlKey: string) => (
+      <Box
+        position="absolute"
+        top={0}
+        bottom={0}
+        left={0}
+        width={1}
+        display="none"
+        backgroundColor="suggestion"
+        hover={{ scope: foldScope(controlKey), display: 'flex' }}
+      />
+    )
+
     // Drawn in the accent color where the build styles a button's text, named in words for a reader.
+    // Under the pointer it lights the bar beside each block it would fold back (closingBar).
     const foldAllControl = (key: string, isOpen: boolean, drawn: string, onPress: () => void) =>
       styled ? (
-        <Button key={key} label={isOpen ? 'collapse all' : 'expand all'} onPress={onPress}>
+        <Button key={key} label={isOpen ? 'collapse all' : 'expand all'} hover={{ scope: foldScope(key) }} onPress={onPress}>
           <Text color="suggestion">{drawn}</Text>
         </Button>
       ) : (
-        <Button key={key} label={drawn} onPress={onPress} />
+        <Button key={key} label={drawn} hover={{ scope: foldScope(key) }} onPress={onPress} />
       )
 
     // Anything open under the line folds it all back; all of it folded, the arrow unfolds everything.
@@ -743,7 +769,9 @@ export const register: Register = on => {
     )
 
     // A section's rows, each group under a title that folds, even a lone one.
-    const grouped = <T extends { id: string },>(section: string, rows: T[], groupOf: (row: T) => string, draw: (row: T) => unknown) => {
+    // A section's rows, each group under a title that folds, even a lone one. Each row is told which
+    // control folds its details back: its group's.
+    const grouped = <T extends { id: string },>(section: string, rows: T[], groupOf: (row: T) => string, draw: (row: T, closedBy: string) => unknown) => {
       const groups = byGroup(rows, groupOf)
 
       return groups.map(([name, members]) => {
@@ -756,14 +784,19 @@ export const register: Register = on => {
         return (
           <Box key={`group-${key}`} flexDirection="column" paddingLeft={2}>
             {foldLine(fold, `group-${section}-${name}`, { sectionKeys: [key], ids: members.map(row => row.id) })}
-            {isOpen && (members.map(draw) as never)}
+            {isOpen && (
+              <Box flexDirection="column">
+                {members.map(member => draw(member, `all-group-${section}-${name}`)) as never}
+                {closingBar(`all-${section}`)}
+              </Box>
+            )}
           </Box>
         )
       })
     }
 
     // Sections and groups start folded; what the user unfolds stays so for the session.
-    const section = <T extends { id: string },>(id: string, title: string, rows: T[], groupOf: (row: T) => string, draw: (row: T) => unknown) => {
+    const section = <T extends { id: string },>(id: string, title: string, rows: T[], groupOf: (row: T) => string, draw: (row: T, closedBy: string) => unknown) => {
       const isOpen = sections[id] ?? false
       const fold = foldButton(id, `${isOpen ? '▾' : '▸'} ${title} (${rows.length})`, { bold: true }, () =>
         void update($, openSections, all => ({ ...all, [id]: !isOpen }))
@@ -772,12 +805,17 @@ export const register: Register = on => {
       return (
         <Box key={`section-${id}`} flexDirection="column" marginTop={1}>
           {rows.length === 0 ? fold : foldLine(fold, id, foldsOf(id, rows, groupOf))}
-          {isOpen && rows.length === 0 && (
-            <Box paddingLeft={2}>
-              <Text dimColor>nothing</Text>
+          {isOpen && (
+            <Box flexDirection="column">
+              {rows.length === 0 && (
+                <Box paddingLeft={2}>
+                  <Text dimColor>nothing</Text>
+                </Box>
+              )}
+              {grouped(id, rows, groupOf, draw) as never}
+              {closingBar('fold-all')}
             </Box>
           )}
-          {isOpen && (grouped(id, rows, groupOf, draw) as never)}
         </Box>
       )
     }
@@ -792,9 +830,9 @@ export const register: Register = on => {
 
       return {
         drawn: [
-          section('now', 'Now', rowsOf('now').sort(byNext), reminderGroup, one => reminderRow(one, 'yellow')),
-          section('upcoming', 'Upcoming', rowsOf('upcoming').sort(byNext), reminderGroup, one => reminderRow(one, 'cyan')),
-          section('past', 'Past', rowsOf('past').sort(byClosed), reminderGroup, one => reminderRow(one, 'gray')),
+          section('now', 'Now', rowsOf('now').sort(byNext), reminderGroup, (one, closedBy) => reminderRow(one, 'yellow', closedBy)),
+          section('upcoming', 'Upcoming', rowsOf('upcoming').sort(byNext), reminderGroup, (one, closedBy) => reminderRow(one, 'cyan', closedBy)),
+          section('past', 'Past', rowsOf('past').sort(byClosed), reminderGroup, (one, closedBy) => reminderRow(one, 'gray', closedBy)),
         ],
         folds: ['now', 'upcoming', 'past'].map(part => foldsOf(part, rowsOf(part), reminderGroup)),
       }
@@ -808,8 +846,8 @@ export const register: Register = on => {
 
       return {
         drawn: [
-          section('open-notes', 'Open', openNotes, handoffGroup, note => handoffRow(note, 'yellow')),
-          section('done-notes', 'Done', doneNotes, handoffGroup, note => handoffRow(note, 'gray')),
+          section('open-notes', 'Open', openNotes, handoffGroup, (note, closedBy) => handoffRow(note, 'yellow', closedBy)),
+          section('done-notes', 'Done', doneNotes, handoffGroup, (note, closedBy) => handoffRow(note, 'gray', closedBy)),
         ],
         folds: [foldsOf('open-notes', openNotes, handoffGroup), foldsOf('done-notes', doneNotes, handoffGroup)],
       }
