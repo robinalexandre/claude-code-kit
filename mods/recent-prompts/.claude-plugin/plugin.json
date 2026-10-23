@@ -1,10 +1,42 @@
 {
   "name": "recent-prompts",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Shows your last two messages above the prompt and a searchable history pane; click one to scroll the transcript to it.",
   "types": "./types/index.d.ts",
   "author": {
     "name": "robinalexandre",
     "url": "https://github.com/robinalexandre/claude-code-kit"
+  },
+  "userConfig": {
+    "questions": {
+      "type": "boolean",
+      "title": "Keep questions asked with the picker",
+      "description": "List the questions Claude asks you with the picker, and what you picked, among its replies.",
+      "default": true
+    },
+    "plans": {
+      "type": "boolean",
+      "title": "Keep plans",
+      "description": "List the plans Claude submits for your approval among its replies.",
+      "default": true
+    },
+    "files": {
+      "type": "boolean",
+      "title": "Keep files sent to you",
+      "description": "List the files Claude sends you (caption and file names) among its replies.",
+      "default": false
+    },
+    "notifications": {
+      "type": "boolean",
+      "title": "Keep push notifications",
+      "description": "List the push notifications Claude sends you among its replies.",
+      "default": false
+    },
+    "commands": {
+      "type": "boolean",
+      "title": "Keep slash commands",
+      "description": "List the slash commands and skills you run as messages, with what they printed as their reply.",
+      "default": true
+    }
   }
 }

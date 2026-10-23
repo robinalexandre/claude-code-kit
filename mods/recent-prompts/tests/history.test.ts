@@ -255,6 +255,176 @@ test("the arrow at the end of a message unfolds it with all its replies; the one
   expect(await pane.find({ key: 'details-next' })).toBeDefined()
 })
 
+const PANE_PROPS = { title: 'My messages', isFocused: true, bodyColumns: 80, placement: 'dock', scroll: SCROLL, view: {} } as const
+
+const mountPane = ($: Engine) =>
+  $.ui.mount({ plugin: 'recent-prompts', surface: 'terminal', component: 'Pane', requestId: 'my-messages', props: PANE_PROPS })
+
+const ask = ($: Engine) =>
+  $.session.append({
+    message: {
+      type: 'assistant',
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool_use',
+          id: 'toolu_ask',
+          name: 'AskUserQuestion',
+          input: { questions: [{ question: 'Where should the profiles live?', header: 'Storage', options: [{ label: 'Synced' }, { label: 'Local' }] }] },
+        },
+      ],
+    },
+    door: 'response',
+    origin: { kind: 'model', model: 'claude-opus-5-5' },
+    uuid: 'asking',
+  })
+
+const answerAsk = ($: Engine) =>
+  $.session.append({
+    message: {
+      type: 'user',
+      role: 'user',
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: 'toolu_ask',
+          content: 'The user answered: "Where should the profiles live?"="Synced". You can now continue with the user\'s answers in mind.',
+        },
+      ],
+    },
+    door: 'tool-result',
+    origin: { kind: 'tool', tool: 'AskUserQuestion' },
+    uuid: 'picked',
+  })
+
+test('a question asked with the picker and the pick are kept as replies', async ($, on) => {
+  mock.clock(on)
+  on('ui.render', () => Fragment({}))
+
+  await say($, 'ask', 'Set up the profiles')
+  await ask($)
+  await answerAsk($)
+
+  const pane = await mountPane($)
+  await pane.press({ key: 'text-ask' })
+
+  expect(await pane.find({ key: 'answer-text-toolu_ask', text: /asked: Where should the profiles live\? · Synced · Local/ })).toBeDefined()
+  expect(await pane.find({ key: 'answer-text-toolu_ask#pick', text: /you picked: Where should the profiles live\? → Synced/ })).toBeDefined()
+})
+
+test('with questions turned off, the picker is left out', { options: { questions: false } }, async ($, on) => {
+  mock.clock(on)
+  on('ui.render', () => Fragment({}))
+
+  await say($, 'ask', 'Set up the profiles')
+  await ask($)
+  await answerAsk($)
+
+  const pane = await mountPane($)
+  await pane.press({ key: 'text-ask' })
+
+  expect(await pane.find({ text: 'No reply yet.' })).toBeDefined()
+})
+
+test('a slash command is listed as typed with what it printed, and stays out of the band', async ($, on) => {
+  mock.clock(on)
+  on('ui.render', () => Fragment({}))
+  const row = (uuid: string, text: string) =>
+    $.session.append({ message: { type: 'user', role: 'user', content: [{ type: 'text', text }] }, door: 'command', origin: { kind: 'composer' }, uuid })
+
+  await say($, 'first', 'Check the sync')
+  await row('cmd', '<command-name>/rename</command-name>\n<command-message>rename</command-message>\n<command-args>MAIN</command-args>')
+  await row('out', '<local-command-stdout>Session renamed to: MAIN</local-command-stdout>')
+
+  const band = await $.ui.mount({ plugin: 'recent-prompts', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
+
+  expect(await band.find({ text: /rename/ })).toBeUndefined()
+
+  const pane = await mountPane($)
+
+  expect(await pane.find({ key: 'text-cmd', text: /^\/rename MAIN$/ })).toBeDefined()
+
+  await pane.press({ key: 'text-cmd' })
+
+  expect(await pane.find({ key: 'answer-text-out', text: /output: Session renamed to: MAIN/ })).toBeDefined()
+})
+
+const TRANSCRIPT = [
+  { role: 'user', text: 'Set up the profiles', toolUses: [] },
+  { role: 'assistant', text: 'Looking at the sync first.', toolUses: [] },
+  {
+    role: 'assistant',
+    text: '',
+    toolUses: [
+      {
+        tool_use_id: 'toolu_ask',
+        tool: 'AskUserQuestion',
+        input: { questions: [{ question: 'Where should the profiles live?', options: [{ label: 'Synced' }] }] },
+        text: 'The user answered: "Where should the profiles live?"="Synced".',
+      },
+      { tool_use_id: 'toolu_read', tool: 'Read', input: { file_path: '/x' }, text: 'secret file body' },
+    ],
+  },
+  { role: 'user', text: '<system-reminder>\nSome engine framing\n</system-reminder>', toolUses: [] },
+  { role: 'assistant', text: 'Done, they are synced.', toolUses: [] },
+  { role: 'user', text: '<command-name>/rename</command-name>\n<command-args>MAIN</command-args>', toolUses: [] },
+  { role: 'user', text: 'Thanks', toolUses: [] },
+]
+
+test('a resumed session reads its history back from the transcript, framing and tool work left out', async ($, on) => {
+  const clock = mock.clock(on)
+  on('ui.render', () => Fragment({}))
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  on('session.messages', () => ({ value: TRANSCRIPT as never }))
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+
+  await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+  await clock.advance(0)
+
+  const pane = await mountPane($)
+
+  expect(await pane.find({ text: '3 messages' })).toBeDefined()
+  expect(await pane.find({ text: /Some engine framing/ })).toBeUndefined()
+
+  await pane.press({ key: 'fold-all' })
+
+  expect(await pane.find({ type: 'Text', text: 'Done, they are synced.' })).toBeDefined()
+  expect(await pane.find({ key: 'answer-text-toolu_ask#pick' })).toBeDefined()
+  expect(await pane.find({ text: /secret file body/ })).toBeUndefined()
+  expect(await pane.find({ key: 'text-rebuilt-5', text: /^\/rename MAIN$/ })).toBeDefined()
+})
+
+test('a reload fills in the replies a stored message missed, keeping what was stored', async ($, on) => {
+  const clock = mock.clock(on)
+  on('ui.render', () => Fragment({}))
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  on('session.messages', () => ({ value: TRANSCRIPT as never }))
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+
+  await say($, 'ask', 'Set up the profiles')
+  await $.session.append({
+    message: { type: 'assistant', role: 'assistant', content: [{ type: 'text', text: 'Done, they are synced.' }] },
+    door: 'response',
+    origin: { kind: 'model', model: 'claude-opus-5-5' },
+    uuid: 'done',
+  })
+  await say($, 'thanks', 'Thanks')
+  await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+  await clock.advance(0)
+
+  const pane = await mountPane($)
+
+  // The command typed before is not added: a stored history only gains replies.
+  expect(await pane.find({ text: '2 messages' })).toBeDefined()
+
+  await pane.press({ key: 'all-ask' })
+
+  const keys = (await pane.findAll({ type: 'Button' })).map(button => button.key ?? '')
+  const replies = keys.filter(key => key.startsWith('answer-text-'))
+
+  expect(replies).toEqual(['answer-text-rebuilt-1', 'answer-text-toolu_ask', 'answer-text-toolu_ask#pick', 'answer-text-done'])
+})
+
 test('a 💡 Learn block Claude ended a reply with is listed in the history between the messages, never in the band', async ($, on) => {
   mock.clock(on)
   on('ui.render', () => Fragment({}))

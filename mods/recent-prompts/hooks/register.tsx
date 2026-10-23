@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, PluginOptions, Register, SessionMessage } from 'claude-code'
 
-import type { Answer, RecentPrompt } from '../types'
+import type { Answer, AnswerKind, RecentPrompt } from '../types'
 
 const PANE = 'my-messages'
 const TITLE = 'My messages'
@@ -88,7 +88,7 @@ const clockTime = (milliseconds: number) => {
   return [date.getHours(), date.getMinutes()].map(part => String(part).padStart(2, '0')).join(':')
 }
 
-const remember = async ($: EngineInterface, id: string, text: string, kind?: 'learn') => {
+const remember = async ($: EngineInterface, id: string, text: string, kind?: RecentPrompt['kind']) => {
   const prompt: RecentPrompt = { id, text, time: clockTime(await $.clock.now()), ...(kind ? { kind } : {}) }
   await update($, prompts, list => [...list, prompt].slice(-KEPT))
 }
@@ -98,21 +98,241 @@ const LEARN = /💡\s*\**\s*Learn\b\s*:?\**\s*([\s\S]+)$/
 
 const isMessage = (prompt: RecentPrompt) => prompt.kind !== 'learn'
 
-// A reply goes under the person's last message: the replies of a turn all answer it.
-const keepAnswer = async ($: EngineInterface, id: string, text: string) => {
-  const answer: Answer = { id, text: text.slice(0, ANSWER_CHARS), time: clockTime(await $.clock.now()) }
-  await update($, prompts, list => {
-    const at = list.map(isMessage).lastIndexOf(true)
-    const prompt = list[at]
+const answerTo = (list: RecentPrompt[], answer: Answer) => {
+  const at = list.map(isMessage).lastIndexOf(true)
+  const prompt = list[at]
 
-    if (prompt === undefined) {
-      return list
+  if (prompt === undefined) {
+    return list
+  }
+
+  const answers = [...(prompt.answers ?? []), { ...answer, text: answer.text.slice(0, ANSWER_CHARS) }].slice(-ANSWERS_KEPT)
+
+  return [...list.slice(0, at), { ...prompt, answers }, ...list.slice(at + 1)]
+}
+
+// A reply goes under the person's last message: the replies of a turn all answer it.
+const keepAnswer = async ($: EngineInterface, id: string, text: string, kind?: AnswerKind) => {
+  const time = clockTime(await $.clock.now())
+  await update($, prompts, list => answerTo(list, { id, text, time, ...(kind ? { kind } : {}) }))
+}
+
+// Which replies besides plain text the person chose to keep (the manifest's userConfig).
+type Keep = { questions: boolean; plans: boolean; files: boolean; notifications: boolean; commands: boolean }
+
+const keepOf = (options: PluginOptions): Keep => ({
+  questions: options.questions !== false,
+  plans: options.plans !== false,
+  files: options.files === true,
+  notifications: options.notifications === true,
+  commands: options.commands !== false,
+})
+
+const stringOf = (value: unknown) => (typeof value === 'string' ? value : '')
+
+const listOf = (value: unknown): unknown[] => (Array.isArray(value) ? value : [])
+
+// A tool call that speaks to the person, as the reply it stands for; undefined for any other.
+const toolAnswer = (tool: string, input: Record<string, unknown>, keep: Keep): { kind: AnswerKind; text: string } | undefined => {
+  if (tool === 'AskUserQuestion' && keep.questions) {
+    const questions = listOf(input.questions).map(question => {
+      const asked = (question ?? {}) as Record<string, unknown>
+      const options = listOf(asked.options).map(option => `  · ${stringOf((option as Record<string, unknown>)?.label)}`)
+
+      return [stringOf(asked.question), ...options].join('\n')
+    })
+
+    return { kind: 'question', text: questions.join('\n\n') }
+  }
+
+  if (tool === 'ExitPlanMode' && keep.plans && stringOf(input.plan) !== '') {
+    return { kind: 'plan', text: stringOf(input.plan) }
+  }
+
+  if (tool === 'SendUserFile' && keep.files) {
+    return { kind: 'file', text: [stringOf(input.caption), ...listOf(input.files).map(stringOf)].filter(Boolean).join('\n') }
+  }
+
+  if (tool === 'PushNotification' && keep.notifications && stringOf(input.message) !== '') {
+    return { kind: 'notification', text: stringOf(input.message) }
+  }
+
+  return undefined
+}
+
+// The picker's result reads `The user answered: "question"="pick", ...`: each pick under its question.
+const pickText = (result: string) => {
+  const picks = [...result.matchAll(/"((?:[^"\\]|\\.)*)"="((?:[^"\\]|\\.)*)"/g)].map(([, question, pick]) => `${question}\n→ ${pick}`)
+
+  return picks.length > 0 ? picks.join('\n\n') : result.trim()
+}
+
+const resultText = (block: Block) =>
+  typeof block.content === 'string' ? block.content : textOf(listOf(block.content) as Block[])
+
+const PICK = '#pick'
+
+const ANSWER_WORDS: Record<AnswerKind, string> = {
+  question: 'asked',
+  pick: 'you picked',
+  plan: 'plan',
+  file: 'sent you',
+  notification: 'notified',
+  output: 'output',
+}
+
+const tagged = (text: string, tag: string) => text.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`))?.[1]?.trim()
+
+// A slash command's record (`<command-name>/x</command-name>…<command-args>a</command-args>`) as typed: `/x a`.
+const commandLine = (text: string) => {
+  const name = tagged(text, 'command-name')
+
+  return name === undefined ? undefined : [name, tagged(text, 'command-args') ?? ''].join(' ').trim()
+}
+
+// What a command printed, its terminal colors taken out; "(no content)" is nothing.
+const commandOutput = (text: string) => {
+  const printed = [tagged(text, 'local-command-stdout'), tagged(text, 'local-command-stderr')]
+    .filter((part): part is string => part !== undefined)
+    .join('\n')
+    .replace(/\x1b\[[0-9;]*m/g, '')
+    .trim()
+
+  return printed === '(no content)' ? '' : printed
+}
+
+const REBUILT = 'rebuilt-'
+
+// What a transcript row of the person's side is, read back without the flags its row had: a
+// message, a command, a command's output, or engine framing to leave out.
+type ReadBack = { message: string; kind?: 'command' } | { output: string } | undefined
+
+const readUser = (text: string, keep: Keep): ReadBack => {
+  const trimmed = text.trim()
+  const command = commandLine(trimmed)
+
+  if (command !== undefined) {
+    return keep.commands ? { message: command, kind: 'command' } : undefined
+  }
+
+  if (/<local-command-(stdout|stderr)>/.test(trimmed)) {
+    const output = commandOutput(trimmed)
+
+    return keep.commands && output !== '' ? { output } : undefined
+  }
+
+  const queued = trimmed.match(/The user sent a new message while you were working:\n([\s\S]*?)\n\n(?:Address|IMPORTANT)/)?.[1]
+  const sent = trimmed.match(/^The \S+ plugin sent a message:\n([\s\S]*?)\n\nAddress the message above/)?.[1]
+
+  if (queued !== undefined || sent !== undefined) {
+    return { message: (queued ?? sent ?? '').trim() }
+  }
+
+  const isFraming =
+    trimmed === '' ||
+    /^<(system-reminder|task-notification|local-command-caveat|user-prompt-submit-hook)\b/.test(trimmed) ||
+    /^(Base directory for this skill:|This session is being continued from a previous conversation|\[Request interrupted)/.test(trimmed)
+
+  return isFraming ? undefined : { message: trimmed }
+}
+
+// The history as the transcript holds it, for a session whose stored history missed some of it:
+// one resumed, or one whose replies came before this mod kept them. The rows carry no ids, so
+// what comes from a plain row cannot be jumped to; a tool call's reply keeps its call's id.
+const readBack = (rows: SessionMessage[], keep: Keep) =>
+  rows.reduce<RecentPrompt[]>((list, row, index) => {
+    const id = `${REBUILT}${index}`
+
+    if (row.role === 'user') {
+      const found = readUser(row.text, keep)
+
+      if (found === undefined) {
+        return list
+      }
+
+      return 'output' in found
+        ? answerTo(list, { id, text: found.output, kind: 'output' })
+        : [...list, { id, text: found.message, ...(found.kind ? { kind: found.kind } : {}) }]
     }
 
-    const answers = [...(prompt.answers ?? []), answer].slice(-ANSWERS_KEPT)
+    const text = row.text.trim()
+    const lesson = text.match(LEARN)?.[1]?.trim() ?? ''
+    const answered = text === '' ? list : answerTo(list, { id, text })
+    const withTools = row.toolUses.reduce((all, use) => {
+      const answer = toolAnswer(use.tool, use.input, keep)
 
-    return [...list.slice(0, at), { ...prompt, answers }, ...list.slice(at + 1)]
+      if (answer === undefined) {
+        return all
+      }
+
+      const asked = answerTo(all, { id: use.tool_use_id, ...answer })
+
+      return use.tool === 'AskUserQuestion' && use.text !== undefined
+        ? answerTo(asked, { id: `${use.tool_use_id}${PICK}`, text: pickText(use.text), kind: 'pick' })
+        : asked
+    }, answered)
+
+    return lesson === '' ? withTools : [...withTools, { id: `${id}-learn`, text: lesson, kind: 'learn' }]
+  }, [])
+
+// Two replies are one when either's text holds the other's: the transcript may join a response's
+// text blocks the session stored one by one.
+const isSameAnswer = (one: Answer, other: Answer) => {
+  const [a, b] = [flatten(one.text), flatten(other.text)]
+
+  return a !== '' && b !== '' && (a.includes(b) || b.includes(a))
+}
+
+const mergeAnswers = (stored: Answer[], found: Answer[]) => {
+  const used = new Set<Answer>()
+  const merged = found.map(answer => {
+    const same = stored.find(one => !used.has(one) && isSameAnswer(one, answer))
+
+    if (same === undefined) {
+      return answer
+    }
+
+    used.add(same)
+
+    return same
   })
+
+  return [...merged, ...stored.filter(one => !used.has(one))].slice(-ANSWERS_KEPT)
+}
+
+// What was read back joins what is stored: an empty history takes it whole; otherwise each stored
+// message, matched in order by its text, gains the replies it missed, and nothing stored is lost.
+const merge = (stored: RecentPrompt[], found: RecentPrompt[]) => {
+  if (!stored.some(isMessage)) {
+    return [...found, ...stored].slice(-KEPT)
+  }
+
+  let from = 0
+
+  return stored.map(prompt => {
+    if (!isMessage(prompt)) {
+      return prompt
+    }
+
+    const at = found.findIndex((one, index) => index >= from && isMessage(one) && flatten(one.text) === flatten(prompt.text))
+
+    if (at < 0) {
+      return prompt
+    }
+
+    from = at + 1
+    const answers = mergeAnswers(prompt.answers ?? [], found[at]?.answers ?? [])
+
+    return answers.length > 0 ? { ...prompt, answers } : prompt
+  })
+}
+
+const rebuild = async ($: EngineInterface, keep: Keep) => {
+  const found = readBack(await $.session.messages(), keep)
+
+  if (found.length > 0) {
+    await update($, prompts, list => merge(list, found))
+  }
 }
 
 // A line cut into lines of at most WIDTH columns, at a space when one is near the end.
@@ -202,7 +422,13 @@ const isStyled = async ($: EngineInterface) => {
 }
 
 const jump = async ($: EngineInterface, id: string) => {
-  const { deny } = await $.ui.scroll({ to: { requestId: id }, block: 'start' })
+  if (id.startsWith(REBUILT)) {
+    $.ui.toast("Can't jump to that message: it was read back from the transcript, which keeps no place for it.")
+
+    return
+  }
+
+  const { deny } = await $.ui.scroll({ to: { requestId: id.replace(PICK, '') }, block: 'start' })
 
   if (deny !== undefined) {
     $.ui.toast(`Can't jump to that message: ${deny}`)
@@ -227,10 +453,15 @@ const toggleHistory = async ($: EngineInterface) => {
 const registerCommand = ($: EngineInterface) =>
   $.command.register({ name: COMMAND, description: 'Open or close the searchable list of your messages' }).catch(() => undefined)
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  const keep = keepOf(options)
+
+  // A start runs again on a resume and on each reload of this module: what the history missed
+  // meanwhile is read back from the transcript.
   on('session.start', async ($, e, next) => {
     styledFound = undefined
     await registerCommand($)
+    $.clock.after(0, () => void rebuild($, keep).catch(() => undefined))
 
     return next(e)
   })
@@ -276,8 +507,13 @@ export const register: Register = on => {
     const sent =
       e.origin.kind === 'plugin' ? (await read($, waiting)).find(one => flatten(textOf(blocks)).includes(flatten(one))) : undefined
     const text = sent ?? (typeof first?.text === 'string' ? first.text : '')
+    const command = commandLine(text)
 
-    if (text.trim() !== '') {
+    if (command !== undefined) {
+      if (keep.commands) {
+        await remember($, stored.uuid, command, 'command')
+      }
+    } else if (text.trim() !== '') {
       await update($, waiting, list => withoutFirst(list, text))
       await remember($, stored.uuid, text)
     }
@@ -293,11 +529,21 @@ export const register: Register = on => {
       return stored
     }
 
-    // Only the text Claude wrote to the person: tool calls, their results and thinking are left out.
-    const text = textOf(stored.message.content.filter((block: Block) => block.type === 'text')).trim()
+    // Only what Claude said to the person: the text, and the tool calls that speak to the person
+    // when kept; the other calls, their results and thinking are left out.
+    const blocks: Block[] = stored.message.content
+    const text = textOf(blocks.filter(block => block.type === 'text')).trim()
 
     if (text !== '') {
       await keepAnswer($, stored.uuid, text)
+    }
+
+    for (const block of blocks.filter(one => one.type === 'tool_use')) {
+      const answer = toolAnswer(stringOf(block.name), (block.input ?? {}) as Record<string, unknown>, keep)
+
+      if (answer !== undefined && typeof block.id === 'string') {
+        await keepAnswer($, block.id, answer.text, answer.kind)
+      }
     }
 
     const lesson = text.match(LEARN)?.[1]?.trim() ?? ''
@@ -308,6 +554,47 @@ export const register: Register = on => {
 
     return stored
   }).catch(($, e, next) => next(e))
+
+  on('session.append', { door: 'tool-result' }, async ($, e, next) => {
+    const stored = await next(e)
+
+    if (!keep.questions || stored.message === undefined || e.agentId !== undefined || e.origin.kind !== 'tool' || e.origin.tool !== 'AskUserQuestion') {
+      return stored
+    }
+
+    for (const block of (stored.message.content as Block[]).filter(one => one.type === 'tool_result')) {
+      const result = resultText(block)
+
+      if (typeof block.tool_use_id === 'string' && result.trim() !== '') {
+        await keepAnswer($, `${block.tool_use_id}${PICK}`, pickText(result), 'pick')
+      }
+    }
+
+    return stored
+  }).catch(($, e, next) => next(e))
+
+  // A slash command's record and what it printed: some are stored as notices, some as the person's rows.
+  for (const door of ['command', 'notice'] as const) {
+    on('session.append', { door }, async ($, e, next) => {
+      const stored = await next(e)
+
+      if (!keep.commands || stored.uuid === undefined || e.agentId !== undefined || stored.message.isMeta) {
+        return stored
+      }
+
+      const text = textOf(stored.message.content)
+      const command = commandLine(text)
+      const output = commandOutput(text)
+
+      if (command !== undefined) {
+        await remember($, stored.uuid, command, 'command')
+      } else if (output !== '') {
+        await keepAnswer($, stored.uuid, output, 'output')
+      }
+
+      return stored
+    }).catch(($, e, next) => next(e))
+  }
 
   for (const door of ['attachment', 'delivery'] as const) {
     on('session.append', { door }, async ($, e, next) => {
@@ -336,7 +623,7 @@ export const register: Register = on => {
       return beneath
     }
 
-    const recent = (await read($, prompts)).filter(isMessage).slice(-BAND_COUNT)
+    const recent = (await read($, prompts)).filter(prompt => isMessage(prompt) && prompt.kind !== 'command').slice(-BAND_COUNT)
     const { Box, Button, Text } = $.ui.resolve(e)
     const width = Math.max(10, e.props.bodyColumns - 4)
 
@@ -455,7 +742,9 @@ export const register: Register = on => {
         {isMessage(prompt) && (prompt.answers ?? []).length === 0 && <Text dimColor>No reply yet.</Text>}
         {(prompt.answers ?? []).map(answer => {
           const isAnswerOpen = open[answer.id] ?? false
-          const label = `${answer.time ?? '--:--'} ${isAnswerOpen ? 'Claude' : truncate(flatten(answer.text), width - 6)}`
+          const by = answer.kind === 'pick' ? 'You' : answer.kind === 'output' ? 'Output' : 'Claude'
+          const said = `${answer.kind === undefined ? '' : `${ANSWER_WORDS[answer.kind]}: `}${flatten(answer.text)}`
+          const label = `${answer.time ?? '--:--'} ${isAnswerOpen ? by : truncate(said, width - 6)}`
 
           return (
             <Box key={`answer-${answer.id}`} flexDirection="column">
