@@ -60,7 +60,7 @@ Needs Git, jq and Claude Code.
    ~/.claude-sync/install.sh            # or: install.sh <machine-name> [dev-folder]
    ```
 
-   It asks for a git name and email for the sync's commits and for the folder that holds your git repos, adds the sync hooks to `~/.claude/settings.json` (the previous file is kept as `settings.json.before-sync`), then saves this computer's config in the repo and pushes it.
+   It asks for a name for this computer (`home-mac`, `work-pc`…: it must differ from your other computers', and a name another computer already reported is refused), a git name and email for the sync's commits and for the folder that holds your git repos, adds the sync hooks to `~/.claude/settings.json` (the previous file is kept as `settings.json.before-sync`), then saves this computer's config in the repo and pushes it.
 3. On each other computer, clone the repo (it now holds the sync too) and run the install:
 
    **macOS / Linux**
@@ -105,7 +105,7 @@ Edits to `~/.claude/settings.json` (from `/config`, permission prompts, by hand)
 
 ## What each computer runs
 
-Every sync (at most every 30 minutes) writes `inventory/<computer>.json` in the repo: the system and its version, the architecture, Claude Code, git, node, jq, gh, python and bash versions, the plugins and mods installed with their versions, each kit cloned in the dev folder (any repo with a `.claude-plugin/marketplace.json` or a kit's `parts.json`: branch, last commit, how far from its upstream, files changed) and the last sync commit. So any computer can tell what the others run and when each last synced:
+Every sync (at most every 30 minutes) writes `inventory/<computer>.json` in the repo: the system and its version, the architecture, Claude Code, git, node, jq, gh, python and bash versions, the plugins and mods installed with their versions, each kit cloned in the dev folder (any repo with a `.claude-plugin/marketplace.json` or a kit's `parts.json`: branch, last commit, how far from its upstream, files changed) and the last sync commit. It also holds the [claude-code-kit](../README.md) parts the installer put there and the answers that computer gave the kit's questions (never a secret), so a new computer can be set up like it. So any computer can tell what the others run and when each last synced:
 
 ```sh
 bash ~/.claude-sync/inventory.sh show    # one block per computer, then what differs between them

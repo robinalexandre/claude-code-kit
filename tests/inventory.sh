@@ -28,9 +28,13 @@ mkdir -p "$HOME/my dev/team-kit" "$HOME/my dev/app"
 echo '{"parts": []}' > "$HOME/my dev/team-kit/parts.json"
 git -C "$HOME/my dev/team-kit" init -q
 git -C "$HOME/my dev/app" init -q
+printf 'language=Français\r\ngit-identity.match2=\nnot an answer\n' > "$HOME/.claude/kit-answers.txt"
+printf '{"parts": {"reminders": {}, "pr-watch": {}}}\n' > "$HOME/.claude/kit-install.json"
 
 I write
 F="$SYNC_DIR/inventory/laptop.json"
+check "the answers to the kit's questions, a blank one kept" '[ "$(jq -c .answers "$F")" = "{\"language\":\"Français\",\"git-identity.match2\":\"\"}" ]'
+check "and the parts install.sh put here" '[ "$(jq -c .kitParts "$F")" = "[\"pr-watch\",\"reminders\"]" ]'
 check "it writes this computer's inventory" '[ "$(jq -r .machine "$F")" = laptop ] && [ -n "$(jq -r .os "$F")" ] && [ -n "$(jq -r .arch "$F")" ]'
 check "with the tools it finds" '[ -n "$(jq -r .tools.bash "$F")" ] && [ "$(jq -r ".tools.jq // empty" "$F")" != "" ]'
 check "the plugins with their version, never their paths" '[ "$(jq -r ".plugins[\"notes@kit\"].version" "$F")" = 1.2.0 ] && ! grep -q secret "$F"'

@@ -86,6 +86,14 @@ To try it first without touching your own setup, `tests/install-sandbox.sh` runs
 
 The sync engine is a part too (`./install.sh config-sync`), added on its own when you pick handoff, daily-sync or reminders: the installer asks for the clone URL of an empty private git repo of your own (any host), clones it to `~/.claude-sync` and sets it up; on your next computer, give the same URL. By hand: [sync/README.md](sync/README.md).
 
+**A new computer like another one:** on a computer whose config isn't synced yet, the installer first asks whether it is synced from another computer, and if so sets up the sync before anything else. Each computer records its answers to the kit's questions in `~/.claude/kit-answers.txt` (never a secret, such as the ntfy topic), and the sync shares them with the parts it installed. So the new computer can be set up:
+
+- **the same as** another one: its parts, and its answers taken as they are. Only secrets and the questions about this computer are asked: its name, its repos folder, the `~/.zshrc` line, the status line it has.
+- **starting from** another one: the checklist and every question, with the other computer's picks and answers filled in, to keep or change.
+- **from scratch**, as before.
+
+A part's setup run later (a plugin's, at its first session) uses the same choice, kept in `~/.claude/kit-reuse.txt`; delete that file to be asked again.
+
 ## What's inside
 
 ### Base rules

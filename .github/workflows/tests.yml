@@ -42,6 +42,7 @@ jobs:
           bash tests/handoff.sh
           bash tests/inventory.sh
           bash tests/sync-install.sh
+          bash tests/kit-answers.sh
       - name: Email guard
         run: bash tests/git-identity-guard.sh
       - name: Install in a sandbox

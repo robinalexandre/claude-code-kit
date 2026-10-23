@@ -1,7 +1,8 @@
 #!/bin/bash
 # What each computer runs, kept in the sync repo so any of them can tell what the others have:
 # the system, Claude Code and tool versions, the plugins and mods installed, each kit clone and
-# when this computer last synced. Written to inventory/<machine>.json at every sync.
+# when this computer last synced, the kit parts it installed and its answers to the kit's questions.
+# Written to inventory/<machine>.json at every sync.
 #   inventory.sh write [--now]   collects this computer's (sync.sh runs it before each save, at
 #                                most every 30 minutes; --now at once)
 #   inventory.sh show     every computer, one block each, then what differs between them
@@ -57,6 +58,16 @@ mods() {
   done | jq -s 'add // {}'
 }
 
+# The answers this computer gave the kit's questions (never a secret: the kit doesn't record those)
+# and the parts install.sh put here, so a computer set up later can be set up like this one.
+answers() {
+  local f="$CLAUDE/kit-answers.txt"
+  [ -f "$f" ] || { echo '{}'; return 0; }
+  tr -d '\r' < "$f" | jq -R -s '[split("\n")[] | capture("^(?<k>[^=]+)=(?<v>.*)$")? | {(.k): .v}] | add // {}' 2> /dev/null || echo '{}'
+}
+
+kit_parts() { jq '.parts // {} | keys' "$CLAUDE/kit-install.json" 2> /dev/null || echo '[]'; }
+
 dev_dir() {
   local d
   d=$(jq -r '.devDir // "~/dev"' "$SYNC/machines/$1.json" 2> /dev/null)
@@ -97,9 +108,9 @@ write() {
     --arg os "$(os_name)" --arg arch "$(uname -m)" --arg kernel "$(uname -sr)" --arg host "$(first_line hostname)" \
     --arg synced "$(git -C "$SYNC" log -1 --format='%h %cs' 2> /dev/null)" \
     --argjson tools "$(tools)" --argjson plugins "$(plugins)" --argjson mods "$(mods)" \
-    --argjson kits "$(kits "$(dev_dir "$machine")")" \
+    --argjson kits "$(kits "$(dev_dir "$machine")")" --argjson answers "$(answers)" --argjson parts "$(kit_parts)" \
     '{machine: $machine, collected: ($at + " " + $zone), host: $host, os: $os, arch: $arch, kernel: $kernel,
-      sync: $synced, tools: $tools, plugins: $plugins, mods: $mods, kits: $kits}' > "$OUT/$machine.json.tmp" &&
+      sync: $synced, tools: $tools, plugins: $plugins, mods: $mods, kits: $kits, kitParts: $parts, answers: $answers}' > "$OUT/$machine.json.tmp" &&
     mv "$OUT/$machine.json.tmp" "$OUT/$machine.json"
 }
 

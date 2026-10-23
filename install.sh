@@ -13,6 +13,8 @@
 # are saved in ~/.claude/backups/before-kit-<date>/. Running it again is safe.
 # What it installed, and from which commit, goes to ~/.claude/kit-install.json: kit-update-check.sh
 # reads it at session start to tell when this clone has changes for them.
+# With the config sync, a new computer can be set up like another one: the same parts and answers,
+# or every question with the other computer's answers filled in (see hooks/lib/ask.sh).
 set -eu
 KIT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 CLAUDE="$HOME/.claude"
@@ -155,6 +157,7 @@ pick_parts() {
       if is_on "$k" && alone "$k"; then sel=${sel//|$k|/|}; fi
     done
   }
+  for p in $from_parts; do if [ -n "$(field "$p" 1)" ]; then turn_on "$p"; fi; done
   toggle_group() {
     local k all=1
     for ((k = $1 + 1; k < ${#row[@]}; k++)); do [ "${kind[k]}" = p ] || break; offered "${row[k]}" && ! is_on "${row[k]}" && all=0; done
@@ -282,6 +285,25 @@ if [ "${1:-}" = --update ]; then
 fi
 
 [ "${1:-}" = --plain ] && { KIT_INSTALL_PLAIN=1; shift; }
+
+# A computer whose config is synced from another one can be set up like it: the sync comes first, then
+# the choice (hooks/lib/ask.sh), which the sync's own questions must not raise halfway.
+if [ -z "$update" ] && [ $# -eq 0 ] && [ -z "${KIT_INSTALL_ANSWERS:-}" ] && kit_tty; then
+  if [ ! -d "$HOME/.claude-sync/.git" ] && [ -n "$(field config-sync 1)" ] &&
+    ask reuse.synced "Is your Claude Code config already synced from another computer (config-sync)? This one can then be set up like it."; then
+    printf '\n== Setting up config-sync\n'
+    KIT_REUSE_ASKING=1 bash "$KIT/sync/setup.sh" || echo "Setting up config-sync stopped; carrying on without it."
+  fi
+  kit_reuse_init
+fi
+from_parts=""
+case "$(kit_reuse_setting mode)" in
+  same | start)
+    from_parts=$(jq -r '(.kitParts // []) + [.plugins // {} | keys[] | select(endswith("@claude-code-kit")) | sub("@.*"; "")] | unique[]' \
+      "$HOME/.claude-sync/inventory/$(kit_reuse_setting from).json" 2> /dev/null | tr -d '\r' || true)
+    ;;
+esac
+
 picked=""
 chose=""
 if [ -n "$update" ]; then
@@ -305,6 +327,9 @@ elif [ $# -gt 0 ]; then
     }
     picked="$picked$p"$'\n'
   done
+elif [ "$(kit_reuse_setting mode)" = same ] && [ -n "$from_parts" ]; then
+  picked=$(for p in $from_parts; do if [ -n "$(field "$p" 1)" ] && offered "$p"; then echo "$p"; fi; done)
+  echo "The same parts as on $(kit_reuse_setting from): $(echo $picked)"
 elif [ -z "${KIT_INSTALL_ANSWERS:-}" ] && [ "${KIT_INSTALL_PLAIN:-}" != 1 ] && [ "${TERM:-dumb}" != dumb ] &&
   (: < /dev/tty) 2> /dev/null; then
   picked=$(pick_parts)
@@ -325,7 +350,7 @@ else
       # A part that goes beside others waits for one of them; else it is recommended after the picks.
       if [ -n "$(with_of "$p")" ] && ! beside "$p" "$picked"; then continue; fi
       describe "$p"
-      if ask "part.$p" "  Install $p?"; then picked="$picked$p"$'\n'; fi
+      if ask "part.$p" "  Install $p?" "$(grep -qx "$p" <<< "$from_parts" && echo y || echo n)"; then picked="$picked$p"$'\n'; fi
     done
   done
 fi
