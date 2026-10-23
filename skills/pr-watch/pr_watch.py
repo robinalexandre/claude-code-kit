@@ -156,19 +156,66 @@ def log_tail(text: str, count: int = 6) -> list[str]:
     return picked[-count:]
 
 
+ETAGS_FILE = CACHE_DIR / "etags.json"
+ETAGS_KEPT = 500
+ETAG_BODY_MAX = 2 * 1024 * 1024
+_ETAGS: dict[str, dict] = {}
+_ETAGS_LOCK = threading.Lock()
+_ETAGS_READ: list[bool] = []
+
+
+def _etag_of(url: str) -> dict | None:
+    """The GitHub answer last read at `url`, with its ETag. Asked again with If-None-Match, an
+    unchanged one comes back as a 304: no body to send, and not counted against the rate limit."""
+    with _ETAGS_LOCK:
+        if not _ETAGS_READ:
+            _ETAGS_READ.append(True)
+            try:
+                _ETAGS.update(json.loads(ETAGS_FILE.read_text(encoding="utf-8")))
+            except (OSError, ValueError):
+                pass
+        return _ETAGS.get(url)
+
+
+def _keep_etag(url: str, etag: str, body: str) -> None:
+    with _ETAGS_LOCK:
+        _ETAGS[url] = {"etag": etag, "body": body, "used": time.time()}
+
+
+def save_etags() -> None:
+    """The answers used most lately, at most ETAGS_KEPT, for the next run."""
+    with _ETAGS_LOCK:
+        if not _ETAGS_READ:
+            return
+        kept = dict(sorted(_ETAGS.items(), key=lambda item: item[1].get("used", 0), reverse=True)[:ETAGS_KEPT])
+    try:
+        save(ETAGS_FILE, kept)
+    except OSError:
+        pass
+
+
 def _http_json(url: str, headers: dict[str, str], method: str = "GET", body: object = None) -> object:
     if body is not None:
         data: bytes | None = json.dumps(body).encode("utf-8")
     else:
         data = b"" if method != "GET" else None
     extra = {"Content-Type": "application/json"} if data is not None else {}
+    cached = _etag_of(url) if method == "GET" and url.startswith("https://api.github.com/") else None
+    if cached is not None:
+        extra["If-None-Match"] = cached["etag"]
     request = urllib.request.Request(url, data=data, method=method,
                                      headers={"Accept": "application/json", **extra, **headers})
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             body = response.read().decode("utf-8")
+            etag = response.headers.get("ETag", "")
+        if etag and method == "GET" and url.startswith("https://api.github.com/") and len(body) <= ETAG_BODY_MAX:
+            _keep_etag(url, etag, body)
     except urllib.error.HTTPError as error:
-        raise WatchError(f"{url.split('?')[0]}: HTTP {error.code}") from error
+        if error.code != 304 or cached is None:
+            raise WatchError(f"{url.split('?')[0]}: HTTP {error.code}") from error
+        body = cached["body"]
+        _keep_etag(url, cached["etag"], body)
     except urllib.error.URLError as error:
         raise WatchError(f"{url.split('?')[0]}: {error.reason}") from error
     if not body.strip():
@@ -862,18 +909,22 @@ class GitHub:
         return _http_json(f"{self.base}/{path}", {"X-GitHub-Api-Version": "2022-11-28", **self.headers})
 
     def me(self) -> str:
-        if not self.headers:
-            return ""
-        return _http_json("https://api.github.com/user", self.headers)["login"]  # type: ignore[index]
+        return _github_me(self.headers) if self.headers else ""
 
     def snapshot(self) -> dict:
         pr = self.get(f"pulls/{self.id}")
         assert isinstance(pr, dict)
+        paths = {"issue": f"issues/{self.id}/comments?per_page=100",
+                 "review": f"pulls/{self.id}/comments?per_page=100",
+                 "summary": f"pulls/{self.id}/reviews?per_page=100"}
+        # All at once: each GitHub request waits about half a second.
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            checks = pool.submit(self.checks, pr["head"]["sha"])
+            found = dict(zip(paths, pool.map(self.get, paths.values())))
+            checks = checks.result()
         comments = {}
-        for kind, path in (("issue", f"issues/{self.id}/comments?per_page=100"),
-                           ("review", f"pulls/{self.id}/comments?per_page=100"),
-                           ("summary", f"pulls/{self.id}/reviews?per_page=100")):
-            for item in self.get(path):  # type: ignore[union-attr]
+        for kind in paths:
+            for item in found[kind]:  # type: ignore[union-attr]
                 if kind == "summary" and not item.get("body"):
                     continue
                 # A deleted account comes back as `"user": null`.
@@ -884,23 +935,24 @@ class GitHub:
                     "text": (item.get("body") or "")[:EXCERPT],
                     "file": item.get("path"),
                 }
-        reviews = self.get(f"pulls/{self.id}/reviews?per_page=100")
         votes = {(r.get("user") or {}).get("login") or "ghost": r["state"].lower().replace("_", " ")
-                 for r in reviews if r.get("state") in {"APPROVED", "CHANGES_REQUESTED"}}  # type: ignore[union-attr]
+                 for r in found["summary"] if r.get("state") in {"APPROVED", "CHANGES_REQUESTED"}}  # type: ignore[union-attr]
         status = "merged" if pr.get("merged_at") else pr["state"]
         return {"title": pr["title"], "description": (pr.get("body") or "")[:DESCRIPTION], "status": status,
                 "target": pr["base"]["ref"], "source": pr["head"]["ref"],
                 "conflicts": pr.get("mergeable_state") == "dirty", "votes": votes, "comments": comments,
-                "checks": self.checks(pr["head"]["sha"])}
+                "checks": checks}
 
     def checks(self, sha: str) -> dict[str, dict]:
         """Check runs (GitHub Actions and apps) and commit statuses on the PR's head commit."""
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            runs, statuses = pool.map(self.get, (f"commits/{sha}/check-runs?per_page=100", f"commits/{sha}/status"))
         checks = {}
-        for run in self.get(f"commits/{sha}/check-runs?per_page=100")["check_runs"]:  # type: ignore[index]
+        for run in runs["check_runs"]:  # type: ignore[index]
             state = run["conclusion"] if run["status"] == "completed" else run["status"]
             checks[run["name"]] = {"state": GITHUB_STATES.get(state, state), "required": None,
                                    "link": run.get("html_url"), "run": run["id"]}
-        for status in self.get(f"commits/{sha}/status")["statuses"]:  # type: ignore[index]
+        for status in statuses["statuses"]:  # type: ignore[index]
             checks[status["context"]] = {"state": GITHUB_STATES.get(status["state"], status["state"]),
                                          "required": None, "link": status.get("target_url")}
         return checks
@@ -1371,10 +1423,15 @@ def hosts_due(mode: str, entries: list[tuple[Path, dict]]) -> list[str]:
 def fetch_section(host: str, entries: list[tuple[Path, dict]]) -> tuple[dict | None, list[str]]:
     """Everything on one host now, as its shared section, or None when the host did not answer this
     computer (every lookup failed); the errors."""
-    _, errors = auto_track(entries, (host,))
-    fetched = fetch_all([(path, entry) for path, entry in list(entries) if host_of(entry["url"]) == host])
-    reviews, review_errors = fetch_review_requests(entries, (host,))
-    builds, build_errors = fetch_builds(entries, (host,))
+    mine = [(path, entry) for path, entry in entries if host_of(entry["url"]) == host]
+    # The four lookups at once: each waits on the host far more than it computes.
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        tracking = pool.submit(auto_track, entries, (host,))
+        fetching = pool.submit(fetch_all, mine)
+        asking = pool.submit(fetch_review_requests, entries, (host,))
+        listing = pool.submit(fetch_builds, entries, (host,))
+        (_, errors), fetched = tracking.result(), fetching.result()
+        (reviews, review_errors), (builds, build_errors) = asking.result(), listing.result()
     errors += [f"{entry['url']}: {error}" for _, entry, _, _, error in fetched if error] + review_errors + build_errors
     answered = not errors or any(now is not None for _, _, now, _, _ in fetched) \
         or any(not build.get("stale") for build in builds)
@@ -1974,6 +2031,8 @@ def main(argv: list[str]) -> int:
     except (KeyError, TypeError, AttributeError) as error:
         print(f"pr-watch: unexpected answer from the host ({error!r})", file=sys.stderr)
         return 1
+    finally:
+        save_etags()
     return 0
 
 

@@ -35,6 +35,7 @@ Hooks in the shared settings run `sync.sh`:
 - **Session start:** shows open handoff notes from the other computers, then syncs in the background. `sync.sh fresh` lets a skill wait for that sync in the background (the reminders skill does).
 - **Every morning** (with the [daily-sync](../skills/daily-sync/SKILL.md) skill): `sync.sh morning` syncs, then runs each `~/.claude/skills/*/morning.sh` (the [reminders](../skills/reminders/SKILL.md) skill notifies the day's reminders).
 - **After each reply and at session end:** copies local changes into the repo, commits, pulls with a rebase, applies what came from the other computers, pushes. All in the background.
+- **Every minute while a session is open** (with the [reminders-handoffs](../mods/reminders-handoffs) pane): `sync.sh poll` asks the remote whether `main` moved (one `git ls-remote`, any host; one check per computer however many sessions are open) and syncs only when another computer pushed, so a reminder or a handoff written there shows here within a minute.
 
 A change shows up on the other computer in its next session. A session that is already open keeps the `CLAUDE.md` it started with.
 

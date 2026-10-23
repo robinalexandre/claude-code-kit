@@ -271,6 +271,25 @@ const syncNow = async ($: EngineInterface) => {
   return $.process.run([await bash($), '-c', `[ -f "${sync}" ] && bash "${sync}" now`], { timeoutMs: 120_000 }).catch(() => undefined)
 }
 
+// Every minute the sync asks the remote whether another computer pushed (sync.sh poll: one cheap
+// request, and one check per computer however many sessions ask); what it brings shows at once.
+const POLL_EVERY_MS = 60_000
+let nextPoll: { cancel: () => void } | undefined
+
+const poll = async ($: EngineInterface) => {
+  nextPoll?.cancel()
+  nextPoll = $.clock.after(POLL_EVERY_MS, () => void poll($).catch(() => undefined))
+  const sync = `${await home($)}/.claude-sync/sync.sh`
+  const ran = await $.process
+    .run([await bash($), '-c', `[ -f "${sync}" ] && bash "${sync}" poll`], { timeoutMs: 120_000 })
+    .catch(() => undefined)
+
+  if (ran?.stdout.includes('main moved')) {
+    loadedAt = await $.clock.now()
+    await load($)
+  }
+}
+
 // The other computers get the change with the next sync; it runs in the background.
 const shareChange = async ($: EngineInterface) => {
   void syncNow($)
@@ -429,6 +448,8 @@ const start = async ($: EngineInterface) => {
   loadedAt = Number.NEGATIVE_INFINITY
   styledFound = undefined
   void reload($).catch(() => undefined)
+  nextPoll?.cancel()
+  nextPoll = $.clock.after(POLL_EVERY_MS, () => void poll($).catch(() => undefined))
 }
 
 export const register: Register = on => {

@@ -36,7 +36,7 @@ const NOTE = {
   body: '## Next steps\nRun the job.',
 }
 
-type World = { reminders: object[]; handoffs: object[]; installed: string[] }
+type World = { reminders: object[]; handoffs: object[]; installed: string[]; hasRemoteMoved?: boolean }
 
 const answerBeneath = (on: On, world: World, calls: string[][], submitted: string[] = [], isNameTaken = false) => {
   const clock = mock.clock(on)
@@ -49,6 +49,10 @@ const answerBeneath = (on: On, world: World, calls: string[][], submitted: strin
   on('process.run', ($, e) => {
     calls.push([...e.argv])
     const [, path, action] = e.argv
+
+    if (path === '-c' && action.endsWith(' poll')) {
+      return ran(0, world.hasRemoteMoved ? 'main moved: syncing\n' : '')
+    }
 
     if (action !== 'json') {
       return ran(0, '')
@@ -76,6 +80,32 @@ const closingBars = async (pane: { findAll: (query: { type: string }) => Promise
   (await pane.findAll({ type: 'Box' })).filter(box => box.props?.display === 'none' && box.props?.backgroundColor === 'suggestion').length
 
 const mountBand = ($: Engine) => $.ui.mount({ plugin: 'reminders-handoffs', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
+
+test('every minute the sync asks whether another computer pushed, and what it brings shows at once', async ($, on) => {
+  const calls: string[][] = []
+  const world: World = { reminders: [], handoffs: [], installed: [REMINDERS] }
+  const clock = answerBeneath(on, world, calls)
+
+  await $.session.start(START)
+  await $.command.run(command('reminders-pane'))
+  const pane = await mountPane($)
+
+  expect(await pane.find({ text: '▸ Upcoming (1)' })).toBeUndefined()
+
+  // Nothing pushed elsewhere: asked, nothing read again.
+  await clock.advance(60_000)
+  const polls = () => calls.filter(argv => argv[1] === '-c' && argv[2].endsWith(' poll')).length
+
+  expect(polls()).toBe(1)
+  expect(await pane.find({ text: '▸ Upcoming (1)' })).toBeUndefined()
+
+  world.reminders = [LATER]
+  world.hasRemoteMoved = true
+  await clock.advance(60_000)
+
+  expect(polls()).toBe(2)
+  expect(await pane.find({ text: '▸ Upcoming (1)' })).toBeDefined()
+})
 
 test('/reminders lists them by section, done closes a repeating one for today', async ($, on) => {
   const calls: string[][] = []

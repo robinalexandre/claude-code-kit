@@ -5,6 +5,7 @@
 #   now      syncs right away and says what happened
 #   fresh    syncs and waits for it, unless a sync already succeeded today
 #   morning  the scheduled daily run: syncs, then runs each ~/.claude/skills/*/morning.sh
+#   poll     asks the remote whether main moved; syncs only when it did (panes call it every minute)
 #   status   shows this machine's sync state
 #   install  first run on a machine: backs up ~/.claude, then copies the repo's config into it
 #   init     first run ever: copies this machine's config into an empty repo
@@ -59,6 +60,22 @@ case "${1:-}" in
     ;;
   fresh)
     [ "$(cat "$STATE/fresh-day" 2> /dev/null)" = "$(date +%Y-%m-%d)" ] && exit 0
+    ;;
+  poll)
+    # One light request before any setup, one check per POLL_EVERY_SEC for the whole computer
+    # (every open session asks): a sync runs only when another computer pushed.
+    POLL_EVERY_SEC=50
+    mkdir -p "$STATE"
+    now=$(date +%s)
+    last=$(cat "$STATE/poll-at" 2> /dev/null)
+    [ $((now - ${last:-0})) -ge "$POLL_EVERY_SEC" ] || exit 0
+    echo "$now" > "$STATE/poll-at"
+    remote=$(GIT_TERMINAL_PROMPT=0 GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=10 \
+      git -C "$SYNC" ls-remote origin refs/heads/main 2> /dev/null | cut -f1)
+    known=$(git -C "$SYNC" rev-parse -q --verify refs/remotes/origin/main 2> /dev/null)
+    [ -n "$remote" ] && [ "$remote" != "$known" ] || exit 0
+    echo "main moved: syncing"
+    exec bash "$SYNC/sync.sh" run force
     ;;
 esac
 case "${1:-}" in
