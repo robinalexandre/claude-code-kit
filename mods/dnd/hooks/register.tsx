@@ -1,14 +1,17 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { DndActive, DndData, DndPart, DndPartRule, DndProfile, DndRule } from '../types'
+import type { DndActive, DndData, DndPart, DndPartRule, DndProfile, DndRule, ModSetting, ModsData } from '../types'
 
 // The Configuration pane, a tab per thing set up from it; do not disturb is the first.
 const PANE = 'configuration'
 const TITLE = 'Configuration'
 const COMMAND = 'dnd'
 const PANE_COMMAND = 'configuration'
-const TABS = [{ id: 'dnd', title: 'Do not disturb' }]
+const TABS = [
+  { id: 'dnd', title: 'Do not disturb' },
+  { id: 'mods', title: 'Mods' },
+]
 const TICK_MS = 60_000
 // Under the pointer, what folds turns to the theme's suggestion color with the text drawn on it in
 // the theme's inverse text color: readable in a light and a dark theme alike.
@@ -24,6 +27,8 @@ const unfolded = atom({ plugin: 'dnd', key: 'unfolded' } as const, {})
 const armed = atom({ plugin: 'dnd', key: 'armed' } as const, '')
 const busy = atom({ plugin: 'dnd', key: 'busy' } as const, false)
 const tab = atom({ plugin: 'dnd', key: 'tab' } as const, 'dnd')
+const mods = atom({ plugin: 'dnd', key: 'mods' } as const, null)
+const modsScope = atom({ plugin: 'dnd', key: 'modsScope' } as const, 'all')
 
 const PARTS: { part: DndPart; title: string }[] = [
   { part: 'history', title: 'History' },
@@ -164,14 +169,25 @@ const refresh = async ($: EngineInterface) => {
   }
 }
 
+// Profile edits made from the pane, written one after another; `edits` counts every one queued, so
+// a read started before the last of them knows it is stale.
+let edits = 0
+let writes: Promise<unknown> = Promise.resolve()
+
 // Profiles, rules and the names each part lists, for the pane.
 const load = async ($: EngineInterface) => {
+  const since = edits
+
   try {
     const ran = await run($, ['json', slashed(await $.session.cwd()), ...(await forSession($))])
 
     if (ran.exitCode !== 0) {
       await update($, problem, () => ran.said)
 
+      return
+    }
+
+    if (since !== edits) {
       return
     }
 
@@ -206,6 +222,28 @@ const change = async ($: EngineInterface, args: string[], quiet = false) => {
   }
 }
 
+// One part of a profile set from the pane: shown at once, written behind, everything read again
+// once the last press is written. Reading it all takes seconds; a press must not wait for it.
+const editPart = ($: EngineInterface, profile: string, part: DndPart, rule: DndPartRule) => {
+  const mine = ++edits
+
+  void update($, data, all => (all === null ? all : { ...all, profiles: { ...all.profiles, [profile]: { ...all.profiles[profile], [part]: rule } } }))
+  writes = writes.then(async () => {
+    const ran = await run($, ['set', profile, part, rule.mode ?? 'show', ...(rule.mode === 'only' ? rule.only ?? [] : [])]).catch(error => ({
+      exitCode: 1,
+      said: String(error).split('\n')[0] ?? '',
+    }))
+
+    if (ran.exitCode !== 0) {
+      $.ui.toast(`DnD: ${ran.said}`)
+    }
+
+    if (mine === edits) {
+      await load($)
+    }
+  })
+}
+
 const turnOn = async ($: EngineInterface, profile: string, length: string, scope: 'session' | 'computer') => {
   await update($, pending, () => '')
   await change($, ['on', profile, ...(length !== '' ? [length] : []), ...(scope === 'session' ? await forSession($) : [])])
@@ -218,9 +256,133 @@ const turnOff = async ($: EngineInterface) => {
   await change($, ['off'])
 }
 
+// The Mods tab. A change for every computer is a /config change, which the private sync shares;
+// one for this computer alone is also written to the sync's machine file, whose settings win
+// over the shared ones at each sync, so the shared value stays for the other computers.
+type Json = Record<string, unknown>
+
+const home = async ($: EngineInterface) => slashed((await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE')) ?? '~')
+
+const settingsFile = async ($: EngineInterface) => {
+  const dir = await $.env.get('CLAUDE_CONFIG_DIR')
+
+  return `${dir ? slashed(dir) : `${await home($)}/.claude`}/settings.json`
+}
+
+const readJson = async ($: EngineInterface, path: string): Promise<Json> => {
+  try {
+    const parsed: unknown = JSON.parse(await $.fs.read(path))
+
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Json) : {}
+  } catch {
+    return {}
+  }
+}
+
+const objectAt = (value: unknown): Json => (value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Json) : {})
+
+// This computer's file in the private sync, '' when there is no sync to keep a setting apart in.
+const machineFile = async ($: EngineInterface) => {
+  const sync = `${await home($)}/.claude-sync`
+
+  try {
+    const machine = (await $.fs.read(`${sync}/.machine`)).trim()
+    const file = `${sync}/machines/${machine}.json`
+
+    return machine !== '' && (await $.fs.exists(file)) ? { machine, file } : { machine: '', file: '' }
+  } catch {
+    return { machine: '', file: '' }
+  }
+}
+
+// Settings name a plugin's options by its name, with or without `@<where it comes from>`.
+const configKeyOf = (configs: Json, plugin: string) => Object.keys(configs).find(key => key === plugin || key.startsWith(`${plugin}@`))
+
+const overlayValue = (overlay: Json, plugin: string, field: string) => {
+  const configs = objectAt(objectAt(overlay.settings).pluginConfigs)
+  const key = configKeyOf(configs, plugin)
+
+  return key === undefined ? undefined : objectAt(objectAt(configs[key]).options)[field]
+}
+
+const loadMods = async ($: EngineInterface) => {
+  const { machine, file } = await machineFile($)
+  const overlay = file === '' ? {} : await readJson($, file)
+  const settings = (await $.config.list())
+    .filter(row => row.provider.tier === 'user' && row.key.includes('.'))
+    .map((row): ModSetting => {
+      const plugin = row.key.slice(0, row.key.indexOf('.'))
+      const field = row.key.slice(plugin.length + 1)
+
+      return {
+        key: row.key,
+        plugin,
+        field,
+        label: row.label,
+        ...(row.description ? { description: row.description } : {}),
+        kind: row.kind,
+        value: Array.isArray(row.value) ? [...row.value] : (row.value as ModSetting['value']),
+        ...(row.options ? { options: [...row.options] } : {}),
+        isLocked: row.isLocked,
+        isHere: overlayValue(overlay, plugin, field) !== undefined,
+      }
+    })
+
+  await update($, mods, () => ({ settings, machine }))
+}
+
+// Writes the field's value into the machine file, or takes it out (undefined), leaving no empty object behind.
+const writeOverlay = async ($: EngineInterface, file: string, setting: ModSetting, value: ModSetting['value'] | undefined) => {
+  const overlay = await readJson($, file)
+  const settings = objectAt(overlay.settings)
+  const configs = objectAt(settings.pluginConfigs)
+  const local = await readJson($, await settingsFile($))
+  const key = configKeyOf(objectAt(local.pluginConfigs), setting.plugin) ?? configKeyOf(configs, setting.plugin) ?? setting.plugin
+  const entry = objectAt(configs[key])
+  const { [setting.field]: _dropped, ...others } = objectAt(entry.options)
+  const options = value === undefined ? others : { ...others, [setting.field]: value }
+  const { options: _old, ...entryRest } = entry
+  const nextEntry = Object.keys(options).length > 0 ? { ...entryRest, options } : entryRest
+  const { [key]: _was, ...otherConfigs } = configs
+  const nextConfigs = Object.keys(nextEntry).length > 0 ? { ...otherConfigs, [key]: nextEntry } : otherConfigs
+  const { pluginConfigs: _configs, ...settingsRest } = settings
+  const nextSettings = Object.keys(nextConfigs).length > 0 ? { ...settingsRest, pluginConfigs: nextConfigs } : settingsRest
+
+  await $.fs.write(file, `${JSON.stringify({ ...overlay, settings: nextSettings }, null, 2)}\n`)
+}
+
+// For this computer, /config writes first so the machine file names the plugin as settings.json
+// does; for every computer, the machine file lets go first so the sync shares the new value.
+const setMod = async ($: EngineInterface, setting: ModSetting, value: ModSetting['value']) => {
+  const { file } = await machineFile($)
+  const isHere = file !== '' && (await read($, modsScope)) === 'here'
+
+  try {
+    if (file !== '' && !isHere && setting.isHere) {
+      await writeOverlay($, file, setting, undefined)
+    }
+
+    const { deny } = await $.config.set({ key: setting.key, value })
+
+    if (deny !== undefined) {
+      $.ui.toast(`Could not change ${setting.label}: ${deny}`)
+    } else if (isHere) {
+      await writeOverlay($, file, setting, value)
+    }
+  } catch (error) {
+    $.ui.toast(`Could not change ${setting.label}: ${String(error).split('\n')[0] ?? ''}`)
+  } finally {
+    await loadMods($)
+  }
+}
+
 const openPane = async ($: EngineInterface) => {
   await $.ui.open({ id: PANE, title: TITLE, columns: 64 })
   await load($)
+
+  if ((await read($, tab)) === 'mods') {
+    await loadMods($)
+  }
 }
 
 const isLength = (word: string) => /^(\d+[mhd]|\d{1,2}:\d{2})$/.test(word)
@@ -292,12 +454,6 @@ const ruleText = (rule: DndRule) =>
   ]
     .filter(part => part !== '')
     .join(', ')
-
-const nextMode = (part: DndPart, mode: DndPartRule['mode']): 'show' | 'hide' | 'only' =>
-  mode === 'hide' ? (part === 'history' ? 'show' : 'only') : mode === 'only' ? 'show' : 'hide'
-
-const modeText = (rule: DndPartRule | undefined) =>
-  rule?.mode === 'hide' ? 'hidden' : rule?.mode === 'only' ? 'only the ones checked' : 'everything'
 
 let ticking: (() => void) | undefined
 
@@ -461,21 +617,31 @@ export const register: Register = on => {
       )
     }
 
-    // One part of a profile: its mode, which a press changes, and for `only` the names to check.
+    // One part of a profile: a button per mode, the one on lit; `only` lists the names to check:
+    // the session's folder, the ones checked, what the part lists now, then every repo and folder.
     const partBlock = (name: string, profile: DndProfile, part: DndPart, title: string) => {
       const rule = profile[part]
       const mode = rule?.mode ?? 'show'
       const kept = rule?.only ?? []
-      const names = [HERE, ...kept, ...(shown?.known[part] ?? [])].filter(
-        (one, index, all) => all.findIndex(other => other.toLowerCase() === one.toLowerCase()) === index
+      const lastPart = (one: string) => one.toLowerCase().replace(/^.*\//, '')
+      const names = [HERE, ...kept, ...(shown?.known[part] ?? []), ...(shown?.workspaces ?? [])].filter(
+        (one, index, all) => all.findIndex(other => lastPart(other) === lastPart(one)) === index
       )
-      const setRule = (nextRule: DndPartRule) =>
-        void change($, ['set', name, part, nextRule.mode ?? 'show', ...(nextRule.mode === 'only' ? nextRule.only ?? [] : [])], true)
+      const setRule = (nextRule: DndPartRule) => editPart($, name, part, nextRule)
+      const modes: ['show' | 'hide' | 'only', string][] = part === 'history' ? [['show', 'show'], ['hide', 'hide']] : [['show', 'all'], ['hide', 'hide'], ['only', 'only…']]
 
       return (
         <Box key={`part-${name}-${part}`} flexDirection="column" paddingLeft={4}>
-          <Box flexDirection="row" hover={LIT_BOX}>
-            <Button key={`mode-${name}-${part}`} label={`${title}: ${modeText(rule)}`} plain hover={LIT_TEXT} onPress={() => setRule({ mode: nextMode(part, mode), only: kept })} />
+          <Box flexDirection="row" gap={1}>
+            <Text>{`${title}:`}</Text>
+            {modes.map(([one, label]) => (
+              <Button
+                key={`mode-${name}-${part}-${one}`}
+                label={label}
+                {...(one === mode ? { variant: 'primary' as const } : { plain: true as const, dimColor: true })}
+                onPress={() => one !== mode && setRule({ mode: one, only: kept })}
+              />
+            ))}
           </Box>
           {mode === 'only' &&
             names.map(one => {
@@ -532,66 +698,48 @@ export const register: Register = on => {
       )
     }
 
+    // A profile's line says what it hides and whether a rule turns it on; its text opens the editor.
     const profileRow = (name: string, profile: DndProfile) => {
       const key = `profile|${name}`
       const isOpen = open[key] ?? false
       const isCurrent = now?.profile === name
+      const ruled = rulesOf(name).length > 0 ? ' (rule)' : ''
       const buttons = [
         isCurrent ? (
           <Text key={`on-${name}`} color="green">on</Text>
         ) : (
           <Button key={`use-${name}`} label="use" onPress={() => void update($, pending, () => `${name}|`)} />
         ),
+        <Button key={`edit-${name}`} label={isOpen ? 'done' : 'edit'} dimColor={!isOpen} onPress={() => toggle(key)} />,
         confirmButton(`delete|${name}`, 'delete', () => void change($, ['delete', name])),
       ]
 
       return (
         <Box key={`row-${name}`} flexDirection="column" paddingLeft={2}>
-          {foldLine(key, `${name} · ${summary(profile)}`, isOpen, buttons, 16)}
+          {foldLine(key, `${name}${ruled} · ${summary(profile)}`, isOpen, buttons, 24)}
           {isOpen && PARTS.map(({ part, title }) => partBlock(name, profile, part, title))}
           {isOpen && rulesBlock(name)}
         </Box>
       )
     }
 
-    // Profiles filed by how they turn on: by a rule, or by hand only.
     const profilesSection = () => {
-      const isOpen = open.profiles ?? false
       const entries = Object.entries(shown?.profiles ?? {})
-      const groups: [string, [string, DndProfile][]][] = [
-        ['Turned on by a rule', entries.filter(([name]) => rulesOf(name).length > 0)],
-        ['By hand only', entries.filter(([name]) => rulesOf(name).length === 0)],
-      ]
 
       return (
         <Box key="profiles" flexDirection="column" marginTop={1}>
-          {foldLine('profiles', `Profiles (${entries.length})`, isOpen)}
-          {isOpen &&
-            groups
-              .filter(([, members]) => members.length > 0)
-              .map(([title, members]) => {
-                const key = `group|${title}`
-                const isGroupOpen = open[key] ?? false
-
-                return (
-                  <Box key={key} flexDirection="column" paddingLeft={2}>
-                    {foldLine(key, `${title} (${members.length})`, isGroupOpen)}
-                    {isGroupOpen && members.map(([name, profile]) => profileRow(name, profile))}
-                  </Box>
-                )
-              })}
+          <Text bold>{`Profiles (${entries.length})`}</Text>
+          {entries.map(([name, profile]) => profileRow(name, profile))}
         </Box>
       )
     }
 
-    // A new profile opens where it is filed, ready to pick what it keeps.
+    // A new profile opens in its editor, ready to pick what it keeps.
     const create = (value: string) => {
       const name = value.trim().replace(/\s+/g, '-')
 
       if (name !== '' && name !== 'none') {
-        void change($, ['set', name, 'history', 'show'], true).then(() =>
-          update($, unfolded, all => ({ ...all, profiles: true, [`profile|${name}`]: true, ['group|By hand only']: true }))
-        )
+        void change($, ['set', name, 'history', 'show'], true).then(() => update($, unfolded, all => ({ ...all, [`profile|${name}`]: true })))
       }
     }
 
@@ -622,14 +770,127 @@ export const register: Register = on => {
 
     const isManual = now?.scope === 'session' || now?.scope === 'computer'
     const currentTab = await read($, tab)
+    const modsShown = await read($, mods)
+    const scope = await read($, modsScope)
+
+    const showTab = (id: string) => {
+      void update($, tab, () => id)
+
+      if (id === 'mods') {
+        void loadMods($)
+      }
+    }
+
+    // One setting: a press flips a toggle or moves a choice on; a text or a number is typed.
+    const settingRow = (setting: ModSetting) => {
+      const where = setting.isHere ? ' (this computer)' : ''
+      const title = `${setting.label}${where}`
+
+      if (setting.isLocked) {
+        return <Text key={`setting-${setting.key}`} dimColor>{truncate(`${title}: ${String(setting.value)} (locked)`, width - 4)}</Text>
+      }
+
+      if (setting.kind === 'boolean') {
+        return (
+          <Box key={`setting-${setting.key}`} flexDirection="row" hover={LIT_BOX}>
+            <Button
+              key={`set-${setting.key}`}
+              label={`${setting.value === true ? '[x]' : '[ ]'} ${truncate(title, width - 8)}`}
+              plain
+              hover={LIT_TEXT}
+              onPress={() => void setMod($, setting, setting.value !== true)}
+            />
+          </Box>
+        )
+      }
+
+      if (setting.kind === 'choice') {
+        const options = setting.options ?? []
+        const following = options[(options.indexOf(String(setting.value)) + 1) % Math.max(1, options.length)] ?? ''
+
+        return (
+          <Box key={`setting-${setting.key}`} flexDirection="row" hover={LIT_BOX}>
+            <Button
+              key={`set-${setting.key}`}
+              label={truncate(`${title}: ${String(setting.value)}`, width - 4)}
+              plain
+              hover={LIT_TEXT}
+              onPress={() => void setMod($, setting, following)}
+            />
+          </Box>
+        )
+      }
+
+      return (
+        <Input
+          key={`set-${setting.key}`}
+          label={`${truncate(title, Math.floor(width / 2))} `}
+          value={String(setting.value)}
+          submitLabel="save"
+          onSubmit={(typed: string) => void setMod($, setting, setting.kind === 'number' ? Number(typed) : typed)}
+        />
+      )
+    }
+
+    const modsTab = () => {
+      if (modsShown === null) {
+        return <Text dimColor>Loading…</Text>
+      }
+
+      const plugins = [...new Set(modsShown.settings.map(setting => setting.plugin))]
+
+      return (
+        <Box flexDirection="column">
+          {modsShown.machine !== '' ? (
+            <Box flexDirection="row" gap={1}>
+              <Text>Changes apply to</Text>
+              <Button key="scope-all" label="all computers" dimColor={scope !== 'all'} onPress={() => void update($, modsScope, () => 'all')} />
+              <Button key="scope-here" label={`this computer only (${modsShown.machine})`} dimColor={scope !== 'here'} onPress={() => void update($, modsScope, () => 'here')} />
+            </Box>
+          ) : (
+            <Text dimColor>Changes apply to this computer: there is no private sync to share them.</Text>
+          )}
+          {plugins.length === 0 && <Text dimColor>No mod has settings.</Text>}
+          {plugins.map(plugin => {
+            const key = `mod|${plugin}`
+            const isOpen = open[key] ?? true
+            const settings = modsShown.settings.filter(setting => setting.plugin === plugin)
+
+            return (
+              <Box key={key} flexDirection="column" marginTop={1}>
+                {foldLine(key, `${plugin} (${settings.length})`, isOpen)}
+                {isOpen && (
+                  <Box flexDirection="column" paddingLeft={2}>
+                    {settings.map(settingRow)}
+                  </Box>
+                )}
+              </Box>
+            )
+          })}
+        </Box>
+      )
+    }
+
+    const tabRow = (
+      <Box flexDirection="row" gap={2} marginBottom={1}>
+        {TABS.map(one => (
+          <Button key={`tab-${one.id}`} label={one.title} plain dimColor={one.id !== currentTab} onPress={() => showTab(one.id)} />
+        ))}
+      </Box>
+    )
+
+    if (currentTab === 'mods') {
+      return (
+        <Box flexDirection="column">
+          {tabRow}
+          {modsTab()}
+        </Box>
+      )
+    }
 
     return (
       <Box flexDirection="column">
-        <Box flexDirection="row" gap={2} marginBottom={1}>
-          {TABS.map(one => (
-            <Button key={`tab-${one.id}`} label={one.title} plain dimColor={one.id !== currentTab} onPress={() => void update($, tab, () => one.id)} />
-          ))}
-        </Box>
+        {tabRow}
         <Text dimColor={now?.profile === ''}>{status()}</Text>
         <Box flexDirection="row" justifyContent="flex-end">
           <Box flexDirection="row" gap={1}>

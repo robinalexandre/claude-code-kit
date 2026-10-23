@@ -34,10 +34,31 @@ export type DndData = {
   active: DndActive
   /** By part: the names it lists now, offered in a profile's checklist. */
   known: Partial<Record<DndPart, string[]>>
+  /** Every repo and folder worked in (the config sync's, the dev folder's), offered in every checklist. */
+  workspaces?: string[]
   /** The Wi-Fi network this computer is on, '' when none or unknown. */
   wifi: string
   file: string
 }
+
+/** One setting a mod declares (its manifest's userConfig), as the /config menu holds it. */
+export type ModSetting = {
+  /** `<plugin>.<field>`, as `$.config.set` takes it. */
+  key: string
+  plugin: string
+  field: string
+  label: string
+  description?: string
+  kind: 'boolean' | 'choice' | 'text' | 'number'
+  value: boolean | string | number | string[]
+  options?: string[]
+  isLocked: boolean
+  /** Kept for this computer alone, in the private sync's machine file, over the shared value. */
+  isHere: boolean
+}
+
+/** The Mods tab: every user mod's settings, and this computer's name in the private sync ('' with none). */
+export type ModsData = { settings: ModSetting[]; machine: string }
 
 declare module 'claude-code' {
   interface PluginState {
@@ -59,6 +80,10 @@ declare module 'claude-code' {
       busy: boolean
       /** The Configuration pane's tab shown. */
       tab: string
+      /** The Mods tab's settings; null before the tab is first read. */
+      mods: ModsData | null
+      /** Where a change made in the Mods tab goes: every computer, or this one alone. */
+      modsScope: 'all' | 'here'
     }
   }
 }

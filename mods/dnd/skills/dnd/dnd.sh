@@ -4,8 +4,9 @@
 #   dnd.sh active [DIR]                the profile on now for a session in DIR, as JSON; a part kept
 #                                      `only` some names also lists them in `keep`, as the panes
 #                                      match them: lowercase, the last part of a path, @here resolved
-#   dnd.sh json [DIR]                  profiles, rules, the switches, what is on and the names each
-#                                      part lists now, as JSON (the pane)
+#   dnd.sh json [DIR]                  profiles, rules, the switches, what is on, the names each
+#                                      part lists now and every repo and folder worked in
+#                                      (workspaces), as JSON (the pane)
 #   dnd.sh list                        profiles and rules, in words
 #   dnd.sh on PROFILE [FOR]            turns PROFILE on for this computer, over the rules; FOR: 30m,
 #                                      2h, 1d, or HH:MM to end then; without it, until `off`
@@ -245,6 +246,33 @@ known() {
   return 0
 }
 
+# workspaces: every repo and folder worked in, offered in each checklist beside what the parts list
+# now: the config sync's repos (owner/repo, an Azure DevOps one project/repo) and folders, and the
+# git repos in the dev folder ($CLAUDE_DEV_ROOT, else ~/dev) and one level under it, worktrees
+# left out. One name per repo: the panes match on its last part.
+workspaces() {
+  local dev=${CLAUDE_DEV_ROOT:-$HOME/dev} d
+  {
+    if [ -d "$SYNC/repos" ]; then
+      (
+        cd "$SYNC/repos" || exit 0
+        for d in */*/*/ */*/*/_git/*/; do
+          [ -d "$d" ] || continue
+          d=${d%/}
+          case "$d" in
+            */_git/*) printf '%s\n' "$(basename "$(dirname "$(dirname "$d")")")/$(basename "$d")" ;;
+            dev.azure.com/*) ;;
+            *) printf '%s\n' "${d#*/}" ;;
+          esac
+        done
+      )
+    fi
+    for d in "$SYNC"/folders/*/; do [ -d "$d" ] && basename "$d"; done
+    for d in "$dev"/*/.git "$dev"/*/*/.git; do [ -d "$d" ] && basename "$(dirname "$d")"; done
+  } | awk '{ last = tolower($0); sub(/.*\//, "", last) } !seen[last]++'
+  return 0
+}
+
 # A checklist on the terminal, the keys of the kit's installer: what PROFILE shows of each part.
 edit() {
   local profile=$1 cur=0 key rest i line mark names candidates
@@ -259,6 +287,7 @@ edit() {
       echo "@here"
       printf '%s\n' "$names"
       known "$p"
+      workspaces
     } | grep -v '^$' | awk '!seen[tolower($0)]++')
     while IFS= read -r one; do row+=("$one") kind+=(name) part+=("$p") name+=("$one"); done <<< "$candidates"
     row+=("+ another name") kind+=(add) part+=("$p") name+=("")
@@ -382,8 +411,10 @@ case "${1:-}" in
   known) known "${2:-}" | grep -v '^$' | awk '!seen[tolower($0)]++' ;;
   json)
     known_all=$(for p in prs reminders handoffs; do known "$p" | grep -v '^$' | awk '!seen[tolower($0)]++' | jq -R . | jq -s --arg p "$p" '{($p): .}'; done | jq -s add)
+    workspaces_all=$(workspaces | grep -v '^$' | awk '!seen[tolower($0)]++' | jq -R . | jq -s .)
     profiles | jq --argjson active "$(active "${2:-$PWD}")" --argjson switch "$(switch)" --arg file "$FILE" --argjson known "$known_all" \
-      --arg wifi "$(wifi_cached)" '{profiles, rules, switch: $switch, active: $active, known: $known, wifi: $wifi, file: $file}'
+      --argjson workspaces "$workspaces_all" --arg wifi "$(wifi_cached)" \
+      '{profiles, rules, switch: $switch, active: $active, known: $known, workspaces: $workspaces, wifi: $wifi, file: $file}'
     ;;
   list)
     profiles | jq -r '

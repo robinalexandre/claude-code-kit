@@ -20,14 +20,15 @@ type World = { active: object; profiles: Record<string, object>; rules: object[]
 
 const isScript = (argv: string[]) => (argv[1] ?? '').replace(/\\/g, '/').endsWith('/skills/dnd/dnd.sh')
 
-const answer = (on: On, world: World, calls: string[][]) => {
+// `held`: each `set` waits for it, then writes the profile as dnd.sh would.
+const answer = (on: On, world: World, calls: string[][], held?: Promise<void>) => {
   const clock = mock.clock(on)
   on('env.get', () => ({ value: undefined }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('session.cwd', () => ({ value: '/home/someone/dev/shop' }))
   on('session.id', () => ({ value: SESSION }))
   on('session.start', ($, e) => ({ cwd: e.cwd }))
-  on('process.run', ($, e) => {
+  on('process.run', async ($, e) => {
     const argv = [...e.argv]
 
     if (!isScript(argv)) {
@@ -42,7 +43,16 @@ const answer = (on: On, world: World, calls: string[][]) => {
     }
 
     if (action === 'json') {
-      return ran(0, JSON.stringify({ ...world, known: { prs: ['owner/app'] }, wifi: 'OfficeNet', file: '/home/someone/.claude-sync/dnd/profiles.json' }))
+      return ran(
+        0,
+        JSON.stringify({
+          ...world,
+          known: { prs: ['owner/app'] },
+          workspaces: ['someone/garden', 'app'],
+          wifi: 'OfficeNet',
+          file: '/home/someone/.claude-sync/dnd/profiles.json',
+        })
+      )
     }
 
     if (action === 'on') {
@@ -56,6 +66,12 @@ const answer = (on: On, world: World, calls: string[][]) => {
       world.active = OFF
 
       return ran(0, 'Off: nothing is hidden.')
+    }
+
+    if (action === 'set' && held !== undefined) {
+      const [profile = '', part = '', mode = '', ...names] = rest
+      await held
+      world.profiles = { ...world.profiles, [profile]: { ...world.profiles[profile], [part]: { mode, only: names } } }
     }
 
     return ran(0, '')
@@ -152,7 +168,7 @@ test('/dnd PROFILE all turns it on for the computer at once, /dnd off takes both
   expect(off.text).toBe('DnD off: everything shows.')
 })
 
-test('a profile unfolds to what it shows; a press changes a part, a check keeps a name', async ($, on) => {
+test('each profile is one line whose edit opens its parts, a button per mode; the checklist offers every repo', async ($, on) => {
   const calls: string[][] = []
   answer(on, { active: OFF, profiles: { work: WORK }, rules: [{ profile: 'work', wifi: 'OfficeNet' }] }, calls)
 
@@ -160,33 +176,170 @@ test('a profile unfolds to what it shows; a press changes a part, a check keeps 
   await $.command.run(command(''))
   const pane = await mountPane($)
 
-  // Folded by default: the section, its group, the profile.
-  expect(await pane.find({ text: '▸ Profiles (1)' })).toBeDefined()
-  expect(await pane.find({ text: /Turned on by a rule/ })).toBeUndefined()
+  // Listed at once, folded to their line.
+  expect(await pane.find({ text: 'Profiles (1)' })).toBeDefined()
+  expect(await pane.find({ text: /▸ work \(rule\) · no history/ })).toBeDefined()
+  expect(await pane.find({ key: 'mode-work-history-show' })).toBeUndefined()
 
-  await pane.press({ key: 'fold-profiles' })
-  await pane.press({ key: 'fold-group|Turned on by a rule' })
+  await pane.press({ key: 'edit-work' })
 
-  expect(await pane.find({ text: /▸ work · no history · prs & ci: this folder/ })).toBeDefined()
-
-  await pane.press({ key: 'fold-profile|work' })
-
-  expect(await pane.find({ text: 'History: hidden' })).toBeDefined()
+  expect(await pane.find({ key: 'mode-work-history-hide' })).toBeDefined()
+  expect(await pane.find({ key: 'mode-work-prs-only', text: 'only…' })).toBeDefined()
   expect(await pane.find({ text: '[x] this folder (shop)' })).toBeDefined()
   expect(await pane.find({ text: '[ ] owner/app' })).toBeDefined()
+  expect(await pane.find({ text: '[ ] someone/garden' })).toBeDefined()
+  // A repo listed both ways is offered once.
+  expect(await pane.findAll({ type: 'Button', text: /\[ \] (owner\/)?app$/ })).toHaveLength(1)
   expect(await pane.find({ text: 'Wi-Fi OfficeNet' })).toBeDefined()
 
-  await pane.press({ key: 'check-work-prs-owner/app' })
+  await pane.press({ key: 'check-work-prs-someone/garden' })
 
-  expect(calls).toContainEqual(['set', 'work', 'prs', 'only', '@here', 'owner/app'])
+  expect(calls).toContainEqual(['set', 'work', 'prs', 'only', '@here', 'someone/garden'])
 
-  await pane.press({ key: 'mode-work-history' })
+  await pane.press({ key: 'mode-work-history-show' })
 
   expect(calls).toContainEqual(['set', 'work', 'history', 'show'])
 
   await pane.press({ key: 'add-work-+ in shop' })
 
   expect(calls).toContainEqual(['rule', 'work', 'folder=/home/someone/dev/shop'])
+})
+
+test('a checklist press shows at once; the presses are written in turn and everything is read once after the last', async ($, on) => {
+  const calls: string[][] = []
+  let release = () => {}
+  const held = new Promise<void>(resolve => {
+    release = resolve
+  })
+  answer(on, { active: OFF, profiles: { work: WORK }, rules: [] }, calls, held)
+
+  await $.session.start(START)
+  await $.command.run(command(''))
+  const pane = await mountPane($)
+  await pane.press({ key: 'edit-work' })
+  const reads = calls.filter(([action]) => action === 'json').length
+
+  await pane.press({ key: 'check-work-prs-someone/garden' })
+  await pane.press({ key: 'check-work-prs-owner/app' })
+
+  expect(await pane.find({ text: '[x] someone/garden' })).toBeDefined()
+  expect(await pane.find({ text: '[x] owner/app' })).toBeDefined()
+  expect(calls.filter(([action]) => action === 'set')).toHaveLength(1)
+
+  release()
+  await held
+  await pane.press({ key: 'tab-dnd' })
+
+  expect(calls).toContainEqual(['set', 'work', 'prs', 'only', '@here', 'someone/garden'])
+  expect(calls).toContainEqual(['set', 'work', 'prs', 'only', '@here', 'someone/garden', 'owner/app'])
+  expect(calls.filter(([action]) => action === 'json').length).toBe(reads + 1)
+  expect(await pane.find({ text: '[x] someone/garden' })).toBeDefined()
+})
+
+type Files = Record<string, string>
+
+// The session's folder may come before a path under an unknown home: the files are named from the ~.
+const at = (path: string) => path.replace(/^.*~\//, '~/')
+
+const HISTORY_ROW = {
+  key: 'recent-prompts.questions',
+  label: 'Keep questions asked with the picker',
+  kind: 'boolean',
+  value: true,
+  provider: { plugin: 'recent-prompts', tier: 'user' },
+  isLocked: false,
+}
+const BUILTIN_ROW = { ...HISTORY_ROW, key: 'agents-md.instructionFiles', label: 'Instruction files', kind: 'text', value: 'both', provider: { plugin: 'agents-md', tier: 'builtin' } }
+
+// The /config rows and the files the Mods tab reads and writes; a set lands in settings.json as the engine would.
+const answerMods = (on: On, files: Files, sets: unknown[]) => {
+  const rows = [HISTORY_ROW, BUILTIN_ROW]
+  on('config.list', () => ({ value: rows as never }))
+  on('config.set', ($, e) => {
+    sets.push([e.key, e.value])
+    rows[0] = { ...HISTORY_ROW, value: e.value as boolean }
+    files['~/.claude/settings.json'] = JSON.stringify({ pluginConfigs: { 'recent-prompts@inline': { options: { questions: e.value } } } })
+
+    return { value: e.value }
+  })
+  on('fs.read', ($, e) => {
+    const text = files[at(e.path)]
+
+    if (text === undefined) {
+      throw new Error(`ENOENT: ${e.path}`)
+    }
+
+    return { value: text }
+  })
+  on('fs.exists', ($, e) => ({ value: at(e.path) in files }))
+  on('fs.write', ($, e) => {
+    files[at(e.path)] = e.text
+
+    return { value: undefined }
+  })
+}
+
+const openMods = async ($: Engine) => {
+  await $.session.start(START)
+  await $.command.run({ ...command(''), command: 'configuration' })
+  const pane = await mountPane($)
+  await pane.press({ key: 'tab-mods' })
+
+  return pane
+}
+
+test("the Mods tab lists each mod's settings; a change for all computers is a /config change alone", async ($, on) => {
+  const files: Files = { '~/.claude-sync/.machine': 'mac\n', '~/.claude-sync/machines/mac.json': '{ "settings": { "theme": "dark" } }' }
+  const sets: unknown[] = []
+  answer(on, { active: OFF, profiles: {}, rules: [] }, [])
+  answerMods(on, files, sets)
+
+  const pane = await openMods($)
+
+  expect(await pane.find({ key: 'fold-mod|recent-prompts', text: /recent-prompts \(1\)/ })).toBeDefined()
+  expect(await pane.find({ text: /Instruction files/ })).toBeUndefined()
+  expect(await pane.find({ key: 'scope-here', text: 'this computer only (mac)' })).toBeDefined()
+
+  await pane.press({ key: 'set-recent-prompts.questions' })
+
+  expect(sets).toEqual([['recent-prompts.questions', false]])
+  expect(JSON.parse(files['~/.claude-sync/machines/mac.json'] ?? '')).toEqual({ settings: { theme: 'dark' } })
+  expect(await pane.find({ key: 'set-recent-prompts.questions', text: /^\[ \] Keep questions/ })).toBeDefined()
+})
+
+test('a change for this computer only is kept in its machine file, and one for all computers takes it back out', async ($, on) => {
+  const files: Files = { '~/.claude-sync/.machine': 'mac\n', '~/.claude-sync/machines/mac.json': '{ "settings": { "theme": "dark" } }' }
+  const sets: unknown[] = []
+  answer(on, { active: OFF, profiles: {}, rules: [] }, [])
+  answerMods(on, files, sets)
+
+  const pane = await openMods($)
+  await pane.press({ key: 'scope-here' })
+  await pane.press({ key: 'set-recent-prompts.questions' })
+
+  expect(JSON.parse(files['~/.claude-sync/machines/mac.json'] ?? '')).toEqual({
+    settings: { theme: 'dark', pluginConfigs: { 'recent-prompts@inline': { options: { questions: false } } } },
+  })
+  expect(await pane.find({ key: 'set-recent-prompts.questions', text: /\(this computer\)$/ })).toBeDefined()
+
+  await pane.press({ key: 'scope-all' })
+  await pane.press({ key: 'set-recent-prompts.questions' })
+
+  expect(sets).toEqual([
+    ['recent-prompts.questions', false],
+    ['recent-prompts.questions', true],
+  ])
+  expect(JSON.parse(files['~/.claude-sync/machines/mac.json'] ?? '')).toEqual({ settings: { theme: 'dark' } })
+})
+
+test('without a private sync, the Mods tab says changes stay on this computer', async ($, on) => {
+  answer(on, { active: OFF, profiles: {}, rules: [] }, [])
+  answerMods(on, {}, [])
+
+  const pane = await openMods($)
+
+  expect(await pane.find({ key: 'scope-here' })).toBeUndefined()
+  expect(await pane.find({ text: /no private sync/ })).toBeDefined()
 })
 
 test('deleting a profile asks for a second press', async ($, on) => {
@@ -197,8 +350,6 @@ test('deleting a profile asks for a second press', async ($, on) => {
   await $.command.run(command(''))
   const pane = await mountPane($)
 
-  await pane.press({ key: 'fold-profiles' })
-  await pane.press({ key: 'fold-group|By hand only' })
   await pane.press({ key: 'arm-delete|work' })
 
   expect(calls.some(argv => argv[0] === 'delete')).toBe(false)
