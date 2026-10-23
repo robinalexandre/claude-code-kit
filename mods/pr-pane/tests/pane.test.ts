@@ -1382,8 +1382,11 @@ test('the header says how old each host share is, and a kept run reads its steps
 
     return ran(0, JSON.stringify(shared))
   })
+  // The engine hands the path on as the system writes it (C:\home\... on Windows).
   on('fs.read', ($, e) => ({
-    value: e.path === ended.stepsFile ? JSON.stringify({ steps: [{ name: 'Package', job: 'build', state: 'failed', errors: ['boom'] }] }) : '{}',
+    value: e.path.replace(/\\/g, '/').endsWith('/pr-watch/steps/abc.json')
+      ? JSON.stringify({ steps: [{ name: 'Package', job: 'build', state: 'failed', errors: ['boom'] }] })
+      : '{}',
   }))
   on('ui.render', () => Fragment({}))
   on('ui.open', () => ({ value: { isPlaced: true as const } }))

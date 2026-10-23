@@ -520,7 +520,9 @@ const keptSteps = async ($: EngineInterface, url: string) => {
   }
 
   try {
-    return (JSON.parse(String(await $.fs.read(file))) as { steps: BuildStep[] }).steps
+    const steps = (JSON.parse(String(await $.fs.read(file))) as { steps?: BuildStep[] }).steps
+
+    return Array.isArray(steps) ? steps : undefined
   } catch {
     return undefined
   }
