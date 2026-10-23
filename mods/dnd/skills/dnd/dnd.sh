@@ -192,6 +192,11 @@ active() {
 until_of() {
   local for=$1 now
   now=$(date +%s)
+  # Only digits reach the arithmetic: bash would run a $(...) hidden in an array index there.
+  case "$for" in
+    [0-9]*[mhd]) case "${for%?}" in *[!0-9]*) return 1 ;; esac ;;
+    *[!0-9:]* | '') return 1 ;;
+  esac
   case "$for" in
     *m) echo $((now + ${for%m} * 60)) ;;
     *h) echo $((now + ${for%h} * 3600)) ;;
