@@ -6,10 +6,13 @@
                                         record it, print nothing, keep it on each PR as unread)
     pr_watch.py read URL                clear a PR's unread changes
     pr_watch.py list                    tracked PRs and their status
-    pr_watch.py status [--live]         the same as JSON, with what each PR waits for
-                                        (--live: fetched now, with the changes; records only the review
-                                        requests, the pipeline runs and the user's PRs it starts tracking)
-                                        each PR's `changes` start with its unread ones
+    pr_watch.py status [--auto|--live]  the same as JSON, with what each PR waits for, from the records
+                                        and the shared snapshot (below); each PR's `changes` start with
+                                        its unread ones
+                                        (--auto: each host whose share is older than `cacheMinutes` is
+                                        fetched again and shared; --live: every host this computer
+                                        reaches, fetched now and shared. Both record only the user's PRs
+                                        they start tracking: the PRs' changes stay for `check`)
     pr_watch.py open URL                open a PR or a build in the default browser
     pr_watch.py details URL             JSON: the PR's failed checks with their failed steps and errors,
                                         or a build's steps, every one with its job and state, those
@@ -48,6 +51,16 @@ tracked and recent PRs and of `azureProjects` in config.json; GitHub: in the rep
 recent PRs, those they pushed to lately, and `githubRepos`): running ones and those ended in the last
 PR_WATCH_BUILD_HOURS (default 24) hours. `check` reports a
 run that ended since the last check, and `status` lists them as `builds`.
+
+Shared snapshot: what `status --auto` or `--live` fetched is shared through the config sync's GitHub
+repo, on its own branch (`pr-cache`, one commit replaced each time, so it never grows), one section per
+host (`github`, `ado`) with when and by which computer. Every `status` first asks for it with one
+conditional request (a 304 costs nothing against the rate limit), so a computer reads what another one
+fetched instead of asking the hosts again; a host is fetched again only once its section is older than
+`cacheMinutes` in config.json (`{"running": 2, "idle": 10}` by default: a CI or a run in progress, or
+not), and only by a computer that reaches it (one that did not is left alone for 30 minutes).
+PR_WATCH_SHARED=off (or `"sharedCache": false` in config.json) keeps everything on this computer;
+PR_WATCH_SHARED=owner/repo shares through another repo.
 """
 
 from __future__ import annotations
@@ -61,6 +74,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -84,6 +98,15 @@ DISMISSED = WATCH_DIR / "dismissed.txt"
 DONE_DIR = WATCH_DIR / "done"
 KEEP_DAYS = float(os.environ.get("PR_WATCH_KEEP_DAYS", "7"))
 BUILD_HOURS = float(os.environ.get("PR_WATCH_BUILD_HOURS", "24"))
+CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "pr-watch"
+SHARED_LOCAL = CACHE_DIR / "shared.json"
+SHARED_BRANCH = "pr-cache"
+SHARED_PATH = "pr-watch/snapshot.json"
+GITHUB_API = os.environ.get("PR_WATCH_GITHUB_API", "https://api.github.com")
+HOSTS = ("github", "ado")
+CACHE_MINUTES = {"running": 2.0, "idle": 10.0}
+UNREACHABLE_MINUTES = 30
+PUSH_DENIED_HOURS = 6
 ADO_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"
 FINAL = {"merged", "completed", "abandoned", "closed"}
 EXCERPT = 400
@@ -348,8 +371,15 @@ def ado_review_requests(org: str) -> list[dict]:
     return rows
 
 
+_GITHUB_TOKEN: list[str] = []
+
+
 def _github_token() -> str:
-    return os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or _run("gh", "auth", "token")
+    """Looked up once per run: `gh auth token` is a process to start each time."""
+    with _ADO_LOCK:
+        if not _GITHUB_TOKEN:
+            _GITHUB_TOKEN.append(os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or _run("gh", "auth", "token"))
+        return _GITHUB_TOKEN[0]
 
 
 def github_review_requests() -> list[dict]:
@@ -716,13 +746,13 @@ def _recent_enough(stamp: str) -> bool:
     return (datetime.now(timezone.utc) - ended).total_seconds() <= BUILD_HOURS * 3600
 
 
-def fetch_builds(entries: list[tuple[Path, dict]]) -> tuple[list[dict], list[str]]:
+def fetch_builds(entries: list[tuple[Path, dict]], hosts: tuple[str, ...] = HOSTS) -> tuple[list[dict], list[str]]:
     """The user's pipeline runs (by hand, or from their pushes outside a PR), running ones first
     (newest queued first), then those ended in the last BUILD_HOURS hours (newest first): (rows, errors).
 
     Asked in the Azure DevOps projects and GitHub repos of the tracked and recent PRs, the GitHub
     repos the user pushed to lately, plus `azureProjects` (`org/project`) and `githubRepos`
-    (`owner/repo`) in config.json.
+    (`owner/repo`) in config.json. Only on `hosts`.
     """
     projects, repos = config("azureProjects"), config("githubRepos")
     for entry in [entry for _, entry in entries] + done_entries():
@@ -730,10 +760,13 @@ def fetch_builds(entries: list[tuple[Path, dict]]) -> tuple[list[dict], list[str
             projects.add(f"{match['org'] or match['org2']}/{urllib.parse.unquote(match['project'])}")
         elif match := GITHUB_URL.match(entry["url"]):
             repos.add(f"{match['owner']}/{match['repo']}")
-    try:
-        repos |= github_pushed_repos()
-    except (WatchError, KeyError, TypeError):
-        pass
+    if "github" in hosts:
+        try:
+            repos |= github_pushed_repos()
+        except (WatchError, KeyError, TypeError):
+            pass
+    projects = projects if "ado" in hosts else set()
+    repos = repos if "github" in hosts else set()
     jobs: list[tuple[str, Callable[[], list[dict]]]] = [
         (place, partial(ado_my_builds, *place.split("/", 1))) for place in sorted(projects)]
     jobs += [(place, partial(github_my_runs, *place.split("/", 1))) for place in sorted(repos)]
@@ -755,10 +788,15 @@ def fetch_builds(entries: list[tuple[Path, dict]]) -> tuple[list[dict], list[str
     kept = [{**row, "stale": True} for row in cached_builds()
             if _build_place(row["url"]) in failed and _recent_enough(row["ended"] or row["queued"])]
     rows = [row for _, found, _ in results for row in found] + kept
+    return order_builds(rows), [error for _, _, error in results if error]
+
+
+def order_builds(rows: list[dict]) -> list[dict]:
+    """Running ones first (newest queued first), then those ended in the last BUILD_HOURS hours."""
     running = sorted((row for row in rows if row["status"] in BUILD_RUNNING), key=lambda row: row["queued"], reverse=True)
     ended = sorted((row for row in rows if row["status"] not in BUILD_RUNNING and _recent_enough(row["ended"])),
                    key=lambda row: row["ended"], reverse=True)
-    return running + ended, [error for _, _, error in results if error]
+    return running + ended
 
 
 def _build_place(url: str) -> str:
@@ -778,7 +816,7 @@ def builds_file() -> dict:
 
 
 def cached_builds() -> list[dict]:
-    return builds_file().get("builds", [])
+    return order_builds(shared_rows("builds", builds_file()))
 
 
 def save_builds(builds: list[dict]) -> None:
@@ -955,7 +993,7 @@ def reviews_file() -> dict:
 
 
 def cached_reviews() -> list[dict]:
-    return reviews_file().get("reviews", [])
+    return sorted(shared_rows("reviews", reviews_file()), key=lambda row: row["updated"], reverse=True)
 
 
 def save_reviews(reviews: list[dict], announced: list[str] | None = None) -> None:
@@ -967,17 +1005,17 @@ def save_reviews(reviews: list[dict], announced: list[str] | None = None) -> Non
     })
 
 
-def fetch_review_requests(entries: list[tuple[Path, dict]]) -> tuple[list[dict], list[str]]:
+def fetch_review_requests(entries: list[tuple[Path, dict]], hosts: tuple[str, ...] = HOSTS) -> tuple[list[dict], list[str]]:
     """Open PRs waiting for the user's review, newest first: (rows, errors).
 
     GitHub needs a token; Azure DevOps is asked per organization, those of the tracked PRs plus
-    `azureOrgs` in config.json.
+    `azureOrgs` in config.json. Only on `hosts`.
     """
-    orgs = config("azureOrgs")
+    orgs = config("azureOrgs") if "ado" in hosts else set()
     for _, entry in entries:
-        if match := ADO_URL.match(entry["url"]):
+        if "ado" in hosts and (match := ADO_URL.match(entry["url"])):
             orgs.add(match["org"] or match["org2"])
-    jobs: list[tuple[str, Callable[[], list[dict]]]] = [("github", github_review_requests)]
+    jobs: list[tuple[str, Callable[[], list[dict]]]] = [("github", github_review_requests)] if "github" in hosts else []
     jobs += [(org, partial(ado_review_requests, org)) for org in sorted(orgs)]
 
     def one(item: tuple[str, Callable[[], list[dict]]]) -> tuple[str, list[dict], str]:
@@ -1032,22 +1070,22 @@ def save_dismissed(urls: set[str]) -> None:
     DISMISSED.write_text("".join(f"{url}\n" for url in sorted(urls)), encoding="utf-8", newline="\n")
 
 
-def auto_track(entries: list[tuple[Path, dict]]) -> tuple[list[str], list[str]]:
+def auto_track(entries: list[tuple[Path, dict]], hosts: tuple[str, ...] = HOSTS) -> tuple[list[str], list[str]]:
     """Starts tracking the user's open PRs nobody added (see `autoTrack`), appending them to
     `entries`: (one line per PR now tracked, errors).
 
     Asked on GitHub with a token, and in the Azure DevOps organizations of the tracked and recent
-    PRs plus `azureOrgs`.
+    PRs plus `azureOrgs`. Only on `hosts`.
     """
     kinds = auto_track_kinds()
     if not kinds:
         return [], []
     known = {same_pr(entry["url"]) for _, entry in entries} | dismissed()
-    orgs = config("azureOrgs")
+    orgs = config("azureOrgs") if "ado" in hosts else set()
     for entry in [entry for _, entry in entries] + done_entries():
-        if match := ADO_URL.match(entry["url"]):
+        if "ado" in hosts and (match := ADO_URL.match(entry["url"])):
             orgs.add(match["org"] or match["org2"])
-    jobs: list[Callable[[], list[dict]]] = [partial(github_my_prs, kinds, known)]
+    jobs: list[Callable[[], list[dict]]] = [partial(github_my_prs, kinds, known)] if "github" in hosts else []
     jobs += [partial(ado_my_prs, org, kinds) for org in sorted(orgs)]
 
     def one(job: Callable[[], list[dict]]) -> tuple[list[dict], str]:
@@ -1117,6 +1155,263 @@ def config(key: str) -> set[str]:
     if not CONFIG.exists():
         return set()
     return set(json.loads(CONFIG.read_text(encoding="utf-8")).get(key, []))
+
+
+def config_value(key: str, default: object) -> object:
+    if not CONFIG.exists():
+        return default
+    return json.loads(CONFIG.read_text(encoding="utf-8")).get(key, default)
+
+
+def host_of(url: str) -> str:
+    """The shared section a PR, a review request or a run belongs to."""
+    host = urllib.parse.urlparse(url).netloc.lower()
+    if host == "github.com":
+        return "github"
+    return "ado" if host == "dev.azure.com" or host.endswith(".visualstudio.com") else ""
+
+
+def _now_seconds() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _epoch(stamp: str) -> float:
+    """Seconds since 1970 of a `_now` or `_now_seconds` stamp; 0 when missing or odd."""
+    try:
+        return datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+    except (ValueError, AttributeError):
+        return 0.0
+
+
+def cache_minutes() -> dict[str, float]:
+    """`cacheMinutes` in config.json: how old a host's share may get before it is fetched again,
+    while a CI or a run is in progress there (`running`) and otherwise (`idle`)."""
+    given = config_value("cacheMinutes", {})
+    given = given if isinstance(given, dict) else {}
+    return {state: float(given.get(state, default)) for state, default in CACHE_MINUTES.items()}
+
+
+_SHARED: dict = {}
+
+
+def shared_local() -> dict:
+    """This computer's copy of the shared snapshot: `sections` per host, the `etag` it was read
+    with, and the hosts this computer could not reach lately (`unreachable`)."""
+    if not _SHARED:
+        try:
+            _SHARED.update(json.loads(SHARED_LOCAL.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            pass
+        _SHARED.setdefault("sections", {})
+    return _SHARED
+
+
+def shared_rows(name: str, stored: dict) -> list[dict]:
+    """The review requests or runs (`name`) to show: per host, the newer of what this computer
+    recorded (`stored`, with its `checked`) and what the shared snapshot holds."""
+    sections, rows = shared_local()["sections"], []
+    for host in HOSTS:
+        section = sections.get(host)
+        if section and _epoch(section.get("at", "")) > _epoch(stored.get("checked", "")):
+            rows += section.get(name, [])
+        else:
+            rows += [row for row in stored.get(name, []) if host_of(row["url"]) == host]
+    return rows + [row for row in stored.get(name, []) if host_of(row["url"]) not in HOSTS]
+
+
+def shared_repo() -> str:
+    """`owner/repo` of the config sync on GitHub, which carries the shared snapshot; "" when off."""
+    setting = os.environ.get("PR_WATCH_SHARED", "").strip()
+    if setting.lower() == "off" or config_value("sharedCache", True) is False:
+        return ""
+    if setting:
+        return setting
+    remote = _run("git", "-C", str(WATCH_DIR), "remote", "get-url", "origin")
+    match = re.search(r"github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?/?$", remote)
+    return f"{match[1]}/{match[2]}" if match else ""
+
+
+def _machine() -> str:
+    try:
+        return (WATCH_DIR.parent / ".machine").read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _http_raw(url: str, headers: dict[str, str], method: str = "GET", body: object = None,
+              timeout: float = 10) -> tuple[int, str, bytes]:
+    """(status, ETag, body), a 304 or an error status included."""
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    extra = {"Content-Type": "application/json"} if data is not None else {}
+    request = urllib.request.Request(url, data=data, method=method, headers={**extra, **headers})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.status, response.headers.get("ETag", ""), response.read()
+    except urllib.error.HTTPError as error:
+        return error.code, "", b""
+    except (urllib.error.URLError, OSError) as error:
+        raise WatchError(f"{url.split('?')[0]}: {getattr(error, 'reason', error)}") from error
+
+
+def _shared_api() -> tuple[str, dict[str, str]]:
+    repo, token = shared_repo(), _github_token()
+    if not repo or not token:
+        return "", {}
+    return f"{GITHUB_API}/repos/{repo}", {"Authorization": f"Bearer {token}", "X-GitHub-Api-Version": "2022-11-28"}
+
+
+def shared_pull() -> None:
+    """Brings in the sections another computer shared since the last look, a section only when
+    newer than this computer's: one conditional request, a 304 when nothing changed."""
+    api, headers = _shared_api()
+    if not api:
+        return
+    local = shared_local()
+    asked = {**headers, "Accept": "application/vnd.github.raw+json"}
+    if local.get("etag"):
+        asked["If-None-Match"] = local["etag"]
+    try:
+        code, etag, body = _http_raw(f"{api}/contents/{SHARED_PATH}?ref={SHARED_BRANCH}", asked, timeout=5)
+        remote = json.loads(body.decode("utf-8")) if code == 200 else None
+    except (WatchError, ValueError):
+        return
+    if not isinstance(remote, dict):
+        return
+    local["etag"] = etag
+    for host, section in (remote.get("sections") or {}).items():
+        mine = local["sections"].get(host) or {}
+        if host in HOSTS and isinstance(section, dict) and _epoch(section.get("at", "")) > _epoch(mine.get("at", "")):
+            local["sections"][host] = section
+
+
+def _branch_head(api: str, headers: dict[str, str]) -> str:
+    code, _, body = _http_raw(f"{api}/git/ref/heads/{SHARED_BRANCH}", headers)
+    return json.loads(body.decode("utf-8"))["object"]["sha"] if code == 200 else ""
+
+
+def shared_push() -> None:
+    """Shares this computer's sections as SHARED_BRANCH's only commit (no parent, the branch moved
+    onto it): the branch never grows, and the sync's clones fetch one small commit. What another
+    computer shared meanwhile is merged in first; the branch is read again just before it moves,
+    and a move in between starts over once."""
+    api, headers = _shared_api()
+    local = shared_local()
+    if not api or time.time() - _epoch(local.get("pushDenied", "")) < PUSH_DENIED_HOURS * 3600:
+        return
+    for _ in range(2):
+        before = _branch_head(api, headers)
+        shared_pull()
+        content = json.dumps({"version": 1, "sections": local["sections"]}, ensure_ascii=False)
+        code, _, body = _http_raw(f"{api}/git/trees", headers, "POST", {
+            "tree": [{"path": SHARED_PATH, "mode": "100644", "type": "blob", "content": content}]})
+        if code in (403, 404):
+            # A token that may read the sync repo but not write it: nothing to share for a while.
+            local["pushDenied"] = _now_seconds()
+            raise WatchError(f"shared snapshot: HTTP {code} writing to the sync repo (token without write access?)")
+        if code != 201:
+            raise WatchError(f"shared snapshot: HTTP {code}")
+        tree = json.loads(body.decode("utf-8"))["sha"]
+        code, _, body = _http_raw(f"{api}/git/commits", headers, "POST",
+                                  {"message": "chore(pr-watch): share the PR snapshot", "tree": tree, "parents": []})
+        if code != 201:
+            raise WatchError(f"shared snapshot: HTTP {code}")
+        commit = json.loads(body.decode("utf-8"))["sha"]
+        if _branch_head(api, headers) != before:
+            continue
+        if before:
+            code, _, _ = _http_raw(f"{api}/git/refs/heads/{SHARED_BRANCH}", headers, "PATCH", {"sha": commit, "force": True})
+        else:
+            code, _, _ = _http_raw(f"{api}/git/refs", headers, "POST", {"ref": f"refs/heads/{SHARED_BRANCH}", "sha": commit})
+        if code in (200, 201):
+            local.pop("pushDenied", None)
+            return
+    raise WatchError("shared snapshot: another computer kept sharing at the same time")
+
+
+def host_used(host: str, entries: list[tuple[Path, dict]]) -> bool:
+    """Whether there is anything to look up on the host: GitHub with a token or a tracked PR there,
+    Azure DevOps with a tracked or recent PR, or `azureOrgs`/`azureProjects`."""
+    urls = [entry["url"] for _, entry in entries] + [entry["url"] for entry in done_entries()]
+    if host == "github":
+        return bool(_github_token()) or any(host_of(url) == "github" for url in urls)
+    return bool(config("azureOrgs") or config("azureProjects")) or any(host_of(url) == "ado" for url in urls)
+
+
+def _section_running(section: dict) -> bool:
+    return any(ci_summary(pr["seen"].get("checks", {})).startswith("CI running") for pr in section.get("prs", {}).values()) \
+        or any(build["status"] in BUILD_RUNNING and not build.get("stale") for build in section.get("builds", []))
+
+
+def hosts_due(mode: str, entries: list[tuple[Path, dict]]) -> list[str]:
+    """The hosts this `status` fetches: none from the cache, every one in use when live; on `auto`,
+    those whose share is older than `cacheMinutes` or misses a PR tracked since, except a host this
+    computer could not reach in the last UNREACHABLE_MINUTES."""
+    if mode == "cached":
+        return []
+    hosts = [host for host in HOSTS if host_used(host, entries)]
+    if mode == "live":
+        return hosts
+    local, minutes, now, due = shared_local(), cache_minutes(), time.time(), []
+    for host in hosts:
+        if now - _epoch(local.get("unreachable", {}).get(host, "")) < UNREACHABLE_MINUTES * 60:
+            continue
+        section = local["sections"].get(host)
+        if not section:
+            due.append(host)
+            continue
+        at = _epoch(section.get("at", ""))
+        limit = minutes["running" if _section_running(section) else "idle"] * 60
+        added = any(host_of(entry["url"]) == host and entry["url"] not in section.get("prs", {})
+                    and _epoch(entry.get("added", "")) > at for _, entry in entries)
+        if added or now - at >= limit:
+            due.append(host)
+    return due
+
+
+def fetch_section(host: str, entries: list[tuple[Path, dict]]) -> tuple[dict | None, list[str]]:
+    """Everything on one host now, as its shared section, or None when the host did not answer this
+    computer (every lookup failed); the errors."""
+    _, errors = auto_track(entries, (host,))
+    fetched = fetch_all([(path, entry) for path, entry in list(entries) if host_of(entry["url"]) == host])
+    reviews, review_errors = fetch_review_requests(entries, (host,))
+    builds, build_errors = fetch_builds(entries, (host,))
+    errors += [f"{entry['url']}: {error}" for _, entry, _, _, error in fetched if error] + review_errors + build_errors
+    answered = not errors or any(now is not None for _, _, now, _, _ in fetched) \
+        or any(not build.get("stale") for build in builds)
+    if not answered:
+        return None, errors
+    prs = {entry["url"]: {"seen": now, "me": me} for _, entry, now, me, _ in fetched if now is not None}
+    return {"at": _now_seconds(), "by": _machine(), "prs": prs, "reviews": reviews, "builds": builds}, errors
+
+
+def refresh_shared(mode: str, entries: list[tuple[Path, dict]]) -> tuple[list[str], list[str]]:
+    """Reads the shared snapshot, fetches the hosts due (see hosts_due) and shares what they gave:
+    (the hosts fetched, errors). Saved on this computer either way."""
+    shared_pull()
+    local, errors, fetched = shared_local(), [], []
+    due = hosts_due(mode, entries)
+    if due:
+        with ThreadPoolExecutor(max_workers=len(due)) as pool:
+            results = list(pool.map(lambda host: (host, *fetch_section(host, entries)), due))
+        for host, section, found_errors in results:
+            shared = local["sections"].get(host) or {}
+            if section is None:
+                local.setdefault("unreachable", {})[host] = _now_seconds()
+                # Another computer shares this host: not reaching it from here is expected.
+                if shared.get("by", "") in ("", _machine()):
+                    errors += found_errors
+                continue
+            errors += found_errors
+            local.get("unreachable", {}).pop(host, None)
+            local["sections"][host] = section
+            fetched.append(host)
+    if fetched:
+        try:
+            shared_push()
+        except (WatchError, KeyError, ValueError) as error:
+            errors.append(str(error) if isinstance(error, WatchError) else f"shared snapshot: unexpected answer ({error!r})")
+    save(SHARED_LOCAL, local)
+    return fetched, errors
 
 
 def ci_summary(checks: dict[str, dict]) -> str:
@@ -1344,25 +1639,23 @@ def waiting_for(seen: dict) -> str:
     return "the merge"
 
 
-def status(live: bool) -> None:
-    """JSON for a pane or a script; `live` fetches every PR now but records nothing."""
+def status(mode: str) -> None:
+    """JSON for a pane or a script, from the records and the shared snapshot, each PR, review
+    request and run as the newer of the two shows it; `mode` (`cached`, `auto`, `live`) says which
+    hosts are fetched first (see hosts_due). Records nothing but the PRs it starts tracking."""
     entries = load_entries()
-    _, errors = auto_track(entries) if live else ([], [])
-    fetched = fetch_all(entries) if live else [(p, e, None, "", "") for p, e in entries]
-    reviews, review_errors = fetch_review_requests(entries) if live else (cached_reviews(), [])
-    errors += review_errors
-    builds, build_errors = fetch_builds(entries) if live else (cached_builds(), [])
-    errors += build_errors
-    if live:
-        # So the cached status the pane reloads in between shows the same lists; a host that failed
-        # keeps its cached rows in them.
-        save_reviews(reviews)
-        save_builds(builds)
+    fetched_hosts, errors = refresh_shared(mode, entries)
+    sections = shared_local()["sections"]
+    reviews, builds = cached_reviews(), cached_builds()
     ignore, bots, prs, acks = config("ignoreAuthors"), config("bots"), [], acks_file()
-    builds = [{**build, "ack": ack_of(build["url"], _build_alert(build), acks)} for build in builds]
-    for _, entry, now, me, error in fetched:
-        if error:
-            errors.append(f"{entry['url']}: {error}")
+    builds = [{**build, "ack": ack_of(build["url"], _build_alert(build), acks),
+               **({"stepsFile": str(_steps_path(build["url"]))} if _steps_path(build["url"]).exists() else {})}
+              for build in builds]
+    for _, entry in entries:
+        section = sections.get(host_of(entry["url"])) or {}
+        shared = (section.get("prs") or {}).get(entry["url"])
+        is_newer = shared is not None and _epoch(section.get("at", "")) > _epoch(entry.get("checked", ""))
+        now, me = (shared["seen"], shared.get("me", "")) if is_newer else (None, "")
         seen = now or entry["seen"]
         match = ADO_URL.match(entry["url"]) or GITHUB_URL.match(entry["url"])
         prefix = f"{label(entry)}: "
@@ -1389,7 +1682,7 @@ def status(live: bool) -> None:
             "parkedWhy": entry.get("parkedWhy", ""),
             "ack": ack_of(entry["url"], _pr_alert(seen, news), acks),
             "changes": news,
-            "checked": _now() if now else entry.get("checked", ""),
+            "checked": section["at"][:16] + "Z" if now else entry.get("checked", ""),
         })
     recent = []
     for entry in done_entries():
@@ -1404,8 +1697,10 @@ def status(live: bool) -> None:
             "reviewed": bool(entry.get("reviewed")),
             "ended": entry.get("ended", ""),
         })
-    print(json.dumps({"live": live, "prs": merge_order(prs), "reviews": reviews, "builds": builds, "recent": recent,
-                      "errors": grouped_errors(errors)}, ensure_ascii=False))
+    shares = {host: {"at": section.get("at", ""), "by": section.get("by", "")} for host, section in sections.items()}
+    print(json.dumps({"live": mode != "cached", "fetched": fetched_hosts, "sections": shares, "prs": merge_order(prs),
+                      "reviews": reviews, "builds": builds, "recent": recent, "errors": grouped_errors(errors)},
+                     ensure_ascii=False))
 
 
 def merge_order(prs: list[dict]) -> list[dict]:
@@ -1476,6 +1771,10 @@ def approve(url: str) -> None:
     pr.approve()
     if REVIEWS.exists():
         save_reviews([row for row in cached_reviews() if row["url"] != url])
+    local = shared_local()
+    for section in local["sections"].values():
+        section["reviews"] = [row for row in section.get("reviews", []) if row["url"] != url]
+    save(SHARED_LOCAL, local)
     path = entry_path(url)
     entry = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {"url": url, "note": "", "added": _now()}
     seen = pr.snapshot()
@@ -1638,7 +1937,7 @@ def main(argv: list[str]) -> int:
         elif command == "list":
             list_()
         elif command == "status":
-            status(live="--live" in args)
+            status("live" if "--live" in args else "auto" if "--auto" in args else "cached")
         elif command == "open" and args:
             open_(args[0])
         # A build URL keeps its query (`?buildId=`): not normalized like a PR's.

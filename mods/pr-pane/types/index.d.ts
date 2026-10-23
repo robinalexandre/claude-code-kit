@@ -62,7 +62,12 @@ export type BuildRow = {
   ack?: Ack | null
   /** What started it: the user by hand, or a push of theirs; absent on runs recorded before. */
   trigger?: 'manual' | 'push' | null
+  /** The file holding the steps pr-watch read for this ended run, when it kept them. */
+  stepsFile?: string
 }
+
+/** One host's share: when and by which computer it was fetched. */
+export type Share = { at: string; by: string }
 
 export type PrSnapshot = {
   prs: PrRow[]
@@ -72,6 +77,10 @@ export type PrSnapshot = {
   errors: string[]
   isLive: boolean
   at: string
+  /** Per host (`github`, `ado`): the shared snapshot shown; absent from a pr-watch that shares nothing. */
+  sections?: Record<string, Share>
+  /** The hosts this status fetched itself. */
+  fetched?: string[]
 }
 
 export type CheckDetails = { isLoading: boolean; lines: string[] }
@@ -81,8 +90,19 @@ export type BuildStep = { name: string; job: string; state: string; errors: stri
 
 export type BuildDetails = { isLoading: boolean; steps: BuildStep[] }
 
+/** What the dnd mod has on, as it declares it: the parts a profile hides or keeps only some of. */
+export type DndActive = {
+  profile: string
+  parts: Partial<Record<string, { mode?: 'show' | 'hide' | 'only'; only?: string[] }>>
+  here: { path: string; name: string }
+}
+
 declare module 'claude-code' {
   interface PluginState {
+    /** The dnd mod's, read only: absent when it is not installed. */
+    dnd: {
+      active: DndActive | null
+    }
     'pr-pane': {
       snapshot: PrSnapshot | null
       /** pr-watch is installed: the band shows its button, even with nothing tracked. */

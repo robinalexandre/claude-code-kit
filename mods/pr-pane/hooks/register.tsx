@@ -1,13 +1,16 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
-import type { Ack, BuildRow, BuildStep, CiCheck, PrRow, PrSnapshot, RecentPr, ReviewPr } from '../types'
+import type { Ack, BuildRow, BuildStep, CiCheck, DndActive, PrRow, PrSnapshot, RecentPr, ReviewPr } from '../types'
 
 const PANE = 'tracked-prs'
 const TITLE = 'Tracked PRs'
 const COMMAND = 'prs'
 const LIVE_TIMEOUT_MS = 180_000
 const RELOAD_EVERY_MS = 5 * 60_000
+// How often an open pane asks pr-watch again: it reads the shared snapshot (a 304 when nothing
+// changed) and fetches a host only once its share is older than pr-watch's `cacheMinutes`.
+const IDLE_EVERY_MS = 2 * 60_000
 const WHILE_RUNNING_EVERY_MS = 60_000
 const NEEDS_US = new Set(['a conflict fix', 'a CI fix', 'changes from us', 'CI to be queued again'])
 const ENDED = new Set(['passed', 'failed', 'broken', 'expired', 'skipped'])
@@ -131,6 +134,20 @@ const minutesText = (fromMs: number, toMs: number) => {
   return minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h ${minutes % 60 ? `${minutes % 60} min` : ''}`.trim()
 }
 
+const HOST_NAMES: Record<string, string> = { github: 'GitHub', ado: 'Azure DevOps' }
+
+// How old each host's share is and which computer fetched it: "GitHub 1 min (mac) · Azure DevOps 4 min
+// (windows)". Empty from a pr-watch that shares nothing.
+const sharesText = (shown: PrSnapshot, nowMs: number) =>
+  Object.entries(shown.sections ?? {})
+    .map(([host, share]) => {
+      const age = minutesText(new Date(share.at).getTime(), nowMs)
+
+      return age === '' ? '' : `${HOST_NAMES[host] ?? host} ${age}${share.by ? ` (${share.by})` : ''}`
+    })
+    .filter(text => text !== '')
+    .join(' · ')
+
 const anyRunning = (prs: PrRow[], builds: BuildRow[]) =>
   prs.some(pr => isRunning(pr.checks ?? [])) || builds.some(isBuildWatched)
 
@@ -249,6 +266,43 @@ const runs = async ($: EngineInterface, argv: string[]) => {
 
 const slashed = (path: string) => path.replace(/\\/g, '/')
 
+// The do-not-disturb profile on now, when the dnd mod is installed: it hides the PRs & CI, or keeps
+// only some repos (owner/repo or its last part; @here, the session's repo).
+const dndActive = atom({ plugin: 'dnd', key: 'active' } as const, null)
+
+const repoTail = (repo: string) => (slashed(repo).replace(/\/+$/, '').split('/').pop() ?? repo).toLowerCase()
+
+// null when the profile hides them all; else the snapshot with the repos it keeps.
+const dndSnapshot = async ($: EngineInterface): Promise<{ shown: PrSnapshot | null; on: DndActive | null; isHidden: boolean; isFiltered: boolean }> => {
+  const shown = await read($, snapshot)
+  const on = await read($, dndActive)
+  const rule = on?.profile ? on.parts?.prs : undefined
+
+  if (rule?.mode === 'hide') {
+    return { shown, on, isHidden: true, isFiltered: false }
+  }
+
+  if (rule?.mode !== 'only' || on === null || shown === null) {
+    return { shown, on, isHidden: false, isFiltered: false }
+  }
+
+  const kept = (rule.only ?? []).map(name => repoTail(name === '@here' ? on.here.name : name))
+  const keeps = (row: { repo: string }) => kept.includes(repoTail(row.repo))
+
+  return {
+    shown: {
+      ...shown,
+      prs: shown.prs.filter(keeps),
+      reviews: shown.reviews?.filter(keeps),
+      builds: shown.builds?.filter(keeps),
+      recent: shown.recent?.filter(keeps),
+    },
+    on,
+    isHidden: false,
+    isFiltered: true,
+  }
+}
+
 // On Windows, Claude Code's own PATH has Git's cmd folder (git) but not bash: Git Bash is found
 // from the variable Claude Code reads for it, then from git's own install folder.
 let bashFound: string | undefined
@@ -289,8 +343,14 @@ const prWatch = async ($: EngineInterface, args: string[], timeoutMs = 30_000) =
 
 class StatusProblem extends Error {}
 
-const status = async ($: EngineInterface, isLive: boolean) => {
-  const ran = await prWatch($, isLive ? ['status', '--live'] : ['status'], isLive ? LIVE_TIMEOUT_MS : 30_000)
+// `cached`: the records and the shared snapshot as they are; `auto`: the hosts whose share is too old
+// fetched again first; `live`: every host fetched now (the refresh button).
+type Mode = 'cached' | 'auto' | 'live'
+
+const STATUS_ARGS: Record<Mode, string[]> = { cached: ['status'], auto: ['status', '--auto'], live: ['status', '--live'] }
+
+const status = async ($: EngineInterface, mode: Mode) => {
+  const ran = await prWatch($, STATUS_ARGS[mode], mode === 'cached' ? 30_000 : LIVE_TIMEOUT_MS)
 
   if (ran.exitCode !== 0) {
     throw new StatusProblem((ran.stderr.trim() || `pr-watch exited with ${ran.exitCode}`).split('\n')[0])
@@ -329,14 +389,16 @@ const withCached = (shown: PrSnapshot | null, cached: PrSnapshot): PrSnapshot =>
 const LIVE_LOST_MS = LIVE_TIMEOUT_MS + 30_000
 let liveStartedAt = 0
 
-const load = async ($: EngineInterface, isLive: boolean) => {
+const load = async ($: EngineInterface, mode: Mode) => {
+  const isLive = mode !== 'cached'
+
   if (isLive) {
     liveStartedAt = await $.clock.now()
     await update($, isRefreshing, () => true)
   }
 
   try {
-    const loaded: PrSnapshot = { ...(await status($, isLive)), isLive, at: clockTime(await $.clock.now()) }
+    const loaded: PrSnapshot = { ...(await status($, mode)), isLive, at: clockTime(await $.clock.now()) }
     await update($, snapshot, shown => (isLive ? loaded : withCached(shown, loaded)))
     await update($, isActive, () => true)
     await update($, problem, () => '')
@@ -347,7 +409,7 @@ const load = async ($: EngineInterface, isLive: boolean) => {
 
     // A live status that failed still shows what another session or the morning check recorded.
     if (isLive) {
-      const cached = await status($, false).catch(() => undefined)
+      const cached = await status($, 'cached').catch(() => undefined)
 
       if (cached !== undefined) {
         const at = clockTime(await $.clock.now())
@@ -366,22 +428,23 @@ const load = async ($: EngineInterface, isLive: boolean) => {
 
 let nextRefresh: { cancel: () => void } | undefined
 
-// While the pane is open it is fetched live again, every minute while a PR's CI or a pipeline run is
-// in progress, every few minutes otherwise: what changed on the host shows without a press.
-const refresh = async ($: EngineInterface) => {
+// While the pane is open it is asked again, every minute while a PR's CI or a pipeline run is in
+// progress, every two minutes otherwise: what changed on the host, or what another computer fetched,
+// shows without a press. The refresh button fetches every host now.
+const refresh = async ($: EngineInterface, mode: Mode = 'auto') => {
   const isLost = liveStartedAt === 0 || (await $.clock.now()) - liveStartedAt > LIVE_LOST_MS
 
   if ((await read($, isRefreshing)) && !isLost) {
     return
   }
 
-  if (await load($, true)) {
+  if (await load($, mode)) {
     await refreshOpenDetails($)
   }
 
   nextRefresh?.cancel()
   const shown = await read($, snapshot)
-  const every = anyRunning(shown?.prs ?? [], shown?.builds ?? []) ? WHILE_RUNNING_EVERY_MS : RELOAD_EVERY_MS
+  const every = anyRunning(shown?.prs ?? [], shown?.builds ?? []) ? WHILE_RUNNING_EVERY_MS : IDLE_EVERY_MS
   nextRefresh = $.clock.after(every, () => void refreshIfShown($))
 }
 
@@ -435,7 +498,7 @@ const toggleBuildDetails = async ($: EngineInterface, url: string) => {
     return
   }
 
-  const known = (await read($, readSteps))[url]
+  const known = (await read($, readSteps))[url] ?? (await keptSteps($, url))
 
   if (known !== undefined) {
     await update($, buildDetails, shown => ({ ...shown, [url]: { isLoading: false, steps: known } }))
@@ -445,6 +508,22 @@ const toggleBuildDetails = async ($: EngineInterface, url: string) => {
 
   await update($, buildDetails, shown => ({ ...shown, [url]: { isLoading: true, steps: [] } }))
   await readRunSteps($, url, true)
+}
+
+// An ended run's steps pr-watch already read (on this computer or another one, through the sync) are
+// read from its file: no pr-watch to start, which can take seconds on some computers.
+const keptSteps = async ($: EngineInterface, url: string) => {
+  const file = (await read($, snapshot))?.builds?.find(build => build.url === url)?.stepsFile
+
+  if (file === undefined) {
+    return undefined
+  }
+
+  try {
+    return (JSON.parse(String(await $.fs.read(file))) as { steps: BuildStep[] }).steps
+  } catch {
+    return undefined
+  }
 }
 
 // A run still going changes: only an ended one is kept. Read again for a run already unfolded, the
@@ -546,7 +625,7 @@ const rerunBuild = async ($: EngineInterface, build: BuildRow) => {
   // GitHub re-runs keep the URL: the steps read before belong to the attempt that ended.
   await update($, readSteps, kept => Object.fromEntries(Object.entries(kept).filter(([url]) => url !== build.url)))
   await update($, buildDetails, shown => Object.fromEntries(Object.entries(shown).filter(([url]) => url !== build.url)))
-  $.clock.after(AFTER_RERUN_MS, () => void refresh($))
+  $.clock.after(AFTER_RERUN_MS, () => void refresh($, 'live'))
 }
 
 const askDiagnose = async ($: EngineInterface, build: BuildRow) => {
@@ -586,7 +665,7 @@ const rerunCheck = async ($: EngineInterface, url: string, name: string) => {
   }
 
   $.ui.toast(`Relaunched ${name}`)
-  $.clock.after(AFTER_RERUN_MS, () => void refresh($))
+  $.clock.after(AFTER_RERUN_MS, () => void refresh($, 'live'))
 }
 
 const askConflictFix = async ($: EngineInterface, pr: PrRow) => {
@@ -639,7 +718,7 @@ const actOnPr = async (
   $.ui.toast(`${done} ${pr.repo} #${pr.number}`)
   // pr-watch recorded the outcome (tracked as reviewed, or moved to the recent list): the cached
   // status shows it.
-  await load($, false)
+  await load($, 'cached')
   await update($, inFlight,() => '')
 }
 
@@ -678,7 +757,7 @@ const quickly = async (
 
   if (ran.exitCode !== 0) {
     $.ui.toast(`${failed}: ${ran.stderr.trim().split('\n')[0]}`)
-    await load($, false)
+    await load($, 'cached')
 
     return
   }
@@ -759,7 +838,7 @@ const openPr = async ($: EngineInterface, url: string) => {
 
 const openPane = async ($: EngineInterface) => {
   await $.ui.open({ id: PANE, title: TITLE, columns: 64 })
-  await load($, false)
+  await load($, 'cached')
   void refresh($)
 }
 
@@ -895,7 +974,7 @@ const reloadCached = async ($: EngineInterface) => {
 
   if ((await read($, isActive)) && now - loadedAt >= RELOAD_EVERY_MS) {
     loadedAt = now
-    await load($, false)
+    await load($, 'cached')
   }
 }
 
@@ -942,13 +1021,13 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const beneath = await next(e)
-    const shown = await read($, snapshot)
+    const { shown, isHidden } = await dndSnapshot($)
     const prs = (shown?.prs ?? []).filter(pr => pr.parked !== true)
     const reviews = shown?.reviews?.length ?? 0
     const running = (shown?.builds ?? []).filter(isBuildWatched).length
     const isBroken = (await read($, problem)) !== ''
 
-    if (e.props.hasSurvey || e.props.view.agentId !== undefined || (!(await read($, isActive)) && !isBroken)) {
+    if (e.props.hasSurvey || e.props.view.agentId !== undefined || isHidden || (!(await read($, isActive)) && !isBroken)) {
       return beneath
     }
 
@@ -987,7 +1066,13 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Button, Link, Text } = $.ui.resolve(e)
-    const shown = await read($, snapshot)
+    const dnd = await dndSnapshot($)
+
+    if (dnd.isHidden) {
+      return <Text dimColor>{`Hidden by the do-not-disturb profile ${dnd.on?.profile ?? ''}.`}</Text>
+    }
+
+    const shown = dnd.shown
     const busy = await read($, isRefreshing)
     const trouble = await read($, problem)
     const toggled = await read($, ciToggled)
@@ -1031,7 +1116,8 @@ export const register: Register = on => {
     const summary =
       shown === null
         ? 'Loading…'
-        : `${prs.length} PR${prs.length === 1 ? '' : 's'} · ${shown.isLive ? 'live at' : 'last check, read at'} ${shown.at}`
+        : `${prs.length} PR${prs.length === 1 ? '' : 's'}${dnd.isFiltered ? ` of the repos ${dnd.on?.profile ?? ''} keeps` : ''} · ` +
+          (sharesText(shown, nowMs) || `${shown.isLive ? 'live at' : 'last check, read at'} ${shown.at}`)
 
     // A row's own text folds and unfolds it, as its arrow does; a build that draws no styled button
     // gets the plain label.
@@ -1734,7 +1820,7 @@ export const register: Register = on => {
               label={busy ? 'refreshing…' : 'refresh'}
               hotkey="r"
               dimColor={busy}
-              onPress={() => void refresh($)}
+              onPress={() => void refresh($, 'live')}
             />
           </Box>
         </Box>

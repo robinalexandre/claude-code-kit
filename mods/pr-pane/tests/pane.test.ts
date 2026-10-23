@@ -149,7 +149,8 @@ test('PRs are grouped per repo in merge order and CI checks show while they run,
   let liveCalls = 0
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
   on('process.run', ($, e) => {
-    liveCalls += e.argv.includes('--live') ? 1 : 0
+    // On its own, the pane asks for the hosts whose share is too old, never all of them.
+    liveCalls += e.argv.includes('--auto') ? 1 : 0
 
     return ran(0, e.argv[2] === 'status' ? JSON.stringify(STACKED) : '')
   })
@@ -1284,7 +1285,7 @@ test('a cached reload keeps what a live status found newer, and a failed live st
   on('process.run', ($, e) => {
     const args = e.argv.slice(2).join(' ')
 
-    if (args === 'status --live') {
+    if (args === 'status --live' || args === 'status --auto') {
       return isHostDown ? ran(1, '', 'gh: could not connect') : ran(0, JSON.stringify(fetched))
     }
 
@@ -1322,7 +1323,7 @@ test('an unfolded run still going is read again with each live status, and the p
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
   on('process.run', ($, e) => {
     const command = e.argv.slice(2).join(' ')
-    liveCalls += e.argv.includes('--live') ? 1 : 0
+    liveCalls += e.argv.includes('--auto') ? 1 : 0
 
     if (command.startsWith('details')) {
       return ran(0, JSON.stringify({ steps: [{ name: 'Package', job: 'build', state: stepState, errors: [] }] }))
@@ -1348,7 +1349,7 @@ test('an unfolded run still going is read again with each live status, and the p
 
   expect(await pane.find({ text: /Package succeeded$/ })).toBeDefined()
 
-  // Nothing running any more: the pane is still fetched live, every few minutes.
+  // Nothing running any more: the pane still asks again, every two minutes.
   status = { ...BUILDS, builds: BUILDS.builds.filter(build => build.status !== 'running') }
   await clock.advance(60_000)
   const before = liveCalls
@@ -1356,7 +1357,88 @@ test('an unfolded run still going is read again with each live status, and the p
 
   expect(liveCalls).toBe(before)
 
-  await clock.advance(4 * 60_000)
+  await clock.advance(60_000)
 
   expect(liveCalls).toBe(before + 1)
+})
+
+test('the header says how old each host share is, and a kept run reads its steps without pr-watch', async ($, on) => {
+  const clock = mock.clock(on)
+  const nowMs = Date.UTC(2026, 0, 1, 10, 30)
+  await clock.set(nowMs)
+  const calls: string[] = []
+  const ended = { ...BUILDS.builds[0], status: 'failed', ended: '2026-01-01T10:05Z', stepsFile: '/home/someone/.claude-sync/pr-watch/steps/abc.json' }
+  const shared = {
+    ...BUILDS,
+    builds: [ended],
+    sections: {
+      github: { at: new Date(nowMs - 3 * 60_000).toISOString(), by: 'mac' },
+      ado: { at: new Date(nowMs - 60_000).toISOString(), by: 'windows' },
+    },
+  }
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
+  on('process.run', ($, e) => {
+    calls.push(e.argv.slice(2).join(' '))
+
+    return ran(0, JSON.stringify(shared))
+  })
+  on('fs.read', ($, e) => ({
+    value: e.path === ended.stepsFile ? JSON.stringify({ steps: [{ name: 'Package', job: 'build', state: 'failed', errors: ['boom'] }] }) : '{}',
+  }))
+  on('ui.render', () => Fragment({}))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+
+  await $.command.run(RUN)
+  const pane = await mountPane($, 'terminal', 120)
+
+  expect(await pane.find({ text: /GitHub 3 min \(mac\) · Azure DevOps 1 min \(windows\)/ })).toBeDefined()
+
+  await pane.press({ key: 'builds' })
+  await pane.press({ key: 'builds-repo-project' })
+  await pane.press({ key: 'build-toggle-70125' })
+
+  // A failed job is unfolded at once.
+  expect(await pane.find({ text: /Package failed/ })).toBeDefined()
+  expect(calls.some(call => call.startsWith('details'))).toBe(false)
+})
+
+const withDnd = (on: Parameters<Parameters<typeof test>[1]>[1], prs: object) => {
+  mock.clock(on)
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
+  on('process.run', () =>
+    ran(0, JSON.stringify({ live: false, prs: [row('1', { ci: 'CI failed', waiting: 'a CI fix' }), row('2', { repo: 'app', ci: 'CI failed', waiting: 'a CI fix' })], errors: [] }))
+  )
+  on('ui.render', () => Fragment({}))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  on('state.get', { plugin: 'dnd' }, () => ({
+    value: { value: { profile: 'work', parts: { prs }, here: { path: '/home/someone/dev/app', name: 'app' } }, version: 1 },
+  }))
+}
+
+test('a do-not-disturb profile keeping some repos counts and lists only theirs', async ($, on) => {
+  withDnd(on, { mode: 'only', only: ['owner/app'] })
+
+  await $.command.run(RUN)
+  const band = await $.ui.mount({ plugin: 'pr-pane', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
+
+  expect(await band.find({ key: 'prs', text: 'PRs & CI 1 !' })).toBeDefined()
+  expect(await (await mountPane($, 'terminal')).find({ text: /^1 PR of the repos work keeps/ })).toBeDefined()
+})
+
+test('@here keeps the session repo', async ($, on) => {
+  withDnd(on, { mode: 'only', only: ['@here'] })
+
+  await $.command.run(RUN)
+
+  expect(await (await mountPane($, 'terminal')).find({ text: /^1 PR of the repos work keeps/ })).toBeDefined()
+})
+
+test('a profile hiding the PRs drops the band button and says so in the pane', async ($, on) => {
+  withDnd(on, { mode: 'hide' })
+
+  await $.command.run(RUN)
+  const band = await $.ui.mount({ plugin: 'pr-pane', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
+
+  expect(await band.find({ key: 'prs' })).toBeUndefined()
+  expect(await (await mountPane($, 'terminal')).find({ text: 'Hidden by the do-not-disturb profile work.' })).toBeDefined()
 })

@@ -380,7 +380,7 @@
     {
       "name": "pr-watch",
       "description": "Tracks your PRs until merged: new comments, votes, CI results, merges, review requests and your pipeline runs (GitHub, Azure DevOps).",
-      "version": "1.0.1",
+      "version": "1.1.0",
       "category": "development",
       "source": ".",
       "strict": false,

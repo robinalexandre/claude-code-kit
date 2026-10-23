@@ -50,6 +50,10 @@ jobs:
           bash tests/install-sandbox.sh --auto tests/answers-skip-a-group.txt
       - name: Updates of an install.sh install
         run: bash tests/kit-update-check.sh
+      - name: pr-watch's shared snapshot
+        run: |
+          py=$(command -v python3 || command -v python)
+          "$py" -I tests/pr-watch-shared.py
       - name: Mods
         working-directory: mods
         run: for m in */; do claude plugin test "${m%/}" || exit 1; done
