@@ -303,20 +303,31 @@ const syncNow = async ($: EngineInterface) => {
   return $.process.run([await bash($), '-c', `[ -f "${sync}" ] && bash "${sync}" now`], { timeoutMs: 120_000 }).catch(() => undefined)
 }
 
-// Every minute the sync asks the remote whether another computer pushed (sync.sh poll: one cheap
-// request, and one check per computer however many sessions ask); what it brings shows at once.
-const POLL_EVERY_MS = 60_000
+// The sync asks the remote whether another computer pushed (sync.sh poll: one cheap request, and one
+// check per computer however many sessions ask), every minute while the pane is open, every five
+// minutes otherwise. Whichever session pulled, the others see the new head and read again.
+const POLL_OPEN_MS = 60_000
+const POLL_CLOSED_MS = 5 * 60_000
 let nextPoll: { cancel: () => void } | undefined
+let seenHead = ''
+
+const schedulePoll = async ($: EngineInterface) => {
+  const isShown = (await $.ui.panes().catch(() => [])).some(pane => pane.id === PANE)
+  nextPoll?.cancel()
+  nextPoll = $.clock.after(isShown ? POLL_OPEN_MS : POLL_CLOSED_MS, () => void poll($).catch(() => undefined))
+}
 
 const poll = async ($: EngineInterface) => {
-  nextPoll?.cancel()
-  nextPoll = $.clock.after(POLL_EVERY_MS, () => void poll($).catch(() => undefined))
+  await schedulePoll($)
   const sync = `${await home($)}/.claude-sync/sync.sh`
   const ran = await $.process
     .run([await bash($), '-c', `[ -f "${sync}" ] && bash "${sync}" poll`], { timeoutMs: 120_000 })
     .catch(() => undefined)
+  const head = /^head (\S+)$/m.exec(ran?.stdout ?? '')?.[1] ?? ''
+  const isPulled = ran?.stdout.includes('main moved') === true || (head !== '' && seenHead !== '' && head !== seenHead)
+  seenHead = head || seenHead
 
-  if (ran?.stdout.includes('main moved')) {
+  if (isPulled) {
     loadedAt = await $.clock.now()
     await load($)
   }
@@ -398,6 +409,8 @@ const openPane = async ($: EngineInterface, source?: Source) => {
 
   await $.ui.open({ id: PANE, title, columns: 72 })
   await load($)
+  // Open, it is asked every minute from now on.
+  await schedulePoll($)
 }
 
 const dayText = (stamp: string) => {
@@ -480,8 +493,7 @@ const start = async ($: EngineInterface) => {
   loadedAt = Number.NEGATIVE_INFINITY
   styledFound = undefined
   void reload($).catch(() => undefined)
-  nextPoll?.cancel()
-  nextPoll = $.clock.after(POLL_EVERY_MS, () => void poll($).catch(() => undefined))
+  void schedulePoll($)
 }
 
 export const register: Register = on => {
@@ -825,7 +837,6 @@ export const register: Register = on => {
       </Box>
     )
 
-    // A section's rows, each group under a title that folds, even a lone one.
     // A section's rows, each group under a title that folds, even a lone one. Each row is told which
     // control folds its details back: its group's.
     const grouped = <T extends { id: string },>(section: string, rows: T[], groupOf: (row: T) => string, draw: (row: T, closedBy: string) => unknown) => {

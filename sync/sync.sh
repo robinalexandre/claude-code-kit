@@ -63,19 +63,28 @@ case "${1:-}" in
     ;;
   poll)
     # One light request before any setup, one check per POLL_EVERY_SEC for the whole computer
-    # (every open session asks): a sync runs only when another computer pushed.
+    # (every open session asks): a sync runs only when another computer pushed, and pulls without
+    # the forced scans. Each caller gets `head <commit>` so it notices a pull another session made.
     POLL_EVERY_SEC=50
     mkdir -p "$STATE"
     now=$(date +%s)
     last=$(cat "$STATE/poll-at" 2> /dev/null)
-    [ $((now - ${last:-0})) -ge "$POLL_EVERY_SEC" ] || exit 0
+    known=$(git -C "$SYNC" rev-parse -q --verify refs/remotes/origin/main 2> /dev/null)
+    if [ $((now - ${last:-0})) -lt "$POLL_EVERY_SEC" ]; then
+      echo "head $known"
+      exit 0
+    fi
     echo "$now" > "$STATE/poll-at"
     remote=$(GIT_TERMINAL_PROMPT=0 GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=10 \
       git -C "$SYNC" ls-remote origin refs/heads/main 2> /dev/null | cut -f1)
-    known=$(git -C "$SYNC" rev-parse -q --verify refs/remotes/origin/main 2> /dev/null)
-    [ -n "$remote" ] && [ "$remote" != "$known" ] || exit 0
+    if [ -z "$remote" ] || [ "$remote" = "$known" ]; then
+      echo "head $known"
+      exit 0
+    fi
     echo "main moved: syncing"
-    exec bash "$SYNC/sync.sh" run force
+    bash "$SYNC/sync.sh" run pull
+    echo "head $(git -C "$SYNC" rev-parse -q --verify refs/remotes/origin/main 2> /dev/null)"
+    exit 0
     ;;
 esac
 case "${1:-}" in
@@ -1005,12 +1014,12 @@ git_setup() {
 }
 
 remote_sync() {
-  local before
+  local before came
   git remote get-url origin > /dev/null 2>&1 || {
     fail "this repo has no remote yet: git -C ~/.claude-sync remote add origin <your private repo's URL>"
     return 1
   }
-  if [ "${1:-}" != force ] && ! ahead && [ -f "$STATE/fetched" ] &&
+  if [ "${1:-}" != force ] && [ "${1:-}" != pull ] && ! ahead && [ -f "$STATE/fetched" ] &&
     [ -z "$(find "$STATE/fetched" -mmin +"$FETCH_EVERY_MIN" 2> /dev/null)" ]; then
     return 0
   fi
@@ -1027,7 +1036,11 @@ remote_sync() {
       return 1
     fi
     if [ "$(git rev-parse HEAD)" != "$before" ]; then
-      MCP_NOW=1 SCAN_NOW=1
+      # The repo scan and the MCP servers cost seconds: done again only for what came in (most
+      # pulls bring reminders, handoffs or PR records).
+      came=$(git diff --name-only "$before" HEAD)
+      grep -q '^mcp/' <<< "$came" && MCP_NOW=1
+      grep -qE '^(repos|folders|memory-repos|memory-folders)/' <<< "$came" && SCAN_NOW=1
       pull_in "$before" HEAD || return 1
       apply_settings
       say "applied changes from the other machine(s)"

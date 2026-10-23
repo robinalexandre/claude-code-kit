@@ -1,6 +1,6 @@
 #!/bin/bash
-# sync.sh poll: says nothing while the remote's main has not moved, syncs once it has, and asks the
-# remote at most once per 50 seconds for the whole computer.
+# sync.sh poll: gives the head this computer knows while the remote's main has not moved, syncs once
+# it has, and asks the remote at most once per 50 seconds for the whole computer.
 #   bash tests/sync-poll.sh
 set -u
 KIT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -18,13 +18,14 @@ git -C "$WORK/other" push -q origin HEAD:main
 git clone -q "$WORK/remote.git" "$WORK/sync"
 cp "$KIT/sync/sync.sh" "$WORK/sync/sync.sh"
 
+first=$(git -C "$WORK/sync" rev-parse origin/main)
 out=$(bash "$WORK/sync/sync.sh" poll)
-check "nothing said while main has not moved" "$out" ""
+check "only the head while main has not moved" "$out" "head $first"
 
 git -C "$WORK/other" -c user.email=t@example.com -c user.name=t commit -q --allow-empty -m two
 git -C "$WORK/other" push -q origin HEAD:main
-out=$(bash "$WORK/sync/sync.sh" poll 2> /dev/null | head -1)
-check "asked again within 50 seconds: not even a request" "$out" ""
+out=$(bash "$WORK/sync/sync.sh" poll 2> /dev/null)
+check "asked again within 50 seconds: no request, the head this computer knows" "$out" "head $first"
 
 rm -f "$WORK/sync/.state/poll-at"
 out=$(bash "$WORK/sync/sync.sh" poll 2> /dev/null | head -1)

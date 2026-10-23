@@ -36,7 +36,8 @@ const NOTE = {
   body: '## Next steps\nRun the job.',
 }
 
-type World = { reminders: object[]; handoffs: object[]; installed: string[]; hasRemoteMoved?: boolean }
+// `head`: the sync repo's commit as sync.sh poll gives it; `isPaneShown`: the pane is open.
+type World = { reminders: object[]; handoffs: object[]; installed: string[]; head?: string; isPaneShown?: boolean }
 
 const answerBeneath = (on: On, world: World, calls: string[][], submitted: string[] = [], isNameTaken = false) => {
   const clock = mock.clock(on)
@@ -51,7 +52,7 @@ const answerBeneath = (on: On, world: World, calls: string[][], submitted: strin
     const [, path, action] = e.argv
 
     if (path === '-c' && action.endsWith(' poll')) {
-      return ran(0, world.hasRemoteMoved ? 'main moved: syncing\n' : '')
+      return ran(0, `head ${world.head ?? 'first'}\n`)
     }
 
     if (action !== 'json') {
@@ -67,6 +68,9 @@ const answerBeneath = (on: On, world: World, calls: string[][], submitted: strin
   })
   on('ui.render', () => Fragment({}))
   on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  on('ui.panes', () => ({
+    value: world.isPaneShown ? [{ id: 'reminders-handoffs', title: 'Reminders', isShown: true, isFocused: false, isPlaced: true }] : [],
+  }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
 
   return clock
@@ -81,30 +85,41 @@ const closingBars = async (pane: { findAll: (query: { type: string }) => Promise
 
 const mountBand = ($: Engine) => $.ui.mount({ plugin: 'reminders-handoffs', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
 
-test('every minute the sync asks whether another computer pushed, and what it brings shows at once', async ($, on) => {
+test('the sync is asked every minute while the pane is open, every five otherwise, and a pull shows at once', async ($, on) => {
   const calls: string[][] = []
-  const world: World = { reminders: [], handoffs: [], installed: [REMINDERS] }
+  const world: World = { reminders: [], handoffs: [], installed: [REMINDERS], isPaneShown: true }
   const clock = answerBeneath(on, world, calls)
+  const polls = () => calls.filter(argv => argv[1] === '-c' && argv[2].endsWith(' poll')).length
 
   await $.session.start(START)
   await $.command.run(command('reminders-pane'))
   const pane = await mountPane($)
 
-  expect(await pane.find({ text: '▸ Upcoming (1)' })).toBeUndefined()
-
   // Nothing pushed elsewhere: asked, nothing read again.
   await clock.advance(60_000)
-  const polls = () => calls.filter(argv => argv[1] === '-c' && argv[2].endsWith(' poll')).length
 
   expect(polls()).toBe(1)
   expect(await pane.find({ text: '▸ Upcoming (1)' })).toBeUndefined()
 
+  // Another session on this computer pulled what another computer pushed: the head moved.
   world.reminders = [LATER]
-  world.hasRemoteMoved = true
+  world.head = 'second'
   await clock.advance(60_000)
 
   expect(polls()).toBe(2)
   expect(await pane.find({ text: '▸ Upcoming (1)' })).toBeDefined()
+
+  // Closed: every five minutes.
+  world.isPaneShown = false
+  await clock.advance(60_000)
+  const closed = polls()
+  await clock.advance(4 * 60_000)
+
+  expect(polls()).toBe(closed)
+
+  await clock.advance(60_000)
+
+  expect(polls()).toBe(closed + 1)
 })
 
 test('/reminders lists them by section, done closes a repeating one for today', async ($, on) => {
@@ -177,7 +192,6 @@ test('the arrow at the end of a section line unfolds or folds all under it, the 
   expect(await pane.find({ text: /Repeats: every friday/ })).toBeDefined()
   expect(await pane.find({ text: '▸ Upcoming (1)' })).toBeDefined()
   expect(await pane.find({ key: 'all-now', text: '▴ all' })).toBeDefined()
-
   // A hidden bar beside each open block marks it for the control that would fold it back: the
   // section for the one beside refresh, the group for the section's, the details for the group's.
   expect(await closingBars(pane)).toBe(3)
