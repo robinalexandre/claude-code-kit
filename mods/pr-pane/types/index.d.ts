@@ -90,18 +90,20 @@ export type BuildStep = { name: string; job: string; state: string; errors: stri
 
 export type BuildDetails = { isLoading: boolean; steps: BuildStep[] }
 
-/** What the dnd mod has on, as it declares it: the parts a profile hides or keeps only some of. */
+/**
+ * What the dnd mod has on, the part of it this pane reads: by part, hidden, or the names kept
+ * (`keep`: lowercase, the last part of a path).
+ */
 export type DndActive = {
   profile: string
-  parts: Partial<Record<string, { mode?: 'show' | 'hide' | 'only'; only?: string[] }>>
-  here: { path: string; name: string }
+  parts: Partial<Record<string, { mode?: 'show' | 'hide' | 'only'; keep?: string[] }>>
 }
 
 declare module 'claude-code' {
   interface PluginState {
-    /** The dnd mod's, read only: absent when it is not installed. */
+    /** The dnd mod's, read only under its shape `dnd-active/1`: absent when it is not installed. */
     dnd: {
-      active: DndActive | null
+      active: Shaped<DndActive | null>
     }
     'pr-pane': {
       snapshot: PrSnapshot | null

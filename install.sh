@@ -35,6 +35,7 @@ command -v jq > /dev/null || {
 }
 . "$KIT/hooks/lib/jq.sh"
 . "$KIT/hooks/lib/ask.sh"
+. "$KIT/hooks/lib/kit.sh"
 
 source_of() {
   case "$2" in
@@ -47,9 +48,10 @@ source_of() {
   esac
 }
 
-# name, kind, group, os, tools, needs, setup, sync: one line per part this copy of the kit carries.
+# name, kind, group, os, tools, needs, setup, sync, with: one line per part this copy of the kit
+# carries. A part `with` others is offered only beside one of them, picked or installed before.
 PARTS=$(jq -r '.parts[] | [.name, .kind, .group, (.os // [] | join(",")), (.tools // [] | join(",")),
-  (.needs // [] | join(",")), (.setup // "-"), (.sync // false | tostring)] | @tsv' "$KIT/parts.json" |
+  (.needs // [] | join(",")), (.setup // "-"), (.sync // false | tostring), (.with // [] | join(",") | if . == "" then "-" else . end)] | @tsv' "$KIT/parts.json" |
   while IFS=$'\t' read -r name kind rest; do
     if [ -e "$KIT/$(source_of "$name" "$kind")" ]; then printf '%s\t%s\t%s\n' "$name" "$kind" "$rest"; fi
   done)
@@ -64,6 +66,34 @@ offered() {
   local o
   o=$(field "$1" 4)
   [ -z "$o" ] || [[ ",$o," == *",$os,"* ]]
+}
+
+# Installed on this computer before: copied by this installer, or as a plugin of the kit's marketplace.
+BEFORE=$({
+  jq -r '.parts // {} | keys[]' "$RECORD" 2> /dev/null
+  jq -r '.plugins // {} | keys[] | select(endswith("@claude-code-kit")) | sub("@.*"; "")' \
+    "${CLAUDE_CONFIG_DIR:-$CLAUDE}/plugins/installed_plugins.json" 2> /dev/null
+} | sort -u)
+# with_of PART: the parts PART goes beside, one per line; nothing when it stands alone.
+with_of() { field "$1" 9 | grep -v '^-$' | tr ',' '\n'; }
+# beside PART PICKED: one of the parts PART goes beside is installed or among PICKED (lines).
+beside() {
+  local w
+  for w in $(with_of "$1"); do
+    if grep -qx "$w" <<< "$BEFORE"$'\n'"$2"; then return 0; fi
+  done
+  return 1
+}
+# The part's why, once more, after a pick that left it out though a part it goes beside is there.
+recommend() {
+  local p=$1 names
+  names=$(with_of "$p" | while read -r w; do if grep -qx "$w" <<< "$BEFORE"$'\n'"$picked"; then printf '%s ' "$w"; fi; done)
+  printf '\n  You have %swithout %s.\n' "$names" "$p"
+  if [ "$p" = dnd ]; then
+    printf '%s\n' "$KIT_DND_WHY" | fold -s -w 96 | sed 's/^/    /'
+  else
+    describe "$p" | tail -n +3
+  fi
 }
 
 if [ "${1:-}" = --list ]; then
@@ -109,13 +139,22 @@ pick_parts() {
   for p in $(cut -f1 <<< "$PARTS"); do if offered "$p"; then offer="$offer$p|"; fi; done
   is_offered() { [[ "$offer" == *"|$1|"* ]]; }
   is_on() { [[ "$sel" == *"|$1|"* ]]; }
+  # A part that goes beside others, none of them picked or installed: it waits for one.
+  alone() { [ -n "$(with_of "$1")" ] && ! beside "$1" "$(tr '|' '\n' <<< "$sel")"; }
   turn_on() {
     local n
     offered "$1" || return 0
+    alone "$1" && return 0
     is_on "$1" || sel="$sel$1|"
     for n in $(field "$1" 6 | tr ',' ' '); do turn_on "$n"; done
   }
-  turn_off() { sel=${sel//|$1|/|}; }
+  turn_off() {
+    local k
+    sel=${sel//|$1|/|}
+    for k in $(awk -F'\t' '$9 != "-" { print $1 }' <<< "$PARTS"); do
+      if is_on "$k" && alone "$k"; then sel=${sel//|$k|/|}; fi
+    done
+  }
   toggle_group() {
     local k all=1
     for ((k = $1 + 1; k < ${#row[@]}; k++)); do [ "${kind[k]}" = p ] || break; offered "${row[k]}" && ! is_on "${row[k]}" && all=0; done
@@ -144,7 +183,7 @@ pick_parts() {
           ;;
         p)
           name=${row[i]}
-          if ! is_offered "$name"; then mark='[-]'; elif is_on "$name"; then mark='[x]'; else mark='[ ]'; fi
+          if ! is_offered "$name" || alone "$name"; then mark='[-]'; elif is_on "$name"; then mark='[x]'; else mark='[ ]'; fi
           if [[ "$open" == *"|$name|"* ]]; then line="▾"; else line="▸"; fi
           line="  $mark $line $name: ${what[i]}"
           [ "${#line}" -ge "$cols" ] && line="${line:0:$((cols - 2))}…"
@@ -152,6 +191,8 @@ pick_parts() {
             printf -v line '\033[7m%s\033[0m' "$line"; out+=("$line")
           elif ! is_offered "$name"; then
             printf -v line '\033[2m%s (not on %s)\033[0m' "${line:0:$((cols - 14))}" "$os"; out+=("$line")
+          elif alone "$name"; then
+            printf -v line '\033[2m%s (pick %s first)\033[0m' "${line:0:$((cols - 40))}" "$(with_of "$name" | paste -sd/ -)"; out+=("$line")
           elif is_on "$name"; then
             printf -v line '\033[32m%s\033[0m' "$line"; out+=("$line")
           else
@@ -242,6 +283,7 @@ fi
 
 [ "${1:-}" = --plain ] && { KIT_INSTALL_PLAIN=1; shift; }
 picked=""
+chose=""
 if [ -n "$update" ]; then
   picked=$(bash "$KIT/hooks/kit-update-check.sh" changed HEAD | grep -vx kit-update-check || true)
   if [ -n "$picked" ]; then echo "Updating: $(echo $picked)"; else echo "No installed part changed."; fi
@@ -267,7 +309,9 @@ elif [ -z "${KIT_INSTALL_ANSWERS:-}" ] && [ "${KIT_INSTALL_PLAIN:-}" != 1 ] && [
   (: < /dev/tty) 2> /dev/null; then
   picked=$(pick_parts)
   [ -n "$picked" ] && echo "Picked: $(echo $picked)"
+  chose=1
 else
+  chose=1
   echo "The kit's parts, by group. For each: what it does, why you'd want it, when it acts and who it's for."
   for group in $(jq -r '.groups[].id' "$KIT/parts.json"); do
     names=$(awk -F'\t' -v g="$group" '$3 == g { print $1 }' <<< "$PARTS")
@@ -278,12 +322,26 @@ else
     [ -n "$elsewhere" ] && printf '   (not offered on %s:%s)\n' "$os" "$elsewhere"
     ask "group.$group" "Go through this group?" y || continue
     for p in $here; do
+      # A part that goes beside others waits for one of them; else it is recommended after the picks.
+      if [ -n "$(with_of "$p")" ] && ! beside "$p" "$picked"; then continue; fi
       describe "$p"
       if ask "part.$p" "  Install $p?"; then picked="$picked$p"$'\n'; fi
     done
   done
 fi
 picked=$(grep . <<< "$picked" || true)
+
+# A part left out though one it goes beside is picked or installed: said why once more, and asked.
+if [ -n "$chose" ]; then
+  for p in $(awk -F'\t' '$9 != "-" { print $1 }' <<< "$PARTS"); do
+    offered "$p" || continue
+    if grep -qx "$p" <<< "$picked"$'\n'"$BEFORE"; then continue; fi
+    beside "$p" "$picked" || continue
+    recommend "$p"
+    [ "$p" = dnd ] && kit_setup_mark dnd-recommended yes
+    if ask "recommend.$p" "  Install $p too?"; then picked=$(printf '%s\n%s' "$picked" "$p" | grep .); fi
+  done
+fi
 [ -n "$picked" ] || [ -n "$update" ] || {
   echo "Nothing picked."
   exit 0

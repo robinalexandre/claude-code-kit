@@ -1,0 +1,10 @@
+{
+  "name": "dnd",
+  "version": "0.1.0",
+  "description": "Do not disturb for the kit's panes: profiles that hide the history, the PRs & CI, the reminders or the handoffs, or keep only some repos and groups; turned on by hand, by Wi-Fi, by days and hours, or by folder.",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "robinalexandre",
+    "url": "https://github.com/robinalexandre/claude-code-kit"
+  }
+}

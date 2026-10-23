@@ -15,8 +15,18 @@ export type Answer = { id: string; text: string; time?: string; kind?: AnswerKin
  */
 export type RecentPrompt = { id: string; text: string; time?: string; kind?: 'learn' | 'command'; answers?: Answer[] }
 
+/** What the dnd mod has on, the part of it this pane reads: whether the history is hidden. */
+export type DndActive = {
+  profile: string
+  parts: Partial<Record<string, { mode?: 'show' | 'hide' | 'only' }>>
+}
+
 declare module 'claude-code' {
   interface PluginState {
+    /** The dnd mod's, read only under its shape `dnd-active/1`: absent when it is not installed. */
+    dnd: {
+      active: Shaped<DndActive | null>
+    }
     'recent-prompts': {
       prompts: RecentPrompt[]
       query: string

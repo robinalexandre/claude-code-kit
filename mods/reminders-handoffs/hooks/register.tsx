@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Handoff, Reminder, Source } from '../types'
+import type { DndActive, Handoff, Reminder, Source } from '../types'
 
 const PANE = 'reminders-handoffs'
 const RELOAD_EVERY_MS = 60_000
@@ -97,6 +97,38 @@ const wrap = (line: string, width: number): string[] => {
 }
 
 const tail = (path: string) => slashed(path).replace(/\/+$/, '').split('/').pop() ?? path
+
+// The do-not-disturb profile on now, when the dnd mod is installed: it hides a part, or keeps only
+// what belongs to some groups, repos or the session's folder. Read under dnd's shape: another one
+// (an older or newer dnd) reads as nothing on, and everything shows.
+const dndActive = atom({ plugin: 'dnd', key: 'active' } as const, null, { shape: 'dnd-active/1' })
+
+const dndRule = (on: DndActive | null, source: Source) => (on?.profile ? on.parts?.[source] : undefined)
+
+// dnd hands the names kept as they are matched: lowercase, the last part of a path.
+const dndShows = (on: DndActive | null, source: Source, names: string[]) => {
+  const rule = dndRule(on, source)
+
+  if (rule?.mode === 'hide') {
+    return false
+  }
+
+  return rule?.mode !== 'only' || names.some(name => name !== '' && (rule.keep ?? []).includes(tail(name).toLowerCase()))
+}
+
+// The parts and the rows the profile on now lets through.
+const dndView = async ($: EngineInterface) => {
+  const on = await read($, dndActive)
+  const all = { reminders: await read($, reminders), handoffs: await read($, handoffs) }
+
+  return {
+    on,
+    found: (await read($, enabled)).filter(source => dndRule(on, source)?.mode !== 'hide'),
+    reminders: all.reminders?.filter(one => dndShows(on, 'reminders', [reminderGroup(one), one.where ?? ''])) ?? null,
+    handoffs: all.handoffs?.filter(note => dndShows(on, 'handoffs', [handoffGroup(note), note.repo ?? ''])) ?? null,
+    isFiltered: (['reminders', 'handoffs'] as Source[]).some(source => dndRule(on, source)?.mode === 'only'),
+  }
+}
 
 // Buttons holding styled Text draw from 2.1.306 on, the oldest build checked; an older one, or a
 // version that cannot be read, gets plain labels.
@@ -492,10 +524,11 @@ export const register: Register = on => {
   // with nothing in them: yellow when a reminder is due or a note from the other computer waits.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const beneath = await next(e)
-    const found = await read($, enabled)
-    const { due, open, fromElsewhere } = counts(await read($, reminders), await read($, handoffs))
+    const view = await dndView($)
+    const found = view.found
+    const { due, open, fromElsewhere } = counts(view.reminders, view.handoffs)
 
-    if (found.length === 0) {
+    if ((await read($, enabled)).length === 0) {
       void reload($).catch(() => undefined)
     }
 
@@ -530,10 +563,13 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Button, Text } = $.ui.resolve(e)
-    const found = await read($, enabled)
-    const current = await read($, tab)
-    const shownReminders = await read($, reminders)
-    const shownHandoffs = await read($, handoffs)
+    const view = await dndView($)
+    const installed = await read($, enabled)
+    const found = view.found
+    const picked = await read($, tab)
+    const current = found.includes(picked) ? picked : (found[0] ?? picked)
+    const shownReminders = view.reminders
+    const shownHandoffs = view.handoffs
     const trouble = (await read($, problems))[current] ?? ''
     const unfolded = await read($, openIds)
     const sections = await read($, openSections)
@@ -875,7 +911,7 @@ export const register: Register = on => {
     }
 
     const loaded = current === 'reminders' ? shownReminders : shownHandoffs
-    const shownTab = loaded === null ? null : current === 'reminders' ? remindersTab() : handoffsTab()
+    const shownTab = loaded === null || found.length === 0 ? null : current === 'reminders' ? remindersTab() : handoffsTab()
     const tabFolds: Folds = {
       sectionKeys: (shownTab?.folds ?? []).flatMap(folds => folds.sectionKeys),
       ids: (shownTab?.folds ?? []).flatMap(folds => folds.ids),
@@ -895,7 +931,9 @@ export const register: Register = on => {
             )}
           </Box>
         )}
-        {found.length === 0 && <Text dimColor>Neither the reminders nor the handoff skill is installed.</Text>}
+        {installed.length === 0 && <Text dimColor>Neither the reminders nor the handoff skill is installed.</Text>}
+        {installed.length > 0 && found.length === 0 && <Text dimColor>{`Hidden by the do-not-disturb profile ${view.on?.profile ?? ''}.`}</Text>}
+        {found.length > 0 && view.isFiltered && <Text dimColor>{`Do not disturb (${view.on?.profile ?? ''}): only some groups shown.`}</Text>}
         <Box flexDirection="row" justifyContent="space-between">
           <Text dimColor>
             {trouble !== ''

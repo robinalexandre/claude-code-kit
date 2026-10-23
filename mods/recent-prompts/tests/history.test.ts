@@ -69,6 +69,31 @@ test('a /clear empties the history, and the band keeps its history button', asyn
   expect(await band.find({ key: 'history' })).toBeDefined()
 })
 
+test('a do-not-disturb profile hiding the history leaves the band and the pane empty', async ($, on) => {
+  mock.clock(on)
+  on('ui.render', () => Fragment({}))
+  on('state.get', { plugin: 'dnd' }, () => ({
+    value: { value: { shape: 'dnd-active/1', value: { profile: 'meeting', parts: { history: { mode: 'hide' } } } }, version: 1 },
+  }))
+
+  await say($, 'first', 'Why is my sound so low?')
+  const band = await $.ui.mount({ plugin: 'recent-prompts', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
+
+  expect(await band.find({ text: /sound so low/ })).toBeUndefined()
+  expect(await band.find({ key: 'history' })).toBeUndefined()
+
+  const pane = await $.ui.mount({
+    plugin: 'recent-prompts',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'my-messages',
+    props: { title: 'My messages', isFocused: true, bodyColumns: 50, placement: 'dock', scroll: SCROLL, view: {} },
+  })
+
+  expect(await pane.find({ text: 'Hidden by the do-not-disturb profile meeting.' })).toBeDefined()
+  expect(await pane.find({ key: 'search' })).toBeUndefined()
+})
+
 test('a message typed while a turn runs is listed as typed once its queued row is stored', async ($, on) => {
   mock.clock(on)
   on('prompt.submit', ($, e) => ({ text: e.text }))

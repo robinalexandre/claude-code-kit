@@ -267,8 +267,8 @@ const runs = async ($: EngineInterface, argv: string[]) => {
 const slashed = (path: string) => path.replace(/\\/g, '/')
 
 // The do-not-disturb profile on now, when the dnd mod is installed: it hides the PRs & CI, or keeps
-// only some repos (owner/repo or its last part; @here, the session's repo).
-const dndActive = atom({ plugin: 'dnd', key: 'active' } as const, null)
+// only some repos. Read under dnd's shape: another one (an older or newer dnd) reads as nothing on.
+const dndActive = atom({ plugin: 'dnd', key: 'active' } as const, null, { shape: 'dnd-active/1' })
 
 const repoTail = (repo: string) => (slashed(repo).replace(/\/+$/, '').split('/').pop() ?? repo).toLowerCase()
 
@@ -282,12 +282,12 @@ const dndSnapshot = async ($: EngineInterface): Promise<{ shown: PrSnapshot | nu
     return { shown, on, isHidden: true, isFiltered: false }
   }
 
-  if (rule?.mode !== 'only' || on === null || shown === null) {
+  if (rule?.mode !== 'only' || shown === null) {
     return { shown, on, isHidden: false, isFiltered: false }
   }
 
-  const kept = (rule.only ?? []).map(name => repoTail(name === '@here' ? on.here.name : name))
-  const keeps = (row: { repo: string }) => kept.includes(repoTail(row.repo))
+  // dnd hands the repos kept as they are matched: lowercase, the last part of owner/repo.
+  const keeps = (row: { repo: string }) => (rule.keep ?? []).includes(repoTail(row.repo))
 
   return {
     shown: {

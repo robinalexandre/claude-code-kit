@@ -42,7 +42,7 @@
     {
       "name": "statusline",
       "description": "A status line with folder, branch, model, context used, effort and rate limit (asks once to set it in your settings).",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "category": "productivity",
       "source": ".",
       "strict": false,
@@ -95,6 +95,15 @@
       "source": "./mods/recent-prompts"
     },
     {
+      "name": "dnd",
+      "description": "Do not disturb for the history, PR & CI and reminders-handoffs panes: profiles that hide a pane or keep only some repos and groups, on by hand (/dnd) or by Wi-Fi, days and hours, or folder.",
+      "category": "productivity",
+      "source": "./mods/dnd",
+      "skills": [
+        "./skills/dnd"
+      ]
+    },
+    {
       "name": "paste-preview",
       "description": "Pasted text shown in full, and previews of pasted images (macOS, Windows).",
       "category": "productivity",
@@ -103,7 +112,7 @@
     {
       "name": "recent-activity",
       "description": "A digest of your recent sessions across your dev folder at each session start, so Claude knows what you did lately in your other repos.",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "category": "productivity",
       "source": ".",
       "strict": false,
@@ -143,7 +152,7 @@
     {
       "name": "session-registry",
       "description": "Offers to resume the session left open in a terminal tab (zsh, JetBrains or Ghostty terminals).",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "category": "productivity",
       "source": ".",
       "strict": false,
@@ -344,7 +353,7 @@
     {
       "name": "git-identity-guard",
       "description": "Refuses a commit or push whose email isn't the one you chose for that host, or the one you used most in that repo; can check commits made outside Claude too.",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "category": "development",
       "source": ".",
       "strict": false,
@@ -380,7 +389,7 @@
     {
       "name": "pr-watch",
       "description": "Tracks your PRs until merged: new comments, votes, CI results, merges, review requests and your pipeline runs (GitHub, Azure DevOps).",
-      "version": "1.2.0",
+      "version": "1.2.1",
       "category": "development",
       "source": ".",
       "strict": false,
@@ -438,7 +447,7 @@
     {
       "name": "test-evidence",
       "description": "Screenshots, a short video and network proof of a ticket tested locally, attached to Jira or the PR (needs the chrome-devtools MCP).",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "category": "development",
       "source": ".",
       "strict": false,
@@ -484,7 +493,7 @@
     {
       "name": "config-sync",
       "description": "Keeps your Claude Code config the same on all your computers through a private git repo of your own (any host); sets it up at the first session and keeps the engine current. Each computer also records what it runs (system, Claude Code, plugins, kits) for the others to see.",
-      "version": "1.4.0",
+      "version": "1.4.1",
       "category": "productivity",
       "source": ".",
       "strict": false,
@@ -522,7 +531,7 @@
     {
       "name": "daily-sync",
       "description": "Syncs your config before the first session of the day and every morning at a time you pick, even with no session open.",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "category": "productivity",
       "source": ".",
       "strict": false,
@@ -549,7 +558,7 @@
     {
       "name": "reminders",
       "description": "Reminders for a later session, on any of your computers, notified on the desktop and the phone every morning; one-off or repeating, filed by group; and tasks your own assistant runs by itself at a set time.",
-      "version": "1.4.2",
+      "version": "1.4.3",
       "category": "productivity",
       "source": ".",
       "strict": false,

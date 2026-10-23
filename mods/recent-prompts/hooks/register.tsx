@@ -71,6 +71,15 @@ const prompts = atom({ plugin: 'recent-prompts', key: 'prompts' } as const, [])
 const query = atom({ plugin: 'recent-prompts', key: 'query' } as const, '')
 const waiting = atom({ plugin: 'recent-prompts', key: 'waiting' } as const, [])
 const unfolded = atom({ plugin: 'recent-prompts', key: 'unfolded' } as const, {})
+// The do-not-disturb profile on now, when the dnd mod is installed: one can hide the history. Read
+// under dnd's shape: another one (an older or newer dnd) reads as nothing on.
+const dndActive = atom({ plugin: 'dnd', key: 'active' } as const, null, { shape: 'dnd-active/1' })
+
+const dndHiding = async ($: EngineInterface) => {
+  const on = await read($, dndActive)
+
+  return on?.profile && on.parts?.history?.mode === 'hide' ? on.profile : ''
+}
 
 type Block = { type: string; [field: string]: unknown }
 type Shown = { before: string; match: string; after: string }
@@ -619,7 +628,7 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const beneath = await next(e)
 
-    if (e.props.hasSurvey || e.props.view.agentId !== undefined) {
+    if (e.props.hasSurvey || e.props.view.agentId !== undefined || (await dndHiding($)) !== '') {
       return beneath
     }
 
@@ -662,6 +671,12 @@ export const register: Register = (on, options) => {
     }
 
     const { Box, Button, Input, Text } = $.ui.resolve(e)
+    const hiding = await dndHiding($)
+
+    if (hiding !== '') {
+      return <Text dimColor>{`Hidden by the do-not-disturb profile ${hiding}.`}</Text>
+    }
+
     const list = await read($, prompts)
     const search = await read($, query)
     const open = await read($, unfolded)

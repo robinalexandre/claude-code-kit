@@ -39,6 +39,9 @@ kit_morning_scripts() {
   return 0
 }
 
+# What dnd is for, said where it is recommended: beside a pane it quiets, when it is not installed.
+KIT_DND_WHY='dnd quiets the history, PR & CI and reminders-handoffs panes when you need it: a profile hides a pane, or keeps only some repos and reminder groups (at the office, only the work repos; in a repo, only its own). Turn one on by hand ("in a meeting for 1h", for one session or the whole computer), or let it turn on by itself on a Wi-Fi network, on days and hours (week-ends, evenings) or in a folder.'
+
 # A part's setup state on this computer: done, declined or offered; nothing before its first offer.
 kit_setup_state() { cat "$HOME/.claude/kit-setup/$1" 2> /dev/null || true; }
 kit_setup_mark() { mkdir -p "$HOME/.claude/kit-setup" && printf '%s\n' "$2" > "$HOME/.claude/kit-setup/$1"; }

@@ -572,3 +572,61 @@ test('with only the handoff skill, the band says Handoffs', async ($, on) => {
 
   expect(await (await mountBand($)).find({ key: 'reminders-handoffs', text: 'Handoffs 1' })).toBeDefined()
 })
+
+const dndOn = (on: On, parts: object, shape = 'dnd-active/1') =>
+  on('state.get', { plugin: 'dnd' }, () => ({ value: { value: { shape, value: { profile: 'work', parts } }, version: 1 } }))
+
+test('a do-not-disturb profile keeping only some groups leaves the others out, counts too', async ($, on) => {
+  const work = { ...WEEKLY, id: 'review', title: 'Review the plan', group: 'Work' }
+  answerBeneath(on, { reminders: [WEEKLY, work], handoffs: [NOTE], installed: [REMINDERS, HANDOFF] }, [])
+  dndOn(on, { reminders: { mode: 'only', keep: ['work'] }, handoffs: { mode: 'hide' } })
+
+  await $.session.start(START)
+  await $.command.run(command('reminders-pane'))
+  const pane = await mountPane($)
+
+  expect(await (await mountBand($)).find({ key: 'reminders-handoffs', text: 'Reminders 1 now' })).toBeDefined()
+  // The hidden part loses its tab.
+  expect(await pane.find({ key: 'tab-handoffs' })).toBeUndefined()
+  expect(await pane.find({ text: /only some groups shown/ })).toBeDefined()
+
+  await pane.press({ key: 'now' })
+
+  expect(await pane.find({ text: '▸ Work (1)' })).toBeDefined()
+  expect(await pane.find({ text: '▸ General (1)' })).toBeUndefined()
+})
+
+test('a reminder is kept by the last part of its folder', async ($, on) => {
+  const shop = { ...WEEKLY, id: 'deploy', title: 'Deploy the shop', where: 'dev/shop' }
+  answerBeneath(on, { reminders: [WEEKLY, shop], handoffs: [NOTE], installed: [REMINDERS, HANDOFF] }, [])
+  dndOn(on, { reminders: { mode: 'only', keep: ['shop'] } })
+
+  await $.session.start(START)
+  await $.command.run(command('reminders-pane'))
+  const pane = await mountPane($)
+  await pane.press({ key: 'now' })
+
+  expect(await pane.find({ text: '▸ shop (1)' })).toBeDefined()
+  expect(await pane.find({ text: '▸ General (1)' })).toBeUndefined()
+})
+
+test('a profile hiding reminders and handoffs leaves no band button and says so in the pane', async ($, on) => {
+  answerBeneath(on, { reminders: [WEEKLY], handoffs: [NOTE], installed: [REMINDERS, HANDOFF] }, [])
+  dndOn(on, { reminders: { mode: 'hide' }, handoffs: { mode: 'hide' } })
+
+  await $.session.start(START)
+  await $.command.run(command('reminders-pane'))
+
+  expect(await (await mountBand($)).find({ key: 'reminders-handoffs' })).toBeUndefined()
+  expect(await (await mountPane($)).find({ text: 'Hidden by the do-not-disturb profile work.' })).toBeDefined()
+})
+
+test('a dnd of another shape reads as nothing on: everything shows', async ($, on) => {
+  answerBeneath(on, { reminders: [WEEKLY], handoffs: [NOTE], installed: [REMINDERS, HANDOFF] }, [])
+  dndOn(on, { reminders: { mode: 'hide' }, handoffs: { mode: 'hide' } }, 'dnd-active/2')
+
+  await $.session.start(START)
+  await $.command.run(command('reminders-pane'))
+
+  expect(await (await mountBand($)).find({ key: 'reminders-handoffs' })).toBeDefined()
+})

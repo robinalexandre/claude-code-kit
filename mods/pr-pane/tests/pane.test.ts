@@ -1413,13 +1413,11 @@ const withDnd = (on: Parameters<Parameters<typeof test>[1]>[1], prs: object) => 
   )
   on('ui.render', () => Fragment({}))
   on('ui.open', () => ({ value: { isPlaced: true as const } }))
-  on('state.get', { plugin: 'dnd' }, () => ({
-    value: { value: { profile: 'work', parts: { prs }, here: { path: '/home/someone/dev/app', name: 'app' } }, version: 1 },
-  }))
+  on('state.get', { plugin: 'dnd' }, () => ({ value: { value: { shape: 'dnd-active/1', value: { profile: 'work', parts: { prs } } }, version: 1 } }))
 }
 
 test('a do-not-disturb profile keeping some repos counts and lists only theirs', async ($, on) => {
-  withDnd(on, { mode: 'only', only: ['owner/app'] })
+  withDnd(on, { mode: 'only', keep: ['app'] })
 
   await $.command.run(RUN)
   const band = await $.ui.mount({ plugin: 'pr-pane', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
@@ -1428,8 +1426,8 @@ test('a do-not-disturb profile keeping some repos counts and lists only theirs',
   expect(await (await mountPane($, 'terminal')).find({ text: /^1 PR of the repos work keeps/ })).toBeDefined()
 })
 
-test('@here keeps the session repo', async ($, on) => {
-  withDnd(on, { mode: 'only', only: ['@here'] })
+test('a repo is kept by the last part of its name, whatever its owner or project', async ($, on) => {
+  withDnd(on, { mode: 'only', keep: ['shop'] })
 
   await $.command.run(RUN)
 
