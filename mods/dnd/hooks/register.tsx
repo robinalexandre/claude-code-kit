@@ -39,7 +39,18 @@ const PARTS: { part: DndPart; title: string }[] = [
 
 const HERE = '@here'
 const LENGTHS = ['30m', '1h', '2h']
-const SCOPES = { session: ['here', 'session', 'this'], computer: ['all', 'computer', 'everywhere'] }
+type Scope = 'session' | 'computer' | 'everywhere'
+const SCOPES: Record<Scope, string[]> = {
+  session: ['here', 'session', 'this'],
+  computer: ['computer', 'pc', 'mac'],
+  everywhere: ['all', 'everywhere'],
+}
+const WHERE: [Scope, string][] = [
+  ['session', 'this session'],
+  ['computer', 'this computer'],
+  ['everywhere', 'all computers'],
+]
+const scopeOf = (word: string) => (Object.keys(SCOPES) as Scope[]).find(scope => SCOPES[scope].includes(word))
 
 // The band's buttons share one row under everything above the prompt, whatever order the mods
 // draw in: each takes that row out of what the mods beneath drew, adds its own button, and sorts
@@ -86,6 +97,8 @@ const takeBandRow = (tree: unknown): { rest: unknown; buttons: unknown[] } => {
 }
 
 const slashed = (path: string) => path.replace(/\\/g, '/')
+
+const home = async ($: EngineInterface) => slashed((await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE')) ?? '~')
 
 const truncate = (text: string, width: number) =>
   text.length > width ? `${text.slice(0, Math.max(0, width - 1))}…` : text
@@ -144,6 +157,36 @@ const run = async ($: EngineInterface, args: string[]) => {
 
 const forSession = async ($: EngineInterface) => ['--session', await $.session.id()]
 
+const SHOWN_KEPT = 50
+
+// The status line shows the profile on beside the others: it reads it from this file, by session id.
+const show = async ($: EngineInterface, now: DndActive) => {
+  const base = await home($)
+
+  if (base === '~') {
+    return
+  }
+
+  const path = `${base}/.claude/.dnd/active.json`
+  const id = await $.session.id()
+  let shown: Record<string, unknown> = {}
+
+  try {
+    const parsed: unknown = JSON.parse(await $.fs.read(path))
+    shown = parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {}
+  } catch {
+    shown = {}
+  }
+
+  const kept = Object.entries(shown).filter(([session]) => session !== id).slice(-(SHOWN_KEPT - 1))
+  await $.fs.write(path, `${JSON.stringify(Object.fromEntries([...kept, [id, { profile: now.profile, scope: now.scope, untilText: now.untilText }]]), null, 1)}\n`)
+}
+
+const setActive = async ($: EngineInterface, now: DndActive) => {
+  await update($, active, () => now)
+  await show($, now).catch(() => undefined)
+}
+
 // What is on for this session: every minute, after each turn, and after each change.
 const refresh = async ($: EngineInterface) => {
   try {
@@ -160,7 +203,7 @@ const refresh = async ($: EngineInterface) => {
 
     // The other panes redraw on each write: only a change is written.
     if (JSON.stringify(before) !== JSON.stringify(now)) {
-      await update($, active, () => now)
+      await setActive($, now)
     }
 
     await update($, problem, () => '')
@@ -195,7 +238,7 @@ const load = async ($: EngineInterface) => {
     await update($, data, () => loaded)
 
     if (JSON.stringify(await read($, active)) !== JSON.stringify(loaded.active)) {
-      await update($, active, () => loaded.active)
+      await setActive($, loaded.active)
     }
 
     await update($, problem, () => '')
@@ -244,12 +287,16 @@ const editPart = ($: EngineInterface, profile: string, part: DndPart, rule: DndP
   })
 }
 
-const turnOn = async ($: EngineInterface, profile: string, length: string, scope: 'session' | 'computer') => {
+const turnOn = async ($: EngineInterface, profile: string, length: string, scope: Scope) => {
   await update($, pending, () => '')
-  await change($, ['on', profile, ...(length !== '' ? [length] : []), ...(scope === 'session' ? await forSession($) : [])])
+  const where = scope === 'session' ? await forSession($) : scope === 'everywhere' ? ['--everywhere'] : []
+  await change($, ['on', profile, ...(length !== '' ? [length] : []), ...where])
 }
 
-// Both switches off: this session's and the computer's; the rules decide again.
+// A profile to turn on, asked until when and where in the pane: `<profile>|<for>|<scope>`.
+const ask = ($: EngineInterface, profile: string, length = '', scope: Scope = 'session') => update($, pending, () => `${profile}|${length}|${scope}`)
+
+// Every switch off: this session's, the computer's and every computer's; the rules decide again.
 const turnOff = async ($: EngineInterface) => {
   await update($, pending, () => '')
   await run($, ['off', ...(await forSession($))]).catch(() => undefined)
@@ -260,8 +307,6 @@ const turnOff = async ($: EngineInterface) => {
 // one for this computer alone is also written to the sync's machine file, whose settings win
 // over the shared ones at each sync, so the shared value stays for the other computers.
 type Json = Record<string, unknown>
-
-const home = async ($: EngineInterface) => slashed((await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE')) ?? '~')
 
 const settingsFile = async ($: EngineInterface) => {
   const dir = await $.env.get('CLAUDE_CONFIG_DIR')
@@ -387,8 +432,8 @@ const openPane = async ($: EngineInterface) => {
 
 const isLength = (word: string) => /^(\d+[mhd]|\d{1,2}:\d{2})$/.test(word)
 
-// `/dnd`, `/dnd off`, `/dnd list`, `/dnd PROFILE [30m|2h|HH:MM] [here|all]`: without where, the
-// pane asks.
+// `/dnd`, `/dnd off`, `/dnd list`, `/dnd PROFILE [30m|2h|HH:MM] [here|pc|all]`: without where,
+// the pane asks.
 const command = async ($: EngineInterface, args: string) => {
   const [first = '', ...rest] = args.trim().split(/\s+/).filter(word => word !== '')
 
@@ -411,19 +456,20 @@ const command = async ($: EngineInterface, args: string) => {
   }
 
   const length = rest.find(isLength) ?? ''
-  const scope = rest.find(word => SCOPES.session.includes(word)) ? 'session' : rest.find(word => SCOPES.computer.includes(word)) ? 'computer' : ''
+  const scope = rest.map(scopeOf).find(one => one !== undefined)
 
-  if (scope === '') {
-    await update($, pending, () => `${first}|${length}`)
+  if (scope === undefined) {
+    await ask($, first, length)
     await openPane($)
 
-    return `Turn on ${first}${length !== '' ? ` for ${length}` : ''}: for this session or the whole computer? Choose in the Configuration pane.`
+    return `Turn on ${first}${length !== '' ? ` for ${length}` : ''}: for this session, this computer or all computers? Choose in the Configuration pane.`
   }
 
   await turnOn($, first, length, scope)
   const now = await read($, active)
+  const where = WHERE.find(([one]) => one === scope)?.[1] ?? scope
 
-  return now?.profile === first ? `DnD ${first} on${now.untilText !== '' ? ` until ${now.untilText}` : ''}.` : (await read($, problem)) || `Could not turn ${first} on.`
+  return now?.profile === first ? `DnD ${first} on for ${where}${now.untilText !== '' ? ` until ${now.untilText}` : ''}.` : (await read($, problem)) || `Could not turn ${first} on.`
 }
 
 // In words: what a profile hides or keeps.
@@ -514,17 +560,13 @@ export const register: Register = on => {
       return beneath
     }
 
-    const { Box, Button, Text } = $.ui.resolve(e)
-    const now = await read($, active)
-    const isOn = (now?.profile ?? '') !== '' && now?.profile !== 'none'
-    // The profile on now is said beside it, so a hidden pane is never a surprise.
-    const label = isOn ? `${TITLE} · dnd ${now?.profile}${now?.untilText ? ` until ${now.untilText}` : ''}` : TITLE
+    const { Box, Button } = $.ui.resolve(e)
 
+    // The profile on is the status line's to say (🔕): the band keeps one plain button.
     const { rest, buttons } = takeBandRow(beneath)
     const mine = (
       <Box key="band-4-configuration" flexDirection="row">
-        {isOn && <Text color="magenta">● </Text>}
-        <Button key="configuration" label={label} dimColor={!isOn} onPress={() => void openPane($)} />
+        <Button key="configuration" label={TITLE} dimColor onPress={() => void openPane($)} />
       </Box>
     )
 
@@ -592,27 +634,32 @@ export const register: Register = on => {
       return now.profile === 'none' ? `Everything shows${end}, the rules quiet (${now.why}).` : `On: ${now.profile} (${now.why})${end}.`
     }
 
-    // A profile turned on without saying where: this session or the whole computer, and how long.
+    // A profile to turn on: until when and where, picked, then one press. A length typed with
+    // /dnd that is not among the usual ones is offered too.
     const pendingBlock = () => {
-      const [profile = '', length = ''] = waiting.split('|')
-      const lengths = length !== '' ? [length] : ['', ...LENGTHS]
-      const line = (scope: 'session' | 'computer', title: string) => (
-        <Box key={`pending-${scope}`} flexDirection="row" gap={1} paddingLeft={2}>
-          <Text>{title}</Text>
-          {lengths.map(one => (
-            <Button key={`on-${scope}-${one || 'open'}`} label={one === '' ? 'until off' : `for ${one}`} onPress={() => void turnOn($, profile, one, scope)} />
-          ))}
-        </Box>
+      const [profile = '', length = '', scope = 'session'] = waiting.split('|')
+      const lengths = ['', ...LENGTHS, ...(length !== '' && !LENGTHS.includes(length) ? [length] : [])]
+      const choice = (key: string, label: string, isPicked: boolean, onPress: () => void) => (
+        <Button key={key} label={label} {...(isPicked ? { variant: 'primary' as const } : { plain: true as const, dimColor: true })} onPress={onPress} />
       )
 
       return (
         <Box key="pending" flexDirection="column" marginTop={1}>
           <Box flexDirection="row" justifyContent="space-between">
-            <Text bold>{`Turn on ${profile}${length !== '' ? ` for ${length}` : ''}:`}</Text>
+            <Text bold>{`Turn on ${profile}:`}</Text>
             <Button key="pending-cancel" label="cancel" dimColor onPress={() => void update($, pending, () => '')} />
           </Box>
-          {line('session', 'this session')}
-          {line('computer', 'this computer')}
+          <Box flexDirection="row" gap={1} paddingLeft={2}>
+            <Text>Until</Text>
+            {lengths.map(one => choice(`until-${one || 'off'}`, one === '' ? 'off' : one, one === length, () => void ask($, profile, one, scope as Scope)))}
+          </Box>
+          <Box flexDirection="row" gap={1} paddingLeft={2}>
+            <Text>Where</Text>
+            {WHERE.map(([one, title]) => choice(`where-${one}`, title, one === scope, () => void ask($, profile, length, one)))}
+          </Box>
+          <Box paddingLeft={2} marginTop={1}>
+            <Button key="activate" label="Activate" variant="primary" onPress={() => void turnOn($, profile, length, scope as Scope)} />
+          </Box>
         </Box>
       )
     }
@@ -708,7 +755,7 @@ export const register: Register = on => {
         isCurrent ? (
           <Text key={`on-${name}`} color="green">on</Text>
         ) : (
-          <Button key={`use-${name}`} label="use" onPress={() => void update($, pending, () => `${name}|`)} />
+          <Button key={`use-${name}`} label="use" onPress={() => void ask($, name)} />
         ),
         <Button key={`edit-${name}`} label={isOpen ? 'done' : 'edit'} dimColor={!isOpen} onPress={() => toggle(key)} />,
         confirmButton(`delete|${name}`, 'delete', () => void change($, ['delete', name])),
@@ -743,7 +790,8 @@ export const register: Register = on => {
       }
     }
 
-    // One press per profile turns it on, then asks where and for how long.
+    // One press per profile, then until when and where. `none` (everything shows) is only offered
+    // while a rule has a profile on, beside the status: it quiets the rules for a while.
     const turnOnRow = () => {
       const names = Object.keys(shown?.profiles ?? {})
 
@@ -756,10 +804,9 @@ export const register: Register = on => {
               now?.profile === name ? (
                 <Text key={`current-${name}`} color="green">{`${name} (on)`}</Text>
               ) : (
-                <Button key={`turn-on-${name}`} label={name} onPress={() => void update($, pending, () => `${name}|`)} />
+                <Button key={`turn-on-${name}`} label={name} onPress={() => void ask($, name)} />
               )
             )}
-            {names.length > 0 && <Button key="turn-on-none" label="show everything" dimColor onPress={() => void update($, pending, () => 'none|')} />}
           </Box>
           <Box paddingLeft={2} marginTop={1}>
             <Input key="new-profile" label="New profile " placeholder="a name, e.g. work, meeting" submitLabel="create" onSubmit={create} />
@@ -768,7 +815,7 @@ export const register: Register = on => {
       )
     }
 
-    const isManual = now?.scope === 'session' || now?.scope === 'computer'
+    const isManual = now?.scope === 'session' || now?.scope === 'computer' || now?.scope === 'everywhere'
     const currentTab = await read($, tab)
     const modsShown = await read($, mods)
     const scope = await read($, modsScope)
@@ -895,7 +942,7 @@ export const register: Register = on => {
         <Box flexDirection="row" justifyContent="flex-end">
           <Box flexDirection="row" gap={1}>
             {isManual && <Button key="off" label="off" onPress={() => void turnOff($)} />}
-            {now?.scope === 'rule' && <Button key="show-all" label="show all" dimColor onPress={() => void update($, pending, () => 'none|')} />}
+            {now?.scope === 'rule' && <Button key="quiet-rules" label="quiet the rules" dimColor onPress={() => void ask($, 'none')} />}
             {isBusy ? <Text dimColor>…</Text> : <Button key="refresh" label="refresh" dimColor onPress={() => void load($)} />}
           </Box>
         </Box>

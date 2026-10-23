@@ -18,12 +18,38 @@ const WORK = { prs: { mode: 'only', only: ['@here'] }, history: { mode: 'hide' }
 
 type World = { active: object; profiles: Record<string, object>; rules: object[] }
 
+type Files = Record<string, string>
+
+const HOME = '/home/someone'
+
+// Windows hands a path on in its own spelling, and the session's folder may come before one under
+// the home: the files are named from the ~.
+const at = (path: string) => path.replace(/\\/g, '/').replace(/^.*~\//, '~/').replace(new RegExp(`^${HOME}/`), '~/')
+
+const ACTIVE_FILE = '~/.claude/.dnd/active.json'
+
 const isScript = (argv: string[]) => (argv[1] ?? '').replace(/\\/g, '/').endsWith('/skills/dnd/dnd.sh')
 
-// `held`: each `set` waits for it, then writes the profile as dnd.sh would.
-const answer = (on: On, world: World, calls: string[][], held?: Promise<void>) => {
+// `held`: each `set` waits for it, then writes the profile as dnd.sh would. `files`: what the mod
+// reads and writes, by path.
+const answer = (on: On, world: World, calls: string[][], held?: Promise<void>, files: Files = {}) => {
   const clock = mock.clock(on)
-  on('env.get', () => ({ value: undefined }))
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? HOME : undefined }))
+  on('fs.read', ($, e) => {
+    const text = files[at(e.path)]
+
+    if (text === undefined) {
+      throw new Error(`ENOENT: ${e.path}`)
+    }
+
+    return { value: text }
+  })
+  on('fs.exists', ($, e) => ({ value: at(e.path) in files }))
+  on('fs.write', ($, e) => {
+    files[at(e.path)] = e.text
+
+    return { value: undefined }
+  })
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('session.cwd', () => ({ value: '/home/someone/dev/shop' }))
   on('session.id', () => ({ value: SESSION }))
@@ -88,10 +114,12 @@ const mountPane = ($: Engine) => $.ui.mount({ plugin: 'dnd', surface: 'terminal'
 
 const mountBand = ($: Engine) => $.ui.mount({ plugin: 'dnd', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
 
-test('a Configuration button on the band says which profile is on, read at session start', async ($, on) => {
+test('a Configuration button on the band; the profile on, read at session start, is written for the status line', async ($, on) => {
   const calls: string[][] = []
   const world: World = { active: OFF, profiles: { work: WORK }, rules: [] }
-  answer(on, world, calls)
+  const files: Files = { [ACTIVE_FILE]: JSON.stringify({ 'session-0': { profile: 'meeting', untilText: '' } }) }
+  answer(on, world, calls, undefined, files)
+  const shown = () => JSON.parse(files[ACTIVE_FILE] ?? '{}') as Record<string, { profile: string; scope: string; untilText: string }>
 
   await $.session.start(START)
   const band = await mountBand($)
@@ -99,14 +127,19 @@ test('a Configuration button on the band says which profile is on, read at sessi
   expect(calls).toContainEqual(['active', '/home/someone/dev/shop', '--session', SESSION])
   expect(await band.find({ key: 'configuration', text: 'Configuration' })).toBeDefined()
   expect(await band.find({ key: 'band-4-configuration' })).toBeDefined()
+  expect(shown()[SESSION]).toEqual({ profile: '', scope: '', untilText: '' })
+  // The other sessions' entries stay.
+  expect(shown()['session-0']).toEqual({ profile: 'meeting', untilText: '' })
 
-  world.active = { ...OFF, profile: 'work', why: 'on Wi-Fi OfficeNet', scope: 'rule', parts: WORK }
+  world.active = { ...OFF, profile: 'work', why: 'on Wi-Fi OfficeNet', scope: 'rule', parts: WORK, untilText: '15:00' }
   await $.command.run(command(''))
 
-  expect(await band.find({ key: 'configuration', text: 'Configuration · dnd work' })).toBeDefined()
+  // The band keeps its plain button: the status line says what is on.
+  expect(await band.find({ key: 'configuration', text: 'Configuration' })).toBeDefined()
+  expect(shown()[SESSION]).toEqual({ profile: 'work', scope: 'rule', untilText: '15:00' })
 })
 
-test('the pane opens on its Do not disturb tab: a press per profile turns one on, a name creates one', async ($, on) => {
+test('the pane opens on its Do not disturb tab: a profile pressed asks until when and where, then Activate; a name creates one', async ($, on) => {
   const calls: string[][] = []
   answer(on, { active: OFF, profiles: { work: WORK }, rules: [] }, calls)
 
@@ -119,10 +152,20 @@ test('the pane opens on its Do not disturb tab: a press per profile turns one on
   await pane.press({ key: 'turn-on-work' })
 
   expect(await pane.find({ text: 'Turn on work:' })).toBeDefined()
+  expect(await pane.find({ key: 'until-off', props: { variant: 'primary' } })).toBeDefined()
+  expect(await pane.find({ key: 'where-session', props: { variant: 'primary' } })).toBeDefined()
 
-  await pane.press({ key: 'on-computer-open' })
+  await pane.press({ key: 'until-2h' })
+  await pane.press({ key: 'where-everywhere' })
 
-  expect(calls).toContainEqual(['on', 'work'])
+  expect(await pane.find({ key: 'until-2h', props: { variant: 'primary' } })).toBeDefined()
+  expect(await pane.find({ key: 'where-everywhere', text: 'all computers', props: { variant: 'primary' } })).toBeDefined()
+  expect(calls.some(argv => argv[0] === 'on')).toBe(false)
+
+  await pane.press({ key: 'activate' })
+
+  expect(calls).toContainEqual(['on', 'work', '2h', '--everywhere'])
+  expect(await pane.find({ text: 'Turn on work:' })).toBeUndefined()
   expect(await pane.find({ text: 'work (on)' })).toBeDefined()
 
   await pane.input({ key: 'new-profile', text: 'at the office', kind: 'submit' })
@@ -130,36 +173,46 @@ test('the pane opens on its Do not disturb tab: a press per profile turns one on
   expect(calls).toContainEqual(['set', 'at-the-office', 'history', 'show'])
 })
 
-test('/dnd PROFILE without where asks: this session or the whole computer', async ($, on) => {
+test('/dnd PROFILE without where asks in the pane, its length picked, this session first; a length of its own is offered', async ($, on) => {
   const calls: string[][] = []
   answer(on, { active: OFF, profiles: { work: WORK, meeting: { history: { mode: 'hide' } } }, rules: [] }, calls)
 
   await $.session.start(START)
   const said = await $.command.run(command('meeting 1h'))
 
-  expect(said.text).toMatch(/this session or the whole computer/)
+  expect(said.text).toMatch(/this session, this computer or all computers/)
   expect(calls.some(argv => argv[0] === 'on')).toBe(false)
 
   const pane = await mountPane($)
 
-  expect(await pane.find({ text: 'Turn on meeting for 1h:' })).toBeDefined()
+  expect(await pane.find({ text: 'Turn on meeting:' })).toBeDefined()
+  expect(await pane.find({ key: 'until-1h', props: { variant: 'primary' } })).toBeDefined()
 
-  await pane.press({ key: 'on-session-1h' })
+  await pane.press({ key: 'activate' })
 
   expect(calls).toContainEqual(['on', 'meeting', '1h', '--session', SESSION])
-  expect(await pane.find({ text: 'Turn on meeting for 1h:' })).toBeUndefined()
+  expect(await pane.find({ text: 'Turn on meeting:' })).toBeUndefined()
   expect(await pane.find({ text: /On: meeting \(turned on by hand\) until 15:00/ })).toBeDefined()
+
+  await $.command.run(command('work 14:30'))
+
+  expect(await pane.find({ key: 'until-14:30', text: '14:30', props: { variant: 'primary' } })).toBeDefined()
 })
 
-test('/dnd PROFILE all turns it on for the computer at once, /dnd off takes both switches off', async ($, on) => {
+test('/dnd PROFILE pc or all turns it on at once for the computer or every one, /dnd off takes every switch off', async ($, on) => {
   const calls: string[][] = []
   answer(on, { active: OFF, profiles: { work: WORK }, rules: [] }, calls)
 
   await $.session.start(START)
-  const said = await $.command.run(command('work all'))
+  const said = await $.command.run(command('work pc'))
 
   expect(calls).toContainEqual(['on', 'work'])
-  expect(said.text).toBe('DnD work on.')
+  expect(said.text).toBe('DnD work on for this computer.')
+
+  const everywhere = await $.command.run(command('work all'))
+
+  expect(calls).toContainEqual(['on', 'work', '--everywhere'])
+  expect(everywhere.text).toBe('DnD work on for all computers.')
 
   const off = await $.command.run(command('off'))
 
@@ -236,11 +289,6 @@ test('a checklist press shows at once; the presses are written in turn and every
   expect(await pane.find({ text: '[x] someone/garden' })).toBeDefined()
 })
 
-type Files = Record<string, string>
-
-// The session's folder may come before a path under an unknown home: the files are named from the ~.
-const at = (path: string) => path.replace(/^.*~\//, '~/')
-
 const HISTORY_ROW = {
   key: 'recent-prompts.questions',
   label: 'Keep questions asked with the picker',
@@ -251,7 +299,7 @@ const HISTORY_ROW = {
 }
 const BUILTIN_ROW = { ...HISTORY_ROW, key: 'agents-md.instructionFiles', label: 'Instruction files', kind: 'text', value: 'both', provider: { plugin: 'agents-md', tier: 'builtin' } }
 
-// The /config rows and the files the Mods tab reads and writes; a set lands in settings.json as the engine would.
+// The /config rows the Mods tab reads and writes; a set lands in settings.json as the engine would.
 const answerMods = (on: On, files: Files, sets: unknown[]) => {
   const rows = [HISTORY_ROW, BUILTIN_ROW]
   on('config.list', () => ({ value: rows as never }))
@@ -261,21 +309,6 @@ const answerMods = (on: On, files: Files, sets: unknown[]) => {
     files['~/.claude/settings.json'] = JSON.stringify({ pluginConfigs: { 'recent-prompts@inline': { options: { questions: e.value } } } })
 
     return { value: e.value }
-  })
-  on('fs.read', ($, e) => {
-    const text = files[at(e.path)]
-
-    if (text === undefined) {
-      throw new Error(`ENOENT: ${e.path}`)
-    }
-
-    return { value: text }
-  })
-  on('fs.exists', ($, e) => ({ value: at(e.path) in files }))
-  on('fs.write', ($, e) => {
-    files[at(e.path)] = e.text
-
-    return { value: undefined }
   })
 }
 
@@ -291,7 +324,7 @@ const openMods = async ($: Engine) => {
 test("the Mods tab lists each mod's settings; a change for all computers is a /config change alone", async ($, on) => {
   const files: Files = { '~/.claude-sync/.machine': 'mac\n', '~/.claude-sync/machines/mac.json': '{ "settings": { "theme": "dark" } }' }
   const sets: unknown[] = []
-  answer(on, { active: OFF, profiles: {}, rules: [] }, [])
+  answer(on, { active: OFF, profiles: {}, rules: [] }, [], undefined, files)
   answerMods(on, files, sets)
 
   const pane = await openMods($)
@@ -310,7 +343,7 @@ test("the Mods tab lists each mod's settings; a change for all computers is a /c
 test('a change for this computer only is kept in its machine file, and one for all computers takes it back out', async ($, on) => {
   const files: Files = { '~/.claude-sync/.machine': 'mac\n', '~/.claude-sync/machines/mac.json': '{ "settings": { "theme": "dark" } }' }
   const sets: unknown[] = []
-  answer(on, { active: OFF, profiles: {}, rules: [] }, [])
+  answer(on, { active: OFF, profiles: {}, rules: [] }, [], undefined, files)
   answerMods(on, files, sets)
 
   const pane = await openMods($)
@@ -333,8 +366,9 @@ test('a change for this computer only is kept in its machine file, and one for a
 })
 
 test('without a private sync, the Mods tab says changes stay on this computer', async ($, on) => {
-  answer(on, { active: OFF, profiles: {}, rules: [] }, [])
-  answerMods(on, {}, [])
+  const files: Files = {}
+  answer(on, { active: OFF, profiles: {}, rules: [] }, [], undefined, files)
+  answerMods(on, files, [])
 
   const pane = await openMods($)
 

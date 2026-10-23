@@ -40,10 +40,12 @@ written to the sync's `machines/<computer>.json`, whose settings win over the sh
 `bash dnd.sh on PROFILE [30m|2h|1d|HH:MM]`, `bash dnd.sh off`. `none` is a profile that shows
 everything: `on none 2h` quiets the rules for two hours.
 
-Ask the user whether it is for **this session only** or for **the whole computer** (every session
-on it), unless they already said so in their words ("just here", "everywhere", "on this Mac"). For
-this session, add `--session "$CLAUDE_CODE_SESSION_ID"` to `on` and to `off`. A meeting is a
-profile turned on by hand for how long it lasts.
+Ask the user whether it is for **this session only**, for **this computer** (every session on it)
+or for **all computers** (every computer in the config sync, at its next sync), unless they already
+said so in their words ("just here", "on this Mac", "everywhere"). For this session, add
+`--session "$CLAUDE_CODE_SESSION_ID"` to `on` and to `off`; for all computers, `--everywhere` to
+`on` (`off` takes the computer's switch and that one off together). A meeting is a profile turned
+on by hand for how long it lasts.
 
 ## Rules that turn one on by themselves
 
@@ -54,11 +56,14 @@ profile turned on by hand for how long it lasts.
   past midnight (`from=22:00 to=07:00`) works.
 - `folder=~/dev/shop`: sessions in that folder or below; a repo's own default.
 
-A turn-on by hand wins over the rules, then rules with a folder, then the others in their order.
+A turn-on by hand wins over the rules (the session's, then the computer's, then every computer's),
+then rules with a folder, then the others in their order.
 `bash dnd.sh unrule N` deletes the Nth rule as `list` numbers them.
 
 ## Where it lives
 
 Profiles and rules: `~/.claude-sync/dnd/profiles.json` when the config sync is set up (every
 computer gets them), else `~/.claude/dnd/profiles.json`. The switch and the last Wi-Fi name stay on
-the computer, in `~/.claude/.dnd/`. Tell the user which one you changed.
+the computer, in `~/.claude/.dnd/`, beside `active.json`, what is on per session, which the kit's
+status line shows as `🔕 <profile> · session|computer|everywhere|rule` while one is on. The switch
+for every computer is kept in `profiles.json`, with the profiles. Tell the user which one you changed.

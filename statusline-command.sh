@@ -75,6 +75,16 @@ if [ -n "$session_id" ] && [ -f "$learn_file" ]; then
   esac
 fi
 
+# Do-not-disturb profile on for this session, written by the dnd mod; shown only while one is on,
+# with what turned it on (this session, this computer, or a rule, which every computer gets) and its end
+dnd_file="$HOME/.claude/.dnd/active.json"
+if [ -n "$session_id" ] && [ -f "$dnd_file" ]; then
+  dnd=$(jq -r --arg s "$session_id" '.[$s] // empty | select((.profile // "") != "" and .profile != "none")
+    | .profile + (if (.scope // "") != "" then " · " + .scope else "" end)
+    + (if (.untilText // "") != "" then " (" + .untilText + ")" else "" end)' "$dnd_file" 2>/dev/null | tr -d '\r')
+  [ -n "$dnd" ] && dnd_str=$(printf '🔕 \033[35m%s\033[0m' "$dnd")
+fi
+
 # Git branch (skip optional lock, non-fatal); detached HEAD falls back to the short SHA
 branch=$(git -C "$cwd" --no-optional-locks branch --show-current 2>/dev/null)
 [ -z "$branch" ] && branch=$(git -C "$cwd" --no-optional-locks rev-parse --short HEAD 2>/dev/null)
@@ -97,6 +107,7 @@ out=""
 [ -n "$eff_str" ]   && out="$out $eff_str"
 [ -n "$rate_str" ]  && out="$out $rate_str"
 [ -n "$learn_str" ] && out="$out $learn_str"
+[ -n "$dnd_str" ]   && out="$out $dnd_str"
 
 # Trim leading space
 out="${out# }"

@@ -19,7 +19,7 @@ export type DndActive = {
   /** Epoch seconds the switch ends, 0 when it lasts. */
   until: number
   untilText: string
-  /** `session` or `computer` when turned on by hand, `rule` when a rule did, '' when off. */
+  /** `session`, `computer` or `everywhere` when turned on by hand, `rule` when a rule did, '' when off. */
   scope: string
   parts: DndProfile
   /** The session's repo, else its folder. */
@@ -71,7 +71,7 @@ declare module 'claude-code' {
       active: Shaped<DndActive | null>
       data: DndData | null
       problem: string
-      /** A profile the user turned on with /dnd without saying where: `<profile>|<for>`. */
+      /** A profile to turn on, asked until when and where in the pane: `<profile>|<for>|<scope>`. */
       pending: string
       /** Profiles and their parts (`<profile>|<part>`) unfolded in the pane. */
       unfolded: Record<string, boolean>

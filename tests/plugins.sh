@@ -80,6 +80,11 @@ KIT_HOME=$(data_of statusline) bash "$(root_of statusline)/hooks/setup/statuslin
 check "statusline: its setup points statusLine at the data folder" 'jq -e ".statusLine.command | contains(\"plugins/data/statusline\")" "$HOME/.claude/settings.json" > /dev/null'
 line=$(echo '{"workspace":{"current_dir":"/tmp"},"model":{"display_name":"Opus"}}' | bash "$(data_of statusline)/statusline-command.sh" 2> /dev/null)
 check "statusline: the copy runs" '[ -n "$line" ]'
+mkdir -p "$HOME/.claude/.dnd" && echo '{"s1": {"profile": "work", "scope": "session", "untilText": "15:00"}, "s2": {"profile": "", "scope": "", "untilText": ""}}' > "$HOME/.claude/.dnd/active.json"
+line=$(echo '{"session_id":"s1","workspace":{"current_dir":"/tmp"}}' | bash "$(data_of statusline)/statusline-command.sh" 2> /dev/null)
+check "statusline: says the do-not-disturb profile on, where and until when" '[[ "$line" == *"🔕"*"work · session (15:00)"* ]]'
+line=$(echo '{"session_id":"s2","workspace":{"current_dir":"/tmp"}}' | bash "$(data_of statusline)/statusline-command.sh" 2> /dev/null)
+check "statusline: quiet while no profile is on" '[[ "$line" != *"🔕"* ]]'
 out=$(run_event statusline SessionStart)
 check "statusline: quiet once set up" '[ -z "$out" ]'
 

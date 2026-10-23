@@ -10,10 +10,13 @@
 #   dnd.sh list                        profiles and rules, in words
 #   dnd.sh on PROFILE [FOR]            turns PROFILE on for this computer, over the rules; FOR: 30m,
 #                                      2h, 1d, or HH:MM to end then; without it, until `off`
-#   dnd.sh off                         back to the rules
+#   dnd.sh off                         back to the rules: this computer's switch and the one for
+#                                      every computer go off
 #   dnd.sh known PART                  the names PART lists now, one per line
 # active, json, list, on and off take --session ID (Claude Code: $CLAUDE_CODE_SESSION_ID): `on`
-# and `off` then switch that session only, over the computer's switch.
+# and `off` then switch that session only, over the computer's switch. `on` also takes
+# --everywhere: the switch is kept with the profiles, so every computer in the config sync gets it
+# (at its next sync); a session's switch wins over the computer's, which wins over it.
 #   dnd.sh set PROFILE PART MODE [NAME...]
 #                                      PART: history, prs, reminders, handoffs; MODE: show, hide or
 #                                      only (the NAMEs: repos, groups, folders; @here is the folder
@@ -126,10 +129,16 @@ here() {
 
 switch() { if [ -f "$SWITCH" ]; then cat "$SWITCH"; else echo '{}'; fi; }
 
-# set_switch PROFILE UNTIL: the session's switch with --session, else the computer's; PROFILE ""
-# takes it off. A session's switch with no end goes after two days, its session long gone.
+# set_switch PROFILE UNTIL: the session's switch with --session, every computer's with
+# --everywhere (kept with the profiles), else the computer's; PROFILE "" takes it off. A session's
+# switch with no end goes after two days, its session long gone.
 set_switch() {
   local out
+  if [ -n "$EVERYWHERE" ]; then
+    save 'if $p == "" then del(.switch) else .switch = {profile: $p, until: $u, at: $now} end' \
+      --arg p "$1" --argjson u "$2" --argjson now "$(date +%s)"
+    return
+  fi
   mkdir -p "$LOCAL"
   out=$(switch | jq --arg p "$1" --argjson u "$2" --arg s "$SESSION" --argjson now "$(date +%s)" '
     ({profile: $p, until: $u, at: $now}) as $one
@@ -141,7 +150,7 @@ set_switch() {
 }
 
 # active DIR: what is on for a session in DIR. The session's switch first, the computer's next,
-# then the rules in their order, those naming a folder before the others.
+# every computer's after, then the rules in their order, those naming a folder before the others.
 active() {
   local dir top wifi=""
   dir=$(slashed "${1:-$PWD}")
@@ -173,7 +182,9 @@ active() {
     | (if $session != "" and ($mine | live) then
         {profile: $mine.profile, why: "turned on for this session", until: ($mine.until // 0), scope: "session"}
       elif ($switches.computer | live) then
-        {profile: $switches.computer.profile, why: "turned on by hand", until: ($switches.computer.until // 0), scope: "computer"}
+        {profile: $switches.computer.profile, why: "turned on for this computer", until: ($switches.computer.until // 0), scope: "computer"}
+      elif (.switch | live) then
+        {profile: .switch.profile, why: "turned on for every computer", until: (.switch.until // 0), scope: "everywhere"}
       else
         ([.rules[] | select(has("folder"))] + [.rules[] | select(has("folder") | not)])
         | map(select(.profile as $p | $profiles | has($p)) | select(holds)) | first
@@ -387,6 +398,7 @@ edit() {
 }
 
 SESSION=""
+EVERYWHERE=""
 args=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -396,6 +408,10 @@ while [ $# -gt 0 ]; do
       ;;
     --session=*)
       SESSION=${1#*=}
+      shift
+      ;;
+    --everywhere)
+      EVERYWHERE=1
       shift
       ;;
     *)
@@ -430,10 +446,16 @@ case "${1:-}" in
     [ "$profile" = none ] || has_profile "$profile" || die "No profile named $profile (see dnd.sh list)."
     until=0
     if [ -n "${3:-}" ]; then until=$(until_of "$3") || die "Unknown length: $3 (30m, 2h, 1d or HH:MM)"; fi
+    [ -z "$SESSION" ] || EVERYWHERE=""
     set_switch "$profile" "$until"
-    active "$PWD" | jq -r --arg s "$SESSION" '"On" + (if $s != "" then " for this session" else " for this computer" end) + ": " + .profile + (if .untilText != "" then " until " + .untilText else "" end)'
+    active "$PWD" | jq -r --arg s "$SESSION" --arg e "$EVERYWHERE" '"On" + (if $s != "" then " for this session" elif $e != "" then " for every computer" else " for this computer" end) + ": " + .profile + (if .untilText != "" then " until " + .untilText else "" end)'
     ;;
   off)
+    if [ -z "$SESSION" ]; then
+      EVERYWHERE=""
+      set_switch "" 0
+      EVERYWHERE=1
+    fi
     set_switch "" 0
     active "$PWD" | jq -r 'if .profile == "" then "Off: nothing is hidden." else "Now on: " + .profile + " (" + .why + ")" end'
     ;;
