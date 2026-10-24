@@ -35,6 +35,7 @@ case "$part" in
   session-registry) mirror=hooks/claude-resume-here.zsh setup=hooks/setup/session-registry.sh required=1 ;;
   recent-activity) setup=hooks/setup/recent-activity.sh ;;
   pr-watch) setup=skills/pr-watch/setup.sh ;;
+  kb) setup=skills/kb/setup.sh ;;
   test-evidence) setup=skills/test-evidence/setup.sh ;;
   daily-sync) setup=skills/daily-sync/setup.sh required=1 ;;
   reminders) setup=skills/reminders/setup.sh ;;
@@ -55,6 +56,14 @@ if [ "$part" = config-sync ] && [ -d "$HOME/.claude-sync/.git" ]; then
   exit 0
 fi
 
+# kb's Python environment holds a copy of the plugin's package: brought up to date with the plugin.
+if [ "$part" = kb ] && [ -f "$HOME/.claude/kb/venv/pyvenv.cfg" ]; then
+  version=$(jq -r '.plugins[] | select(.name == "kb") | .version // empty' "$ROOT/.claude-plugin/marketplace.json" 2> /dev/null)
+  if [ -n "$version" ] && [ "$(cat "$HOME/.claude/kb/version" 2> /dev/null)" != "$version" ]; then
+    (bash "$ROOT/skills/kb/setup.sh" upgrade "$version" > /dev/null 2>&1 < /dev/null &)
+  fi
+fi
+
 state=$(kit_setup_state "$part")
 case "$state" in done | declined) exit 0 ;; esac
 
@@ -67,6 +76,7 @@ configured() {
     recent-activity) [ -n "${CLAUDE_DEV_ROOT:-}" ] ;;
     git-identity-guard) [ -n "$(bash "$ROOT/hooks/git-identity-guard.sh" list 2> /dev/null)" ] ;;
     pr-watch) [ -f "${PR_WATCH_DIR:-$HOME/.claude-sync/pr-watch}/config.json" ] ;;
+    kb) [ -f "$HOME/.claude/kb/kb.env" ] && { [ -x "$HOME/.claude/kb/venv/bin/kb" ] || [ -x "$HOME/.claude/kb/venv/Scripts/kb.exe" ]; } ;;
     test-evidence) jq -e '.mcpServers["chrome-devtools"]' "$HOME/.claude.json" > /dev/null 2>&1 ;;
     reminders) [ -f "$HOME/.claude/reminders.json" ] ;;
     daily-sync) bash "$ROOT/skills/daily-sync/schedule.sh" status 2> /dev/null | head -1 | grep -q '^on' ;;

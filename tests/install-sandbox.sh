@@ -48,7 +48,8 @@ in_sandbox() {
 # reach outside the sandbox.
 auto_answers() {
   printf '%s\n' 'group.*=y' 'part.*=y' 'language=English' 'marker=🌊' 'marker.rule=y' 'zshrc=n' \
-    'test-evidence.mcp=n' 'git-identity.match1=github.com' 'git-identity.email1=me@example.com' > "$1"
+    'test-evidence.mcp=n' 'git-identity.match1=github.com' 'git-identity.email1=me@example.com' \
+    'kb.embed=n' 'kb.curate=n' > "$1"
 }
 
 report() {

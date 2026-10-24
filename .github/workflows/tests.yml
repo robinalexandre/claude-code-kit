@@ -23,6 +23,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - name: Tools
         run: |
           command -v jq || { [ "$RUNNER_OS" = Windows ] && choco install -y jq; } || sudo apt-get install -y jq
@@ -55,6 +58,8 @@ jobs:
         run: |
           py=$(command -v python3 || command -v python)
           "$py" -I tests/pr-watch-shared.py
+      - name: Knowledge base
+        run: bash tests/kb.sh
       - name: The sync's minute poll
         run: bash tests/sync-poll.sh
       - name: Mods

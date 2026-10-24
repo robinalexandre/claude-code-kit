@@ -7,3 +7,5 @@ marker=🌊
 marker.rule=y
 zshrc=n
 test-evidence.mcp=n
+kb.embed=n
+kb.curate=n
