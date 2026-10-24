@@ -360,8 +360,8 @@ const bash = async ($: EngineInterface) => {
   throw new Error('Git Bash not found: set CLAUDE_CODE_GIT_BASH_PATH to bash.exe')
 }
 
-const prWatch = async ($: EngineInterface, args: string[], timeoutMs = 30_000) =>
-  $.process.run([await bash($), await script($), ...args], { timeoutMs })
+const prWatch = async ($: EngineInterface, args: string[], timeoutMs = 30_000, stdin?: string) =>
+  $.process.run([await bash($), await script($), ...args], stdin === undefined ? { timeoutMs } : { timeoutMs, stdin })
 
 class StatusProblem extends Error {}
 
@@ -793,13 +793,49 @@ const ACK_NOW: Ack = { until: '', note: '', at: '' }
 
 // Acknowledging takes the alert off the red list until it changes; unack brings it back. A PR's alert
 // goes as the pane shows it, so pr-watch need not ask the host again.
+const prAlert = (pr: PrRow) => ({ waiting: pr.waiting, conflicts: pr.conflicts === true, comments: pr.changes })
+
 const setAck = ($: EngineInterface, url: string, what: string, isAcked: boolean, pr?: PrRow) => {
-  const alert = pr && { waiting: pr.waiting, conflicts: pr.conflicts === true, comments: pr.changes }
+  const alert = pr && prAlert(pr)
   const args = isAcked ? ['ack', url, ...(alert ? ['--alert', JSON.stringify(alert)] : [])] : ['unack', url]
   const ack = isAcked ? ACK_NOW : null
 
   return quickly($, url, args, { pr: one => ({ ...one, ack }), build: one => ({ ...one, ack }) },
     `${isAcked ? 'Acknowledged' : 'No longer acknowledged:'} ${what}`, `Could not ${isAcked ? 'acknowledge' : 'unack'} ${what}`)
+}
+
+const ackAllKey = (scope: string) => `quick|all|${scope}`
+
+// Every red alert of a repo block at once, in one pr-watch call: the rows turn blue at once, a
+// failure says which could not be acknowledged and puts the recorded state back.
+const ackAll = async ($: EngineInterface, scope: string, repo: string, prs: PrRow[], builds: BuildRow[]) => {
+  if ((await read($, inFlight)) === ackAllKey(scope)) {
+    return
+  }
+
+  const urls = new Set([...prs, ...builds].map(one => one.url))
+  const items = [...prs.map(pr => ({ url: pr.url, alert: prAlert(pr) })), ...builds.map(build => ({ url: build.url }))]
+  await update($, inFlight, () => ackAllKey(scope))
+  await update($, snapshot, shown =>
+    shown === null
+      ? shown
+      : {
+          ...shown,
+          prs: shown.prs.map(pr => (urls.has(pr.url) ? { ...pr, ack: ACK_NOW } : pr)),
+          builds: (shown.builds ?? []).map(build => (urls.has(build.url) ? { ...build, ack: ACK_NOW } : build)),
+        }
+  )
+  const ran = await prWatch($, ['ack-all'], 60_000, JSON.stringify(items)).catch(error => ({ exitCode: 1, stdout: '', stderr: String(error) }))
+  await update($, inFlight, () => '')
+
+  if (ran.exitCode !== 0) {
+    $.ui.toast(`Could not acknowledge all of ${repo}: ${ran.stderr.trim().split('\n')[0]}`)
+    await load($, 'cached')
+
+    return
+  }
+
+  $.ui.toast(`Acknowledged ${items.length} in ${repo}`)
 }
 
 // The reminder's words and date are the user's: Claude asks them, leaves the reminder, then acks
@@ -1202,12 +1238,16 @@ export const register: Register = on => {
       )
     }
 
-    const foldLine = (key: string, own: Fold, under: Fold[], line: RenderChildren) => (
+    const foldLine = (key: string, own: Fold, under: Fold[], line: RenderChildren, actions: RenderChildren = null) => (
       <Box flexDirection="row" justifyContent="space-between">
         <Box flexDirection="row" flexShrink={1} overflow="hidden">
           {line}
         </Box>
-        {foldAllButton(key, own, under)}
+        <Box flexDirection="row" flexShrink={0}>
+          {actions}
+          {actions !== null && under.length > 0 && <Text> </Text>}
+          {foldAllButton(key, own, under)}
+        </Box>
       </Box>
     )
 
@@ -1750,8 +1790,18 @@ export const register: Register = on => {
       )
     }
 
-    // One block per repo, in the order its rows come; `hint` is said beside a folded one.
-    const repoBlock = (key: string, buttonKey: string, repo: string, count: number, isOpen: boolean, hint: RenderChildren, body: () => RenderChildren, color = 'gray', under: Fold[] = []) => (
+    // At the end of a repo block holding red alerts not acknowledged yet: one press acknowledges them all.
+    const ackAllButton = (scope: string, repo: string, prsToAck: PrRow[], runsToAck: BuildRow[]) =>
+      prsToAck.length + runsToAck.length === 0 ? null : busyKey === ackAllKey(scope) ? (
+        <Text dimColor>saving…</Text>
+      ) : (
+        <Button key={`ack-all-${scope}`} label="ack all" dimColor onPress={() => void ackAll($, scope, repo, prsToAck, runsToAck)} />
+      )
+    const ackAllWidth = (count: number) => (count === 0 ? 0 : button('ack all') + 1)
+
+    // One block per repo, in the order its rows come; `hint` is said beside a folded one, `actions`
+    // at the end of its line.
+    const repoBlock = (key: string, buttonKey: string, repo: string, count: number, isOpen: boolean, hint: RenderChildren, body: () => RenderChildren, color = 'gray', under: Fold[] = [], actions: RenderChildren = null) => (
       <Box key={`block-${key}`} flexDirection="column" paddingLeft={2}>
         {foldLine(buttonKey, repoFold(key, 1), under, [
           <Box flexDirection="row" hover={litGroup(`block-${key}`).box}>
@@ -1767,7 +1817,7 @@ export const register: Register = on => {
             />
           </Box>,
           hint,
-        ])}
+        ], actions)}
         {isOpen && closingBlock(`all-${key.split('|')[0]}`, body())}
       </Box>
     )
@@ -1781,9 +1831,11 @@ export const register: Register = on => {
         // Folded, the block says its newest activity on the host, so a fresh change shows without opening it.
         const latest = latestUpdate(prsOfRepo)
         const isCiRunning = hasRunningCi(prsOfRepo)
-        // The line draws "● ▸ <repo> (n)", the hint, then `[ ▾ all ]`: the name gives way to the hint,
-        // and the age goes when the name would be too short to read.
-        const nameRoom = (hint: string) => width - `●  ▸  (${prsOfRepo.length})`.length - button(UNFOLD_ALL) - 1 - hint.length
+        const toAck = section === 'attention' ? prsOfRepo.filter(isRedPr) : []
+        // The line draws "● ▸ <repo> (n)", the hint, then `[ ack all ]` and `[ ▾ all ]`: the name gives
+        // way to the hint, and the age goes when the name would be too short to read.
+        const nameRoom = (hint: string) =>
+          width - `●  ▸  (${prsOfRepo.length})`.length - ackAllWidth(toAck.length) - button(UNFOLD_ALL) - 1 - hint.length
         const before = isOpen ? (isStacked ? ' · merge top to bottom' : '') : isCiRunning ? ' · CI running' : ''
         const fullAge = isOpen ? '' : ageText(latest, nowMs)
         const age = fullAge !== '' && nameRoom(`${before} · updated ${fullAge}`) >= Math.min(12, repo.length) ? fullAge : ''
@@ -1807,6 +1859,7 @@ export const register: Register = on => {
           prsOfRepo.map((pr, index) => prRow(pr, repo, index, isStacked, withMerge, `all-${buttonKey}`)),
           worst(prsOfRepo.map(prColor)),
           prsOfRepo.flatMap(prFolds),
+          ackAllButton(key, repo, toAck, []),
         )
       })
 
@@ -1858,16 +1911,13 @@ export const register: Register = on => {
         const key = repoKey('builds', repo)
         const isOpen = expanded[key] ?? false
         const running = runs.filter(isBuildWatched).length
-        const hint = isOpen ? null : running > 0 ? (
-          <Text color="yellow"> · {running} running</Text>
-        ) : (
-          <Text dimColor>
-            {' '}
-            · last {runs[0].status} {endedText(runs[0].ended, nowMs)}
-          </Text>
-        )
+        const toAck = runs.filter(isRedRun)
+        const hintText = isOpen ? '' : running > 0 ? ` · ${running} running` : ` · last ${runs[0].status} ${endedText(runs[0].ended, nowMs)}`
+        const hint = isOpen ? null : <Text color={running > 0 ? 'yellow' : undefined} dimColor={running === 0}>{hintText}</Text>
+        const shownRepo = truncate(repo, Math.max(4, Math.min(width - 36, width - `●  ▸  (${runs.length})`.length - ackAllWidth(toAck.length) - hintText.length)))
 
-        return repoBlock(key, `builds-repo-${repo}`, repo, runs.length, isOpen, hint, () => runs.map(buildRow), worst(runs.map(runColor)))
+        return repoBlock(key, `builds-repo-${repo}`, shownRepo, runs.length, isOpen, hint, () => runs.map(buildRow), worst(runs.map(runColor)), [],
+          ackAllButton(key, repo, [], toAck))
       })
 
     return (

@@ -723,6 +723,57 @@ test('each PR says its last activity on the host, and a folded block its newest,
   expect(await pane.find({ key: 'pr-title-old-4', text: / · a review$/ })).toBeDefined()
 })
 
+test('a repo block with red alerts acknowledges them all in one press, its failed runs or its PRs', async ($, on) => {
+  mock.clock(on)
+  const acked: { argv: string[]; stdin?: string }[] = []
+  const failed = (number: string) => ({ ...BUILDS.builds[0], url: `${BUILDS.builds[0].url.replace(/\d+$/, number)}`, number, status: 'failed', ended: '2026-01-01T07:50Z' })
+  const RED = {
+    live: false,
+    prs: [
+      row('5', { ci: 'CI failed', waiting: 'a CI fix' }),
+      row('6', { conflicts: true, waiting: 'a conflict fix' }),
+      row('7', { repo: 'docs', url: 'https://dev.azure.com/org/project/_git/docs/pullrequest/7', waiting: 'a review' }),
+    ],
+    builds: [failed('70201'), failed('70202'), BUILDS.builds[0], BUILDS.builds[1]],
+    errors: [],
+  }
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
+  on('process.run', ($, e) => {
+    if (e.argv[2] === 'ack-all') {
+      acked.push({ argv: e.argv.slice(2), stdin: e.init?.stdin })
+    }
+
+    return ran(0, e.argv[2] === 'status' ? JSON.stringify(RED) : '')
+  })
+  on('ui.render', () => Fragment({}))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  on('ui.toast', () => ({ value: undefined }))
+
+  await $.command.run(RUN)
+  const pane = await mountPane($, 'terminal', 100)
+  await pane.press({ key: 'builds' })
+
+  // Only a block holding a red alert has the button: shop's run succeeded.
+  expect(await pane.find({ key: 'ack-all-builds|shop' })).toBeUndefined()
+
+  await pane.press({ key: 'ack-all-builds|project' })
+
+  expect(acked[0].argv).toEqual(['ack-all'])
+  expect(JSON.parse(acked[0].stdin ?? '[]')).toEqual([{ url: failed('70201').url }, { url: failed('70202').url }])
+  expect(await pane.find({ key: 'ack-all-builds|project' })).toBeUndefined()
+
+  await pane.press({ key: 'attention' })
+  await pane.press({ key: 'attention-repo-shop' })
+  await pane.press({ key: 'ack-all-attention|shop' })
+
+  expect(JSON.parse(acked[1].stdin ?? '[]')).toEqual([
+    { url: RED.prs[0].url, alert: { waiting: 'a CI fix', conflicts: false, comments: [] } },
+    { url: RED.prs[1].url, alert: { waiting: 'a conflict fix', conflicts: true, comments: [] } },
+  ])
+  // Acknowledged, they leave the attention list for the waiting one, in blue.
+  expect(await pane.find({ key: 'attention' })).toBeUndefined()
+})
+
 // What the terminal draws on a PR's line: its padding, arrow and dot, number, the label, then each
 // button at the end as `[ label ]`.
 const drawnWidth = (number: string, label: string, buttons: string[]) =>

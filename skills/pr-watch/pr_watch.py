@@ -29,6 +29,8 @@
     pr_watch.py ack URL [--until DATE] [--note TEXT]
                                         acknowledge a PR's or a run's current alert: not red any more
                                         until it changes or DATE (YYYY-MM-DD) passes
+    pr_watch.py ack-all                 the same for several at once, read from stdin as JSON:
+                                        [{"url": URL, "alert": {...} or absent}], `alert` as ack's --alert
     pr_watch.py unack URL               undo it
 
 Tracked PRs live in $PR_WATCH_DIR (default ~/.claude-sync/pr-watch), one JSON file per PR, so the
@@ -1964,6 +1966,25 @@ def ack(url: str, until: str, note: str, shown: str = "") -> None:
     print(f"acknowledged {what}" + (f" until {until}" if until else "") + ": back if it changes")
 
 
+def ack_all(given: str) -> None:
+    """Acknowledges each alert of the JSON list `given` as `ack` does; one that cannot be is said at
+    the end, after the others are acknowledged."""
+    try:
+        items = json.loads(given)
+    except ValueError:
+        items = None
+    if not isinstance(items, list) or not all(isinstance(item, dict) and isinstance(item.get("url"), str) for item in items):
+        raise WatchError("ack-all reads [{\"url\": ..., \"alert\": {...}}] on stdin")
+    failed = []
+    for item in items:
+        try:
+            ack(item["url"], "", "", json.dumps(item["alert"]) if item.get("alert") else "")
+        except WatchError as error:
+            failed.append(str(error))
+    if failed:
+        raise WatchError("; ".join(failed))
+
+
 def unack(url: str) -> None:
     acks = acks_file()
     key = normalize(url) if entry_path(normalize(url)).exists() else url.strip()
@@ -2027,6 +2048,8 @@ def main(argv: list[str]) -> int:
             ack(args[0], args[args.index("--until") + 1] if "--until" in args[1:-1] else "",
                 args[args.index("--note") + 1] if "--note" in args[1:-1] else "",
                 args[args.index("--alert") + 1] if "--alert" in args[1:-1] else "")
+        elif command == "ack-all":
+            ack_all(sys.stdin.read())
         elif command == "unack" and args:
             unack(args[0])
         else:

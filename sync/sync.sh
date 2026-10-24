@@ -1180,12 +1180,12 @@ remote_sync() {
   rm -f "$STATE/error"
 }
 
-# The pull just brought a folder's encryption this computer, which has no key, did not know of
-# when it committed: its own commits may hold files of that folder in clear. They are undone
-# (the files stay on disk) and committed again without that folder.
+# The pull just brought a folder's encryption this computer did not know of when it committed:
+# its own commits may hold files of that folder in clear. They are undone (the files stay on
+# disk) and committed again: through the filter now that the attributes are here, or without
+# that folder when this computer has no key.
 crypt_recommit() {
   local f folders=()
-  crypt_unlocked && return 0
   while IFS= read -r f; do [ -n "$f" ] && folders+=("$f"); done < <(crypt_folders)
   [ ${#folders[@]} -gt 0 ] || return 0
   ahead || return 0

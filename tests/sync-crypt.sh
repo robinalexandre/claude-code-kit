@@ -61,6 +61,18 @@ S "$C" now > /dev/null
 check "a commit made before the pull is undone: nothing pushed in clear" '! git -C "$WORK/remote.git" grep -q "late note" main && [ -z "$(git -C "$C" ls-files knowledge/late.md)" ] && [ -f "$C/knowledge/late.md" ]'
 check "the old computer is now locked and in sync" '[ "$(git -C "$C" rev-parse HEAD)" = "$(git -C "$WORK/remote.git" rev-parse main)" ] && [[ "$(S "$C" crypt status)" == *LOCKED* ]]'
 
+# A computer that had the key but committed in the folder before pulling its encryption.
+D="$WORK/d"
+git clone -q "$WORK/remote.git" "$D" 2> /dev/null
+git -C "$D" reset -q --hard "$(git -C "$D" rev-list --max-parents=0 HEAD | head -1)"
+git -C "$D" reset -q --hard "$(git -C "$D" log --format=%H origin/main | tail -3 | head -1)"
+echo pc2 > "$D/.machine"
+printf '{"devDir": "%s"}\n' "$HOME/dev" > "$D/machines/pc2.json"
+(cd "$D" && git-crypt unlock "$WORK/key" > /dev/null 2>&1)
+echo "Written with the key, before the pull." > "$D/knowledge/early.md"
+S "$D" now > /dev/null
+check "a commit made with the key before the pull is made again through the filter" '[ "$(git -C "$WORK/remote.git" show main:knowledge/early.md | LC_ALL=C head -c 9 | tr -d "\0")" = GITCRYPT ] && ! git -C "$WORK/remote.git" grep -q "before the pull" main'
+
 # A second computer, without the key.
 B="$WORK/b"
 computer pc "$B"

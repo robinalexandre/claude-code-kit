@@ -24,6 +24,7 @@ bash $SK/pr-watch.sh remove <PR URL>  # stop tracking it; it is not tracked agai
 bash $SK/pr-watch.sh park <PR URL> [--note "<why>"]  # keep it tracked but quiet: its changes are no longer reported, nor shown as needing the user, until it is merged or closed
 bash $SK/pr-watch.sh unpark <PR URL>
 bash $SK/pr-watch.sh ack <PR or build URL> [--until YYYY-MM-DD] [--note "<words>"]  # the user has seen this alert: not red any more until it changes (a new comment, another failure) or the date passes
+echo '[{"url": "<PR or build URL>"}, …]' | bash $SK/pr-watch.sh ack-all  # several at once (the pane's `ack all` on a repo)
 bash $SK/pr-watch.sh unack <PR or build URL>
 ```
 
