@@ -9,7 +9,7 @@ command -v git-crypt > /dev/null 2>&1 || {
   exit 0
 }
 WORK=$(mktemp -d)
-trap 'rm -rf "$WORK"' EXIT
+[ -n "${KEEP:-}" ] && echo "work folder kept: $WORK" || trap 'rm -rf "$WORK"' EXIT
 export HOME="$WORK/home" GIT_CONFIG_GLOBAL="$WORK/gitconfig" GIT_CONFIG_NOSYSTEM=1
 mkdir -p "$HOME/.claude" "$HOME/dev"
 git config --global user.email t@example.com
@@ -25,7 +25,7 @@ computer() {
   echo "$name" > "$dir/.machine"
   mkdir -p "$dir/machines"
   printf '{"devDir": "%s"}\n' "$HOME/dev" > "$dir/machines/$name.json"
-  [ -f "$dir/sync.sh" ] || cp "$KIT"/sync/*.sh "$KIT/sync/.gitattributes" "$dir/"
+  [ -f "$dir/sync.sh" ] || cp "$KIT"/sync/*.sh "$KIT/sync/.gitattributes" "$KIT/sync/.gitignore" "$dir/"
 }
 S() { bash "$1/sync.sh" "${@:2}" 2>&1; }
 
@@ -36,6 +36,11 @@ mkdir -p "$A/knowledge" "$A/claude"
 echo "# rules" > "$A/claude/CLAUDE.md"
 echo "Acme Books is the accounting firm." > "$A/knowledge/acme.md"
 git -C "$A" add -A && git -C "$A" commit -qm "first" && git -C "$A" push -q origin HEAD:main
+# A computer cloned before the encryption, which will commit before it pulls the change.
+C="$WORK/c"
+computer old "$C"
+git -C "$C" add -A && git -C "$C" -c core.hooksPath=/dev/null commit -qm "old" > /dev/null && git -C "$C" push -q origin HEAD:main
+git -C "$A" pull -q --rebase origin main
 
 out=$(S "$A" crypt status)
 check "status before: off" '[[ "$out" == *"encryption: off"* ]]'
@@ -48,7 +53,13 @@ check "pushed" '[ "$(git -C "$A" rev-parse HEAD)" = "$(git -C "$WORK/remote.git"
 out=$(S "$A" crypt status)
 check "status after: unlocked" '[[ "$out" == *"encrypted folders: knowledge"* && "$out" == *"this computer: unlocked"* ]]'
 S "$A" crypt export "$WORK/key" > /dev/null
-check "export: a key file, readable by its owner only" '[ -f "$WORK/key" ] && [ "$(stat -f %Lp "$WORK/key" 2> /dev/null || stat -c %a "$WORK/key")" = 600 ]'
+check "export: a key file, readable by its owner only" '[ -f "$WORK/key" ] && [ "$(ls -l "$WORK/key" | cut -c1-10)" = "-rw-------" ]'
+
+# The old computer writes in the folder before it has pulled the encryption, then syncs.
+echo "A late note, written before the pull." > "$C/knowledge/late.md"
+S "$C" now > /dev/null
+check "a commit made before the pull is undone: nothing pushed in clear" '! git -C "$WORK/remote.git" grep -q "late note" main && [ -z "$(git -C "$C" ls-files knowledge/late.md)" ] && [ -f "$C/knowledge/late.md" ]'
+check "the old computer is now locked and in sync" '[ "$(git -C "$C" rev-parse HEAD)" = "$(git -C "$WORK/remote.git" rev-parse main)" ] && [[ "$(S "$C" crypt status)" == *LOCKED* ]]'
 
 # A second computer, without the key.
 B="$WORK/b"

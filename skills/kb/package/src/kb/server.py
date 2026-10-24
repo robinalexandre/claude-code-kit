@@ -11,6 +11,9 @@ Routes, all GET and JSON:
 - ``/related?name=…&depth=2``
 - ``/notes/<name>``: one note, front matter and body
 - ``/stats``
+
+With ``--repo-dir``, ``KB_CRYPT_KEY`` (the git-crypt key the sync exported, base64) opens the
+folders the repository encrypts.
 """
 
 from __future__ import annotations
@@ -152,7 +155,7 @@ def git_env(token: str | None) -> dict[str, str]:
     return env
 
 
-def git(args: list[str], cwd: Path | None, token: str | None) -> str:
+def git(args: list[str], cwd: Path | None, token: str | None, check: bool = True) -> str:
     done = subprocess.run(  # noqa: S603 - arguments built here
         ["git", *args],  # noqa: S607 - git from PATH, as everywhere
         cwd=cwd,
@@ -163,6 +166,8 @@ def git(args: list[str], cwd: Path | None, token: str | None) -> str:
         check=False,
     )
     if done.returncode != 0:
+        if not check:
+            return ""
         raise RuntimeError(f"git {args[0]}: {done.stderr.strip() or done.stdout.strip()}")
     return done.stdout
 
@@ -187,6 +192,37 @@ def pull(repo_dir: Path) -> str:
     except (RuntimeError, subprocess.TimeoutExpired) as exc:
         log.warning("%s", exc)
         return str(exc)
+
+
+def unlock(repo_dir: Path, key_b64: str | None) -> None:
+    """Opens the folders the repository encrypts with git-crypt, with the exported key given
+    as base64 (the sync's `crypt export`). The key touches the disk only for the call, in a
+    file of the clone's .git that git-crypt reads and that is removed at once; without a key,
+    or once unlocked, nothing happens."""
+    if not key_b64 or not (repo_dir / ".git").is_dir():
+        return
+    if git(["config", "--get", "filter.git-crypt.smudge"], repo_dir, None, check=False):
+        return
+    key_file = repo_dir / ".git" / "git-crypt-key.tmp"
+    try:
+        key_file.write_bytes(base64.b64decode("".join(key_b64.split()), validate=True))
+        key_file.chmod(0o600)
+        done = subprocess.run(  # noqa: S603 - fixed program, a path built here
+            ["git-crypt", "unlock", str(key_file)],  # noqa: S607 - git-crypt from PATH
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            timeout=GIT_TIMEOUT,
+            check=False,
+        )
+        if done.returncode != 0:
+            log.warning("git-crypt unlock: %s", done.stderr.strip() or done.stdout.strip())
+        else:
+            log.info("encrypted folders unlocked")
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        log.warning("git-crypt unlock: %s", exc)
+    finally:
+        key_file.unlink(missing_ok=True)
 
 
 class Handler(BaseHTTPRequestHandler):

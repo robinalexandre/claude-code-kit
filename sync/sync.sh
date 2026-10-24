@@ -880,15 +880,17 @@ scan_due() {
 # ~/.claude, never adds to them: git would commit the additions in clear) and says so.
 CRYPT_MARK='# encrypted folders (sync.sh crypt): everything below is kept by sync.sh'
 
-crypt_folders() {
-  [ -f .gitattributes ] || return 0
-  awk -v m="$CRYPT_MARK" '$0 == m { on = 1; next } on && $2 == "filter=git-crypt" { sub(/\/\*\*$/, "", $1); print $1 }' .gitattributes
-}
+crypt_parse() { awk -v m="$CRYPT_MARK" '$0 == m { on = 1; next } on && $2 == "filter=git-crypt" { sub(/\/\*\*$/, "", $1); print $1 }'; }
+crypt_folders() { [ ! -f .gitattributes ] || crypt_parse < .gitattributes; }
+# crypt_known: the encrypted folders here and on origin/main as last fetched: another computer may
+# have encrypted a folder this one has not pulled yet, and nothing of it must be committed in clear.
+crypt_known() { { crypt_folders; git show origin/main:.gitattributes 2> /dev/null | crypt_parse; } | LC_ALL=C sort -u; }
 crypt_on() { [ -n "$(crypt_folders)" ]; }
 crypt_unlocked() { [ -f .git/git-crypt/keys/default ] && [ -n "$(git config --get filter.git-crypt.smudge)" ]; }
 crypt_locked() { crypt_on && ! crypt_unlocked; }
-# crypt_skip FOLDER: whether the sync must leave FOLDER alone here: encrypted, and this computer locked.
-crypt_skip() { crypt_locked && crypt_folders | grep -qxF -- "$1"; }
+# crypt_skip FOLDER: whether the sync must leave FOLDER alone here: encrypted (here or on origin),
+# and this computer has no key.
+crypt_skip() { ! crypt_unlocked && crypt_known | grep -qxF -- "$1"; }
 crypt_told() {
   printf 'has encrypted folders (%s) locked on this computer: they are left alone here until you run bash ~/.claude-sync/sync.sh crypt unlock <key file>' "$(crypt_folders | tr '\n' ' ' | sed 's/ $//')"
 }
@@ -1097,8 +1099,8 @@ apply_local() {
 
 commit() {
   local f excl=()
-  if crypt_locked; then
-    while IFS= read -r f; do [ -n "$f" ] && excl+=(":(exclude)$f"); done < <(crypt_folders)
+  if ! crypt_unlocked; then
+    while IFS= read -r f; do [ -n "$f" ] && excl+=(":(exclude)$f"); done < <(crypt_known)
   fi
   git add -A -- . ${excl[@]+"${excl[@]}"}
   git diff --cached --quiet && return 0
@@ -1157,6 +1159,7 @@ remote_sync() {
       return 1
     fi
     if [ "$(git rev-parse HEAD)" != "$before" ]; then
+      crypt_recommit || return 1
       # The repo scan and the MCP servers cost seconds: done again only for what came in (most
       # pulls bring reminders, handoffs or PR records).
       came=$(git diff --name-only "$before" HEAD)
@@ -1175,6 +1178,21 @@ remote_sync() {
     say "pushed to the sync repo"
   fi
   rm -f "$STATE/error"
+}
+
+# The pull just brought a folder's encryption this computer, which has no key, did not know of
+# when it committed: its own commits may hold files of that folder in clear. They are undone
+# (the files stay on disk) and committed again without that folder.
+crypt_recommit() {
+  local f folders=()
+  crypt_unlocked && return 0
+  while IFS= read -r f; do [ -n "$f" ] && folders+=("$f"); done < <(crypt_folders)
+  [ ${#folders[@]} -gt 0 ] || return 0
+  ahead || return 0
+  [ -n "$(git diff --name-only origin/main HEAD -- "${folders[@]}")" ] || return 0
+  git reset -q origin/main
+  say "undid local commits that would have pushed encrypted folders in clear"
+  commit
 }
 
 lock() {

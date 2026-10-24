@@ -5,7 +5,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     HOME=/data
 
-RUN apt-get update && apt-get install -y --no-install-recommends git \
+# git-crypt: the notes repository may encrypt its personal folders (KB_CRYPT_KEY opens them).
+RUN apt-get update && apt-get install -y --no-install-recommends git git-crypt \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

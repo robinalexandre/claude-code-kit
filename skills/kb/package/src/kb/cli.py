@@ -340,7 +340,7 @@ def cmd_curate(args: argparse.Namespace) -> int:
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
-    from kb.server import Knowledge, clone_if_needed, serve
+    from kb.server import Knowledge, clone_if_needed, serve, unlock
 
     token = os.environ.get("KB_TOKEN", "")
     if len(token) < 16:
@@ -352,6 +352,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
             print(f"{args.repo_dir} is not a git clone and KB_REPO is not set.")
             return 1
         clone_if_needed(args.repo_dir, repo, os.environ.get("KB_GITHUB_TOKEN"))
+    if args.repo_dir:
+        unlock(args.repo_dir, os.environ.get("KB_CRYPT_KEY"))
     db = args.db or Path(os.environ.get("KB_DB") or DEFAULT_DB)
     knowledge = Knowledge(db, get_embedder(args.embed), notes_roots(args), args.repo_dir)
     every = args.pull_every
