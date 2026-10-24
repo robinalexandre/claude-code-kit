@@ -21,9 +21,9 @@ done
 [ -n "$py" ] || { echo "FAIL Python 3.12 or newer is missing"; exit 1; }
 
 "$py" -m venv "$T/venv" || { echo "FAIL venv"; exit 1; }
-if [ -x "$T/venv/bin/pip" ]; then BIN="$T/venv/bin"; else BIN="$T/venv/Scripts"; fi
-"$BIN/pip" install -q --upgrade pip > /dev/null
-"$BIN/pip" install -q "$KIT/skills/kb/package[dev]" || { echo "FAIL pip install"; exit 1; }
+if [ -x "$T/venv/bin/python" ]; then BIN="$T/venv/bin"; else BIN="$T/venv/Scripts"; fi
+"$BIN/python" -m pip install -q --upgrade pip > /dev/null
+"$BIN/python" -m pip install -q "$KIT/skills/kb/package[dev]" || { echo "FAIL pip install"; exit 1; }
 KB=$(ls "$BIN"/kb "$BIN"/kb.exe 2> /dev/null | head -1)
 check "kb installed" '[ -x "$KB" ]'
 

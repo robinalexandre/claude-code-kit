@@ -36,8 +36,9 @@ install() {
     mkdir -p "$STATE"
     "$py" -m venv "$VENV"
   fi
-  "$(venv_bin pip)" install -q --upgrade pip
-  "$(venv_bin pip)" install -q "$SK/package$1"
+  # python -m pip: on Windows, pip.exe cannot replace itself and refuses to run an upgrade.
+  "$(venv_bin python)" -m pip install -q --upgrade pip
+  "$(venv_bin python)" -m pip install -q "$SK/package$1"
   printf '%s\n' "${2:-$(plugin_version)}" > "$STATE/version"
 }
 
