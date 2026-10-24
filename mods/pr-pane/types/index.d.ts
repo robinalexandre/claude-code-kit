@@ -28,6 +28,8 @@ export type PrRow = {
   parked?: boolean
   parkedWhy?: string
   changes: string[]
+  /** Its last activity on the host (a push, a comment, a vote); absent from records taken before. */
+  updated?: string
   checked: string
 }
 

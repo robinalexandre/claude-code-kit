@@ -171,6 +171,28 @@ const endedText = (ended: string, nowMs: number) => {
   return isToday ? `today ${time}` : `${at.getDate()}/${at.getMonth() + 1} ${time}`
 }
 
+// How long ago, short enough for a PR's line: "now", "12 min", "3 h", "2 d"; nothing when unknown.
+const ageText = (stamp: string | undefined, nowMs: number) => {
+  const minutes = Math.max(0, Math.floor((nowMs - endedMs(stamp ?? '')) / 60_000))
+
+  if (Number.isNaN(minutes)) {
+    return ''
+  }
+
+  return minutes < 1 ? 'now' : minutes < 60 ? `${minutes} min` : minutes < 24 * 60 ? `${Math.floor(minutes / 60)} h` : `${Math.floor(minutes / (24 * 60))} d`
+}
+
+const RECENT_UPDATE_MS = 60 * 60_000
+
+// What changed on the host within the hour stands out; older is said dim.
+const isRecentUpdate = (stamp: string | undefined, nowMs: number) => nowMs - endedMs(stamp ?? '') < RECENT_UPDATE_MS
+
+const latestUpdate = (prs: PrRow[]) =>
+  prs.map(pr => pr.updated ?? '').reduce((latest, stamp) => (endedMs(stamp) > (endedMs(latest) || 0) ? stamp : latest), '')
+
+// The columns the terminal takes for a Button that is not plain: it draws `[ label ]`.
+const button = (label: string) => label.length + 4
+
 const truncate = (text: string, width: number) =>
   text.length > width ? `${text.slice(0, Math.max(0, width - 1))}…` : text
 
@@ -1182,7 +1204,9 @@ export const register: Register = on => {
 
     const foldLine = (key: string, own: Fold, under: Fold[], line: RenderChildren) => (
       <Box flexDirection="row" justifyContent="space-between">
-        <Box flexDirection="row">{line}</Box>
+        <Box flexDirection="row" flexShrink={1} overflow="hidden">
+          {line}
+        </Box>
         {foldAllButton(key, own, under)}
       </Box>
     )
@@ -1247,14 +1271,28 @@ export const register: Register = on => {
     // One tracked PR on one line: a colored dot, its number, title and what it waits for, with `merge`
     // when that is all it waits for. Opened, it shows conflicts, CI checks, votes and the changes
     // since the last check. `closedBy`: the control that would fold it back, its repo's.
-    const prRow = (pr: PrRow, group: string, index: number, isStacked: boolean, withMerge: boolean, closedBy: string) => {
+    const prRow =(pr: PrRow, group: string, index: number, isStacked: boolean, withMerge: boolean, closedBy: string) => {
       const isOpen = openDetails[pr.url] ?? isRunning(pr.checks ?? [])
       const color = prColor(pr)
       const acked = pr.ack ? ` · acked${pr.ack.until ? ` until ${pr.ack.until.slice(5)}` : ''}` : ''
       const isAckable = needsAttention(pr) && !pr.ack && pr.parked !== true
       const what = `${plainName(pr.repo)} #${plainName(String(pr.number))}`
-      const titleWidth = Math.max(8, inner - pr.number.length - pr.waiting.length - acked.length - (withMerge && canMerge(pr) ? 32 : 26))
       const [ownFold, ...underFolds] = prFolds(pr)
+      // The buttons at the end are counted as drawn, so the text before them gives way: the title
+      // first, then what the PR waits for, the age last.
+      const mergeWidth = !(withMerge && canMerge(pr))
+        ? 0
+        : (busyKey === actionKey('merge', pr.url)
+            ? 'merging… '.length
+            : button(armedKey === actionKey('merge', pr.url) ? 'press again to merge' : 'merge')) + 1
+      const buttonsWidth =
+        mergeWidth + (pr.parked === true ? button('unpark') + 1 : 0) + button('open') + (underFolds.length > 0 ? 1 + button(UNFOLD_ALL) : 0)
+      const prefixWidth = '▸ ● '.length + (isStacked ? `${index + 1}. `.length : 0) + `#${pr.number} `.length + ' · '.length
+      const room = inner - prefixWidth - buttonsWidth - acked.length - 1
+      const age = ageText(pr.updated, nowMs)
+      const updated = age === '' || room - ` · ${age}`.length < 8 ? '' : ` · ${age}`
+      const waiting = truncate(pr.waiting, Math.max(4, room - 12 - updated.length))
+      const titleWidth = Math.max(4, room - waiting.length - updated.length)
 
       // The parts that fold light up together under the pointer; the PR's link between them doesn't.
       const lit = litGroup(`pr-${group}-${pr.number}`)
@@ -1262,7 +1300,7 @@ export const register: Register = on => {
       return (
         <Box key={`pr-${group}-${pr.number}`} flexDirection="column" paddingLeft={2}>
           <Box flexDirection="row" justifyContent="space-between">
-            <Box flexDirection="row">
+            <Box flexDirection="row" flexShrink={1} overflow="hidden">
               <Box flexDirection="row" hover={lit.box}>
                 <Button
                   key={`pr-toggle-${group}-${pr.number}`}
@@ -1283,7 +1321,7 @@ export const register: Register = on => {
               <Box flexDirection="row" hover={lit.box}>
                 {foldText(
                   `pr-title-${group}-${pr.number}`,
-                  ` ${truncate(pr.title, titleWidth)} · ${pr.waiting}${acked}`,
+                  ` ${truncate(pr.title, titleWidth)} · ${waiting}${updated}${acked}`,
                   [
                     <Text bold hover={lit.text}>
                       {' '}
@@ -1293,8 +1331,13 @@ export const register: Register = on => {
                       {' · '}
                     </Text>,
                     <Text color={color} hover={lit.text}>
-                      {pr.waiting}
+                      {waiting}
                     </Text>,
+                    updated !== '' && (
+                      <Text color={isRecentUpdate(pr.updated, nowMs) ? 'cyan' : undefined} dimColor={!isRecentUpdate(pr.updated, nowMs)} hover={lit.text}>
+                        {updated}
+                      </Text>
+                    ),
                     acked !== '' && (
                       <Text color="blue" hover={lit.text}>
                         {acked}
@@ -1306,7 +1349,7 @@ export const register: Register = on => {
                 )}
               </Box>
             </Box>
-            <Box flexDirection="row">
+            <Box flexDirection="row" flexShrink={0}>
               {withMerge && canMerge(pr) && (
                 busyKey === actionKey('merge', pr.url) ? (
                   <Text dimColor>merging… </Text>
@@ -1735,13 +1778,32 @@ export const register: Register = on => {
         const isStacked = prsOfRepo.some(pr => (pr.after ?? '') !== '')
         const key = repoKey(section, repo)
         const isOpen = expanded[key] ?? false
-        const hint = isOpen
-          ? isStacked && <Text dimColor> · merge top to bottom</Text>
-          : hasRunningCi(prsOfRepo) && <Text color="yellow"> · CI running</Text>
+        // Folded, the block says its newest activity on the host, so a fresh change shows without opening it.
+        const latest = latestUpdate(prsOfRepo)
+        const isCiRunning = hasRunningCi(prsOfRepo)
+        // The line draws "● ▸ <repo> (n)", the hint, then `[ ▾ all ]`: the name gives way to the hint,
+        // and the age goes when the name would be too short to read.
+        const nameRoom = (hint: string) => width - `●  ▸  (${prsOfRepo.length})`.length - button(UNFOLD_ALL) - 1 - hint.length
+        const before = isOpen ? (isStacked ? ' · merge top to bottom' : '') : isCiRunning ? ' · CI running' : ''
+        const fullAge = isOpen ? '' : ageText(latest, nowMs)
+        const age = fullAge !== '' && nameRoom(`${before} · updated ${fullAge}`) >= Math.min(12, repo.length) ? fullAge : ''
+        const shownRepo = truncate(repo, Math.max(4, Math.min(width - 36, nameRoom(`${before}${age === '' ? '' : ` · updated ${age}`}`))))
+        const hint = isOpen ? (
+          isStacked && <Text dimColor> · merge top to bottom</Text>
+        ) : (
+          <Box flexDirection="row">
+            {isCiRunning && <Text color="yellow"> · CI running</Text>}
+            {age !== '' && (
+              <Text color={isRecentUpdate(latest, nowMs) ? 'cyan' : undefined} dimColor={!isRecentUpdate(latest, nowMs)}>
+                {` · updated ${age}`}
+              </Text>
+            )}
+          </Box>
+        )
 
         const buttonKey = section === 'waiting' ? `repo-${repo}` : `${section}-repo-${repo}`
 
-        return repoBlock(key, buttonKey, repo, prsOfRepo.length, isOpen, hint, () =>
+        return repoBlock(key, buttonKey, shownRepo, prsOfRepo.length, isOpen, hint, () =>
           prsOfRepo.map((pr, index) => prRow(pr, repo, index, isStacked, withMerge, `all-${buttonKey}`)),
           worst(prsOfRepo.map(prColor)),
           prsOfRepo.flatMap(prFolds),

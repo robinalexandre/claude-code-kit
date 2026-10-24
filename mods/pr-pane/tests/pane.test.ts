@@ -687,6 +687,89 @@ test('a CI that runs leaves its section and repo block folded, says so on their 
   expect(await pane.find({ text: /^ · CI running$/ })).toBeUndefined()
 })
 
+test('each PR says its last activity on the host, and a folded block its newest, fresh ones apart', async ($, on) => {
+  const clock = mock.clock(on)
+  await clock.set(Date.UTC(2026, 0, 2, 12, 0))
+  const updated = {
+    live: false,
+    prs: [
+      row('7', { repo: 'api', updated: '2026-01-02T11:48Z' }),
+      row('8', { repo: 'api', updated: '2025-12-30T09:00Z' }),
+      row('9', { repo: 'web', updated: '2026-01-02T07:30Z' }),
+      row('4', { repo: 'old' }),
+    ],
+    errors: [],
+  }
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
+  on('process.run', ($, e) => ran(0, e.argv[2] === 'status' ? JSON.stringify(updated) : ''))
+  on('ui.render', () => Fragment({}))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+
+  await $.command.run(RUN)
+  const pane = await mountPane($, 'terminal', 100)
+  await pane.press({ key: 'waiting' })
+
+  expect((await pane.find({ type: 'Text', text: ' · updated 12 min' }))?.props?.color).toBe('cyan')
+  expect((await pane.find({ type: 'Text', text: ' · updated 4 h' }))?.props?.dimColor).toBe(true)
+  // A record taken before pr-watch kept the date says nothing.
+  expect(await pane.findAll({ type: 'Text', text: /^ · updated / })).toHaveLength(2)
+
+  await pane.press({ key: 'repo-api' })
+  await pane.press({ key: 'repo-old' })
+
+  expect(await pane.find({ key: 'pr-title-api-7', text: / · a review · 12 min$/ })).toBeDefined()
+  expect(await pane.find({ key: 'pr-title-api-8', text: / · a review · 3 d$/ })).toBeDefined()
+  expect(await pane.find({ type: 'Text', text: ' · updated 12 min' })).toBeUndefined()
+  expect(await pane.find({ key: 'pr-title-old-4', text: / · a review$/ })).toBeDefined()
+})
+
+// What the terminal draws on a PR's line: its padding, arrow and dot, number, the label, then each
+// button at the end as `[ label ]`.
+const drawnWidth = (number: string, label: string, buttons: string[]) =>
+  4 + '▸ ● '.length + `#${number}`.length + label.length + buttons.reduce((sum, one) => sum + one.length + 5, 0)
+
+for (const columns of [56, 64, 100]) {
+  test(`a PR's line keeps its buttons in a pane ${columns} columns wide, its text giving way`, async ($, on) => {
+    const clock = mock.clock(on)
+    await clock.set(Date.UTC(2026, 0, 2, 12, 0))
+    const long = {
+      title: 'feat(checkout): a title long enough to fill any pane on its own and then some more words',
+      waiting: 'the PR into feature/a-rather-long-branch-name to merge first',
+      updated: '2026-01-02T11:48Z',
+      checks: [{ name: 'build', state: 'passed', required: true, link: null }],
+    }
+    const wide = {
+      live: false,
+      prs: [
+        row('31', { repo: 'checkout-service-with-a-long-name', ...long }),
+        row('32', { repo: 'checkout-service-with-a-long-name', ...long, parked: true }),
+      ],
+      errors: [],
+    }
+    on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
+    on('process.run', ($, e) => ran(0, e.argv[2] === 'status' ? JSON.stringify(wide) : ''))
+    on('ui.render', () => Fragment({}))
+    on('ui.open', () => ({ value: { isPlaced: true as const } }))
+
+    await $.command.run(RUN)
+    const pane = await mountPane($, 'terminal', columns)
+    await pane.press({ key: 'waiting' })
+    const folded = await pane.find({ key: 'repo-checkout-service-with-a-long-name' })
+
+    expect(4 + 2 + String(folded?.props.label).length + (columns >= 64 ? ' · updated 12 min'.length : 0) + '[ ▾ all ]'.length).toBeLessThanOrEqual(columns)
+
+    await pane.press({ key: 'repo-checkout-service-with-a-long-name' })
+    await pane.press({ key: 'parked' })
+    await pane.press({ key: 'parked-repo-checkout-service-with-a-long-name' })
+    const waiting = String((await pane.find({ key: 'pr-title-checkout-service-with-a-long-name-31' }))?.props.label)
+    const parked = String((await pane.find({ key: 'pr-title-checkout-service-with-a-long-name-32' }))?.props.label)
+
+    expect(drawnWidth('31', waiting, ['open', '▾ all'])).toBeLessThanOrEqual(columns)
+    expect(drawnWidth('32', parked, ['unpark', 'open', '▾ all'])).toBeLessThanOrEqual(columns)
+    expect(waiting).toContain(' · 12 min')
+  })
+}
+
 const BUILDS = {
   live: false,
   prs: [row('1', {})],

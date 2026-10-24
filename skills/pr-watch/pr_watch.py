@@ -267,6 +267,11 @@ class AzureDevOps:
     def snapshot(self) -> dict:
         pr = self.get(f"git/repositories/{self.repo}/pullrequests/{self.id}")
         threads = self.get(f"git/repositories/{self.repo}/pullrequests/{self.id}/threads").get("value") or []
+        # Azure DevOps keeps no update date on the PR: its system threads record each push, vote and
+        # reviewer change, so the newest thread is its last activity.
+        updated = max(filter(None, (_stamp(stamp or "") for stamp in (
+            pr.get("creationDate"), pr.get("closedDate"), *(thread.get("lastUpdatedDate") for thread in threads)))),
+            default="")
         comments = {}
         for thread in threads:
             if thread.get("isDeleted") or (thread.get("properties") or {}).get("CodeReviewThreadType"):
@@ -292,6 +297,7 @@ class AzureDevOps:
                       for r in pr.get("reviewers") or [] if r.get("vote")},
             "comments": comments,
             "checks": self.checks(pr["repository"]["project"]["id"]),
+            "updated": updated,
         }
 
     def checks(self, project_id: str) -> dict[str, dict]:
@@ -941,7 +947,7 @@ class GitHub:
         return {"title": pr["title"], "description": (pr.get("body") or "")[:DESCRIPTION], "status": status,
                 "target": pr["base"]["ref"], "source": pr["head"]["ref"],
                 "conflicts": pr.get("mergeable_state") == "dirty", "votes": votes, "comments": comments,
-                "checks": checks}
+                "checks": checks, "updated": _stamp(pr.get("updated_at") or "")}
 
     def checks(self, sha: str) -> dict[str, dict]:
         """Check runs (GitHub Actions and apps) and commit statuses on the PR's head commit."""
@@ -1739,6 +1745,7 @@ def status(mode: str) -> None:
             "parkedWhy": entry.get("parkedWhy", ""),
             "ack": ack_of(entry["url"], _pr_alert(seen, news), acks),
             "changes": news,
+            "updated": seen.get("updated", ""),
             "checked": section["at"][:16] + "Z" if now else entry.get("checked", ""),
         })
     recent = []
