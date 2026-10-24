@@ -122,6 +122,35 @@ test('the sync is asked every minute while the pane is open, every five otherwis
   expect(polls()).toBe(closed + 1)
 })
 
+test('with the pane closed the band shows a reminder the moment it falls due, and what changed within five minutes', async ($, on) => {
+  const calls: string[][] = []
+  const soon = { id: 'call', state: 'later', title: 'Call the bank', on: '2026-10-24', every: 'day', next: '2026-10-24 09:02' }
+  const world: World = { reminders: [soon], handoffs: [], installed: [REMINDERS] }
+  const clock = answerBeneath(on, world, calls)
+  await clock.set(new Date('2026-10-24T09:00').getTime())
+
+  await $.session.start(START)
+  await clock.settle()
+  const band = await mountBand($)
+
+  expect(await band.find({ key: 'reminders-handoffs', text: 'Reminders' })).toBeDefined()
+
+  world.reminders = [{ ...soon, state: 'due' }]
+  await clock.advance(60_000)
+
+  expect(await band.find({ key: 'reminders-handoffs', text: 'Reminders' })).toBeDefined()
+
+  await clock.advance(61_000)
+
+  expect(await band.find({ key: 'reminders-handoffs', text: 'Reminders 1 now' })).toBeDefined()
+
+  // Closed in another session, nothing pulled: read again with the next poll all the same.
+  world.reminders = [{ ...soon, state: 'past', closed: '2026-10-24 09:03' }]
+  await clock.advance(5 * 60_000)
+
+  expect(await band.find({ key: 'reminders-handoffs', text: 'Reminders' })).toBeDefined()
+})
+
 test('/reminders lists them by section, done closes a repeating one for today', async ($, on) => {
   const calls: string[][] = []
   const world: World = { reminders: [WEEKLY, LATER, PAST], handoffs: [], installed: [REMINDERS] }

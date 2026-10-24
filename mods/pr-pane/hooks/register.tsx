@@ -12,6 +12,7 @@ const RELOAD_EVERY_MS = 5 * 60_000
 // changed) and fetches a host only once its share is older than pr-watch's `cacheMinutes`.
 const IDLE_EVERY_MS = 2 * 60_000
 const WHILE_RUNNING_EVERY_MS = 60_000
+const CLOSED_EVERY_MS = 5 * 60_000
 const NEEDS_US = new Set(['a conflict fix', 'a CI fix', 'changes from us', 'CI to be queued again'])
 const ENDED = new Set(['passed', 'failed', 'broken', 'expired', 'skipped'])
 const CHECK_MARKS: Record<string, { mark: string; color: string }> = {
@@ -450,9 +451,12 @@ const load = async ($: EngineInterface, mode: Mode) => {
 
 let nextRefresh: { cancel: () => void } | undefined
 
+const isPaneShown = async ($: EngineInterface) => (await $.ui.panes().catch(() => [{ id: PANE }])).some(pane => pane.id === PANE)
+
 // While the pane is open it is asked again, every minute while a PR's CI or a pipeline run is in
-// progress, every two minutes otherwise: what changed on the host, or what another computer fetched,
-// shows without a press. The refresh button fetches every host now.
+// progress, every two minutes otherwise; closed, every five minutes, so the band says what the pane
+// would. What changed on the host, or what another computer fetched, shows without a press. The
+// refresh button fetches every host now.
 const refresh = async ($: EngineInterface, mode: Mode = 'auto') => {
   const isLost = liveStartedAt === 0 || (await $.clock.now()) - liveStartedAt > LIVE_LOST_MS
 
@@ -460,22 +464,22 @@ const refresh = async ($: EngineInterface, mode: Mode = 'auto') => {
     return
   }
 
-  if (await load($, mode)) {
+  if ((await load($, mode)) && (await isPaneShown($))) {
     await refreshOpenDetails($)
   }
 
-  nextRefresh?.cancel()
-  const shown = await read($, snapshot)
-  const every = anyRunning(shown?.prs ?? [], shown?.builds ?? []) ? WHILE_RUNNING_EVERY_MS : IDLE_EVERY_MS
-  nextRefresh = $.clock.after(every, () => void refreshIfShown($))
+  await scheduleRefresh($)
 }
 
-const refreshIfShown = async ($: EngineInterface) => {
-  const panes = await $.ui.panes().catch(() => [{ id: PANE }])
-
-  if (panes.some(pane => pane.id === PANE)) {
-    await refresh($)
-  }
+const scheduleRefresh = async ($: EngineInterface) => {
+  nextRefresh?.cancel()
+  const shown = await read($, snapshot)
+  const every = !(await isPaneShown($))
+    ? CLOSED_EVERY_MS
+    : anyRunning(shown?.prs ?? [], shown?.builds ?? [])
+      ? WHILE_RUNNING_EVERY_MS
+      : IDLE_EVERY_MS
+  nextRefresh = $.clock.after(every, () => void refresh($))
 }
 
 const toggleDetails = async ($: EngineInterface, url: string, name: string) => {
@@ -1049,6 +1053,8 @@ const start = async ($: EngineInterface) => {
 
   if (await $.fs.exists(await script($)).catch(() => false)) {
     await update($, isActive, () => true)
+    // The session-start check fetches first: the band's own asking starts one round later.
+    void scheduleRefresh($)
   }
 
   loadedAt = Number.NEGATIVE_INFINITY

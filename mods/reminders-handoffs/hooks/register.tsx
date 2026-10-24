@@ -275,6 +275,32 @@ const load = async ($: EngineInterface) => {
 
   const now = await $.clock.now()
   await update($, loadedTime, () => now)
+  await scheduleDue($)
+}
+
+// "YYYY-MM-DD" or "YYYY-MM-DD HH:MM", in local time.
+const stampMs = (stamp: string) => {
+  const [day = '', time = '00:00'] = stamp.split(' ')
+
+  return new Date(`${day}T${time}`).getTime()
+}
+
+// A long wait is cut short: the engine's timers may not hold days, and each load sets the next.
+const DUE_WAIT_MAX_MS = 6 * 60 * 60_000
+let nextDue: { cancel: () => void } | undefined
+
+// The lists are read again the moment the next reminder here falls due, so the band says it then.
+const scheduleDue = async ($: EngineInterface) => {
+  const now = await $.clock.now()
+  const times = ((await read($, reminders)) ?? [])
+    .filter(one => one.state === 'later')
+    .map(one => stampMs(one.next ?? one.on ?? ''))
+    .filter(ms => ms > now)
+  nextDue?.cancel()
+
+  if (times.length > 0) {
+    nextDue = $.clock.after(Math.min(Math.min(...times) - now + 1_000, DUE_WAIT_MAX_MS), () => void load($).catch(() => undefined))
+  }
 }
 
 const clockTime = (milliseconds: number) => {
@@ -305,7 +331,8 @@ const syncNow = async ($: EngineInterface) => {
 
 // The sync asks the remote whether another computer pushed (sync.sh poll: one cheap request, and one
 // check per computer however many sessions ask), every minute while the pane is open, every five
-// minutes otherwise. Whichever session pulled, the others see the new head and read again.
+// minutes otherwise. Whichever session pulled, the others see the new head and read again; with
+// nothing pulled, lists older than five minutes are read again all the same, for the band.
 const POLL_OPEN_MS = 60_000
 const POLL_CLOSED_MS = 5 * 60_000
 let nextPoll: { cancel: () => void } | undefined
@@ -326,8 +353,9 @@ const poll = async ($: EngineInterface) => {
   const head = /^head (\S+)$/m.exec(ran?.stdout ?? '')?.[1] ?? ''
   const isPulled = ran?.stdout.includes('main moved') === true || (head !== '' && seenHead !== '' && head !== seenHead)
   seenHead = head || seenHead
+  const isOld = (await $.clock.now()) - (await read($, loadedTime)) >= POLL_CLOSED_MS
 
-  if (isPulled) {
+  if (isPulled || isOld) {
     loadedAt = await $.clock.now()
     await load($)
   }

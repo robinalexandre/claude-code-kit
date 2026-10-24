@@ -1197,6 +1197,46 @@ test('with pr-watch installed the band shows PRs & CI before anything is tracked
   expect(calls.length).toBeGreaterThan(before)
 })
 
+test('with the pane closed the band asks pr-watch every five minutes and follows what changed', async ($, on) => {
+  const clock = mock.clock(on)
+  const autoCalls: string[][] = []
+  let prs = [row('1', {})]
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
+  on('fs.exists', ($, e) => ({ value: e.path.replace(/\\/g, '/').endsWith('/skills/pr-watch/pr-watch.sh') }))
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('process.run', ($, e) => {
+    if (e.argv.includes('--auto')) {
+      autoCalls.push(e.argv.slice(2))
+    }
+
+    return ran(0, e.argv[2] === 'status' ? JSON.stringify({ live: false, prs, errors: [] }) : '')
+  })
+  on('ui.render', () => Fragment({}))
+  on('ui.panes', () => ({ value: [] }))
+
+  await $.session.start({ cwd: '/home/someone/dev/shop', surface: 'terminal', isInteractive: true })
+  await clock.advance(0)
+  const band = await $.ui.mount({ plugin: 'pr-pane', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
+
+  expect(await band.find({ key: 'prs', text: 'PRs & CI' })).toBeDefined()
+
+  // Another computer, or the host, saw the CI fail: no turn and no pane needed.
+  prs = [row('1', { ci: 'CI failed', waiting: 'a CI fix' })]
+  await clock.advance(4 * 60_000)
+
+  expect(autoCalls).toEqual([])
+
+  await clock.advance(60_000)
+
+  expect(autoCalls).toEqual([['status', '--auto']])
+  expect(await band.find({ key: 'prs', text: 'PRs & CI 1 !' })).toBeDefined()
+
+  await clock.advance(5 * 60_000)
+
+  expect(autoCalls.length).toBe(2)
+})
+
 test('without pr-watch the band has no PRs & CI button', async ($, on) => {
   const clock = mock.clock(on)
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
