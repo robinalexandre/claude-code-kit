@@ -25,16 +25,27 @@ newer() {
     exit 1 }'
 }
 
+# .gitattributes ends with the list of encrypted folders (sync.sh crypt), kept across engine
+# versions and left out of the engine's hash.
+CRYPT_MARK='# encrypted folders (sync.sh crypt): everything below is kept by sync.sh'
+
 hashes() {
   local f
   for f in $ENGINE; do
-    [ -f "$1/$f" ] && printf '%s\t%s\n' "$f" "$(git hash-object "$1/$f")"
+    [ -f "$1/$f" ] || continue
+    if [ "$f" = .gitattributes ]; then
+      printf '%s\t%s\n' "$f" "$(awk -v m="$CRYPT_MARK" '$0 == m { exit } { print }' "$1/$f" | git hash-object --stdin)"
+    else
+      printf '%s\t%s\n' "$f" "$(git hash-object "$1/$f")"
+    fi
   done
 }
 
 put_engine() {
-  local f
+  local f crypt=""
+  [ -f "$SYNC/.gitattributes" ] && crypt=$(awk -v m="$CRYPT_MARK" '$0 == m { on = 1; next } on' "$SYNC/.gitattributes")
   for f in $ENGINE; do cp "$HERE/$f" "$SYNC/$f"; done
+  [ -z "$crypt" ] || printf '%s\n' "$crypt" >> "$SYNC/.gitattributes"
   chmod +x "$SYNC/install.sh" "$SYNC/sync.sh" "$SYNC/inventory.sh"
   hashes "$SYNC" | jq -R -s --arg v "$1" '{version: $v, files: (split("\n") | map(select(. != "") | split("\t") | {(.[0]): .[1]}) | add)}' > "$MANIFEST"
 }
@@ -116,3 +127,23 @@ bash "$SYNC/install.sh" "$machine" "$dev" || {
   exit 0
 }
 kit_setup_mark config-sync done
+
+# Encrypted folders: offered once on the first computer; a later computer with the repo already
+# encrypted only needs the key.
+crypt_folders=$(awk -v m="$CRYPT_MARK" '$0 == m { on = 1; next } on && $2 == "filter=git-crypt" { sub(/\/\*\*$/, "", $1); print $1 }' "$SYNC/.gitattributes" 2> /dev/null | tr '\n' ' ')
+if [ -n "$crypt_folders" ]; then
+  if [ ! -f "$SYNC/.git/git-crypt/keys/default" ]; then
+    echo "The repo encrypts these folders with git-crypt: $crypt_folders(they stay locked here until you give the key)."
+    key=$(reply config-sync.key "Path of the key file exported from your other computer (blank: later, with sync.sh crypt unlock <file>):" "")
+    if [ -n "$key" ]; then
+      if [ -f "$key" ]; then bash "$SYNC/sync.sh" crypt unlock "$key"; else echo "  $key is not a file; later: bash ~/.claude-sync/sync.sh crypt unlock <key file>"; fi
+    fi
+  fi
+elif command -v git-crypt > /dev/null 2>&1; then
+  if ask config-sync.encrypt "Encrypt your personal folders in the repo with git-crypt (memory and knowledge notes; the key stays off the repo, you carry it to each computer)?"; then
+    bash "$SYNC/sync.sh" crypt on memory memory-repos memory-folders knowledge
+  fi
+else
+  echo "  To encrypt the personal folders of the repo (memory, knowledge) with git-crypt, install it and run:"
+  echo "  bash ~/.claude-sync/sync.sh crypt on memory memory-repos memory-folders knowledge"
+fi

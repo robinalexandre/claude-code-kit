@@ -145,7 +145,7 @@ Mods change Claude Code's own interface. They install as plugins like the other 
 
 ### Sync engine
 
-[sync/](sync/README.md): keeps `CLAUDE.md`, skills, mods, hooks, settings (the plugins you installed and their options included), MCP servers (without their secrets), memory and the untracked agent files of your repos the same on every computer, through a private git repo of your own (any host). Secrets are replaced by `__SECRET__` before anything leaves the computer. The config-sync plugin sets it up for you (it takes the clone URL of a repo you made, or creates one on GitHub with `gh`) and keeps the engine in that repo up to date, unless you changed it there yourself; install.sh does the same setup once.
+[sync/](sync/README.md): keeps `CLAUDE.md`, skills, mods, hooks, settings (the plugins you installed and their options included), MCP servers (without their secrets), memory and the untracked agent files of your repos the same on every computer, through a private git repo of your own (any host). Secrets are replaced by `__SECRET__` before anything leaves the computer, and your personal folders (memory, knowledge notes) can be encrypted in the repo with git-crypt (`sync.sh crypt`), the key staying off the repo. The config-sync plugin sets it up for you (it takes the clone URL of a repo you made, or creates one on GitHub with `gh`) and keeps the engine in that repo up to date, unless you changed it there yourself; install.sh does the same setup once.
 
 ## Projects
 

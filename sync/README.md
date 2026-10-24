@@ -118,6 +118,20 @@ Nothing in it is a secret, but it names your computers and folders: it stays in 
 
 On every computer, the next session starts with the last sync error, if there was one. On Windows, Git Bash sometimes fails to start a process (`fatal error - add_item ... failed`), and that can stop a sync halfway or before it begins. So there a failed sync is tried twice more, 5 then 10 seconds later, and the next sync after every reply is one more try. If every try fails, or no background sync has finished for 15 minutes, you see one message in the session right after Claude's reply. You see it again only if the problem changes. `SYNC_RETRIES=<n>` sets how many times a failed sync is tried again on any system (`0` turns it off).
 
+## Encrypted folders
+
+The repo is private, but its personal folders (your memory, your knowledge notes, an assistant's files) are readable by anyone who gets into your git account. `sync.sh crypt` encrypts them with [git-crypt](https://github.com/AGWA/git-crypt): a git filter that encrypts at commit and decrypts at checkout, with a key that never goes in the repo. On your disk and for Claude nothing changes; on the host those files are ciphertext.
+
+```sh
+brew install git-crypt            # apt install git-crypt; Windows: a release from github.com/AGWA/git-crypt
+bash ~/.claude-sync/sync.sh crypt on memory memory-repos memory-folders knowledge
+bash ~/.claude-sync/sync.sh crypt export ~/claude-sync.key    # keep it in your password manager, never in the repo
+bash ~/.claude-sync/sync.sh crypt unlock ~/claude-sync.key    # once, on each other computer
+bash ~/.claude-sync/sync.sh crypt status
+```
+
+The config-sync setup offers it on the first computer, and asks for the key file on the next ones. The encrypted folders are listed at the end of `.gitattributes`, after a marker line the engine's updates keep. A computer without the key (or without git-crypt) is *locked*: it sees ciphertext there, so the sync leaves those folders alone (nothing applied to `~/.claude`, nothing added from there, which git would commit in clear) and the session starts with a line saying so. Earlier commits still hold the files in clear: rewrite the history if that matters to you. A program that reads the repo through the host's API (not through git) has to encrypt and decrypt the format itself; the key file gives it everything it needs.
+
 ## Handoff
 
 Install the `handoff` skill from this kit (`skills/handoff`). At the end of a session: "write a handoff". On the other computer: "pick up the handoff".
@@ -126,6 +140,7 @@ Install the `handoff` skill from this kit (`skills/handoff`). At the end of a se
 
 ```sh
 bash ~/.claude-sync/sync.sh now      # sync right away
-bash ~/.claude-sync/sync.sh status   # computer, last commit, last error, log
+bash ~/.claude-sync/sync.sh status   # computer, last commit, last error, encryption, log
+bash ~/.claude-sync/sync.sh crypt    # encrypted folders: status | on <folder>… | export <key file> | unlock <key file>
 bash ~/.claude-sync/inventory.sh show   # what every computer runs
 ```

@@ -1,2 +1,4 @@
 * text=auto eol=lf
 *.json merge=json
+
+# encrypted folders (sync.sh crypt): everything below is kept by sync.sh

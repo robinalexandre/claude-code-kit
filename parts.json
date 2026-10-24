@@ -231,7 +231,7 @@
       "tools": [
         "git"
       ],
-      "what": "The sync engine: keeps your CLAUDE.md, skills, mods, hooks, plugins and their settings, MCP servers (secrets left out) and memory the same on all your computers, through a private git repo of your own (any host; created for you on GitHub with gh if you like).",
+      "what": "The sync engine: keeps your CLAUDE.md, skills, mods, hooks, plugins and their settings, MCP servers (secrets left out) and memory the same on all your computers, through a private git repo of your own (any host; created for you on GitHub with gh if you like). Your personal folders (memory, knowledge notes) can be encrypted in it with git-crypt, the key staying off the repo.",
       "why": "Set Claude up once, and every computer works the same way, with the same plugins and memory.",
       "when": "In the background at each session start, after each reply and at session end.",
       "who": "People who use Claude Code on two computers or more; handoff, daily-sync and reminders need it."

@@ -9,6 +9,7 @@
 #   status   shows this machine's sync state
 #   install  first run on a machine: backs up ~/.claude, then copies the repo's config into it
 #   init     first run ever: copies this machine's config into an empty repo
+#   crypt    encrypted folders (git-crypt): crypt status | on <folder>… | export <key file> | unlock <key file>
 set -u
 
 SYNC=${SYNC_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}
@@ -828,6 +829,7 @@ local_memories() {
 capture_memories() {
   local dst p m f
   while IFS=$'\t' read -r dst p; do
+    crypt_skip "${dst%%/*}" && continue
     m=$(memory_dir "$p")
     while IFS= read -r f; do
       capture_file "$m/$f" "$dst/$f" "$STATE/seen/$dst/$f" || return 1
@@ -848,10 +850,12 @@ apply_memory() {
 
 apply_memories() {
   local id root r d
-  while read -r id root r; do
-    [ -d "memory-repos/$id" ] && { apply_memory "memory-repos/$id" "$r" || return 1; }
-  done < <(repos)
-  [ -d memory-folders ] || return 0
+  if ! crypt_skip memory-repos; then
+    while read -r id root r; do
+      [ -d "memory-repos/$id" ] && { apply_memory "memory-repos/$id" "$r" || return 1; }
+    done < <(repos)
+  fi
+  [ -d memory-folders ] && ! crypt_skip memory-folders || return 0
   while IFS= read -r d; do
     d=${d#memory-folders/}
     [ -d "$DEV_DIR/$d" ] || continue
@@ -867,9 +871,117 @@ scan_due() {
     [ -n "$(find "$STATE/scanned" -mmin +"$SCAN_EVERY_MIN" 2> /dev/null)" ]
 }
 
+# --- Encrypted folders (git-crypt) ---------------------------------------------------------
+# Personal folders (memory, knowledge notes, an assistant's files…) can be encrypted in the repo
+# with git-crypt: a git filter that encrypts at commit and decrypts at checkout, with a key that
+# never goes in the repo. Everything after CRYPT_MARK in .gitattributes is the list of encrypted
+# folders, kept by `sync.sh crypt`. A computer without the key (or without git-crypt) is locked:
+# it sees ciphertext there, so the sync leaves those folders alone (never applies them to
+# ~/.claude, never adds to them: git would commit the additions in clear) and says so.
+CRYPT_MARK='# encrypted folders (sync.sh crypt): everything below is kept by sync.sh'
+
+crypt_folders() {
+  [ -f .gitattributes ] || return 0
+  awk -v m="$CRYPT_MARK" '$0 == m { on = 1; next } on && $2 == "filter=git-crypt" { sub(/\/\*\*$/, "", $1); print $1 }' .gitattributes
+}
+crypt_on() { [ -n "$(crypt_folders)" ]; }
+crypt_unlocked() { [ -f .git/git-crypt/keys/default ] && [ -n "$(git config --get filter.git-crypt.smudge)" ]; }
+crypt_locked() { crypt_on && ! crypt_unlocked; }
+# crypt_skip FOLDER: whether the sync must leave FOLDER alone here: encrypted, and this computer locked.
+crypt_skip() { crypt_locked && crypt_folders | grep -qxF -- "$1"; }
+crypt_told() {
+  printf 'has encrypted folders (%s) locked on this computer: they are left alone here until you run bash ~/.claude-sync/sync.sh crypt unlock <key file>' "$(crypt_folders | tr '\n' ' ' | sed 's/ $//')"
+}
+
+crypt() {
+  local cmd=${1:-status} f
+  [ $# -eq 0 ] || shift
+  case "$cmd" in
+    status)
+      if ! crypt_on; then
+        echo "encryption: off (bash ~/.claude-sync/sync.sh crypt on <folder>…)"
+        return 0
+      fi
+      echo "encrypted folders: $(crypt_folders | tr '\n' ' ')"
+      if crypt_unlocked; then echo "this computer: unlocked"; else echo "this computer: LOCKED, those folders are left alone here (bash ~/.claude-sync/sync.sh crypt unlock <key file>)"; fi
+      command -v git-crypt > /dev/null 2>&1 || echo "git-crypt is not installed here"
+      ;;
+    on)
+      command -v git-crypt > /dev/null 2>&1 || {
+        echo "git-crypt is not installed: brew install git-crypt, apt install git-crypt, or https://github.com/AGWA/git-crypt/releases"
+        return 1
+      }
+      [ $# -gt 0 ] || {
+        echo "usage: sync.sh crypt on <folder>…   (top-level folders of the repo, e.g. memory knowledge)"
+        return 2
+      }
+      lock 60 || {
+        echo "another sync is running; try again in a moment"
+        return 1
+      }
+      VERBOSE="" sync_once force > /dev/null 2>&1 || true
+      [ -f .git/git-crypt/keys/default ] || git-crypt init > /dev/null || return 1
+      grep -qxF -- "$CRYPT_MARK" .gitattributes 2> /dev/null || printf '\n%s\n' "$CRYPT_MARK" >> .gitattributes
+      for f in "$@"; do
+        f=${f%/}
+        case "$f" in "" | .* | */*) echo "  $f: give a top-level folder of the repo"; continue ;; esac
+        if crypt_folders | grep -qxF -- "$f"; then
+          echo "  $f: already encrypted"
+          continue
+        fi
+        printf '%s/** filter=git-crypt diff=git-crypt\n' "$f" >> .gitattributes
+        if [ -d "$f" ]; then
+          git rm -r -q --cached -- "$f" > /dev/null 2>&1
+          git add -- "$f"
+        fi
+        echo "  $f: encrypted from now on"
+      done
+      git add .gitattributes
+      git diff --cached --quiet || git -c core.hooksPath=/dev/null commit -qm "chore(sync): encrypt $*" > /dev/null
+      remote_sync force || return 1
+      echo "The key is in .git/git-crypt/keys/default of this clone only. For your other computers:"
+      echo "  bash ~/.claude-sync/sync.sh crypt export ~/claude-sync.key    (keep it in your password manager, never in the repo)"
+      echo "  bash ~/.claude-sync/sync.sh crypt unlock <that file>          (on each other computer, once)"
+      echo "Earlier commits still hold these files in clear: rewrite the history if that matters."
+      ;;
+    export)
+      [ -n "${1:-}" ] || {
+        echo "usage: sync.sh crypt export <key file>"
+        return 2
+      }
+      crypt_unlocked || {
+        echo "this computer has no key to export"
+        return 1
+      }
+      git-crypt export-key "$1" && chmod 600 "$1" && echo "key written to $1: keep it in your password manager, never in the repo"
+      ;;
+    unlock)
+      [ -f "${1:-}" ] || {
+        echo "usage: sync.sh crypt unlock <key file>"
+        return 2
+      }
+      command -v git-crypt > /dev/null 2>&1 || {
+        echo "git-crypt is not installed: brew install git-crypt, apt install git-crypt, or https://github.com/AGWA/git-crypt/releases"
+        return 1
+      }
+      lock 60 || {
+        echo "another sync is running; try again in a moment"
+        return 1
+      }
+      git-crypt unlock "$1" || return 1
+      echo "unlocked: the encrypted folders now sync on this computer too"
+      sync_once force
+      ;;
+    *)
+      echo "usage: sync.sh crypt status | on <folder>… | export <key file> | unlock <key file>" >&2
+      return 2
+      ;;
+  esac
+}
+
 capture() {
   mirror capture "$CLAUDE" claude "$PATHS" || return 1
-  if [ -d "$MEMORY" ]; then mirror capture "$MEMORY" memory "." || return 1; fi
+  if [ -d "$MEMORY" ] && ! crypt_skip memory; then mirror capture "$MEMORY" memory "." || return 1; fi
   capture_settings || return 1
   capture_mcp mcp "$STATE/mcp-seen.json" || return 1
   if scan_due; then
@@ -883,8 +995,10 @@ capture() {
 
 apply() {
   mirror apply claude "$CLAUDE" "$PATHS" "${1:-$MAX_DELETES}" || return 1
-  mkdir -p "$MEMORY"
-  mirror apply memory "$MEMORY" "." "${1:-$MAX_DELETES}" || return 1
+  if ! crypt_skip memory; then
+    mkdir -p "$MEMORY"
+    mirror apply memory "$MEMORY" "." "${1:-$MAX_DELETES}" || return 1
+  fi
   apply_settings
 }
 
@@ -899,7 +1013,10 @@ local_of() {
       LROOT=$CLAUDE LREL=${1#claude/}
       case " $PATHS " in *" ${LREL%%/*} "*) ;; *) return 1 ;; esac
       ;;
-    memory/*) LROOT=$MEMORY LREL=${1#memory/} ;;
+    memory/*)
+      crypt_skip memory && return 1
+      LROOT=$MEMORY LREL=${1#memory/}
+      ;;
     *) return 1 ;;
   esac
   ! ignored "$LREL"
@@ -979,7 +1096,11 @@ apply_local() {
 }
 
 commit() {
-  git add -A
+  local f excl=()
+  if crypt_locked; then
+    while IFS= read -r f; do [ -n "$f" ] && excl+=(":(exclude)$f"); done < <(crypt_folders)
+  fi
+  git add -A -- . ${excl[@]+"${excl[@]}"}
   git diff --cached --quiet && return 0
   if git diff --cached -U0 | grep -E '^\+' | grep -qE "$SECRET_RE"; then
     git reset -q
@@ -1170,6 +1291,8 @@ start() {
     cp "$STATE/error" "$STATE/told"
   elif [ -f "$STATE/warn" ]; then
     err="warning: $(cat "$STATE/warn")"
+  elif crypt_locked; then
+    err=$(crypt_told)
   fi
   rm -f "$STATE/pending"
   spawn force
@@ -1189,6 +1312,7 @@ status() {
   echo "to push: $(git rev-list --count origin/main..HEAD 2> /dev/null || echo 'all') commit(s)"
   if [ -f "$STATE/error" ]; then echo "error:   $(cat "$STATE/error")"; else echo "error:   none"; fi
   if [ -f "$STATE/warn" ]; then echo "warning: $(cat "$STATE/warn")"; fi
+  if crypt_on; then echo "crypt:   $(crypt_folders | tr '\n' ' ')($(crypt_unlocked && echo unlocked || echo LOCKED))"; fi
   if [ -f "$STATE/pending" ]; then echo "pending: a background sync has not finished since $(ls -l "$STATE/pending" | awk '{print $6, $7, $8}')"; fi
   [ -f "$STATE/log" ] && { echo "--- last log lines"; tail -n 8 "$STATE/log"; }
   return 0
@@ -1269,8 +1393,12 @@ case "${1:-}" in
     VERBOSE=1
     lock 60 && init
     ;;
+  crypt)
+    shift
+    crypt "$@"
+    ;;
   *)
-    echo "usage: sync.sh start|bg|now|fresh|morning|status|install|init" >&2
+    echo "usage: sync.sh start|bg|now|fresh|morning|status|install|init|crypt" >&2
     exit 2
     ;;
 esac

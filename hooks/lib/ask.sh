@@ -11,7 +11,7 @@
 KIT_ANSWERS_FILE=${KIT_ANSWERS_FILE:-$HOME/.claude/kit-answers.txt}
 KIT_REUSE_FILE=${KIT_REUSE_FILE:-$HOME/.claude/kit-reuse.txt}
 # Never recorded: anyone who has them can read what they guard.
-KIT_SECRET_KEYS="reminders.topic config-sync.repo"
+KIT_SECRET_KEYS="reminders.topic config-sync.repo config-sync.key"
 # Asked on every computer, even one set up like another: they describe this computer.
 KIT_OWN_KEYS="config-sync.* reuse.* recent-activity.dev zshrc statusline.replace"
 
