@@ -35,7 +35,9 @@ SECRET = re.compile(
     r"[A-Za-z0-9_\-]{8,}"
     r"|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"
     r"|(?i:bearer)\s+[A-Za-z0-9._\-]{16,}"
-    r"|(?P<p2>(?i:password|passwd|secret|token|api[_-]?key)\s*[=:]\s*)[^\s\"']{6,}"
+    r"|(?P<p2>[\"']?(?i:password|passwd|secret|token|api[_-]?key)[\"']?\s*[=:]\s*[\"']?)"
+    r"[^\s\"']{6,}"
+    r"|(?P<p3>--(?i:password|passwd|secret|token|api[_-]?key)[= ]\s*[\"']?)[^\s\"']{6,}"
 )
 INJECTED = re.compile(
     r"<(system-reminder|local-command-caveat|local-command-stdout|command-name|command-message"
@@ -247,7 +249,9 @@ def _add_turn(session: Session, kind: str, message: dict[str, Any], stamp: datet
 
 def clean(text: str) -> str:
     text = INJECTED.sub("", text)
-    text = SECRET.sub(lambda m: (m.group("p1") or m.group("p2") or "") + "__SECRET__", text)
+    text = SECRET.sub(
+        lambda m: (m.group("p1") or m.group("p2") or m.group("p3") or "") + "__SECRET__", text
+    )
     text = text.strip()
     if len(text) > MAX_MESSAGE_CHARS:
         text = text[:MAX_MESSAGE_CHARS].rstrip() + " […]"
