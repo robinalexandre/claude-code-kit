@@ -36,9 +36,10 @@ install() {
     mkdir -p "$STATE"
     "$py" -m venv "$VENV"
   fi
-  # python -m pip: on Windows, pip.exe cannot replace itself and refuses to run an upgrade.
+  # python -m pip: on Windows, pip.exe cannot replace itself and refuses to run an upgrade; and
+  # a Windows python wants D:/… paths, not Git Bash's /d/… (kit_path).
   "$(venv_bin python)" -m pip install -q --upgrade pip
-  "$(venv_bin python)" -m pip install -q "$SK/package$1"
+  "$(venv_bin python)" -m pip install -q "$(kit_path "$SK/package")$1"
   printf '%s\n' "${2:-$(plugin_version)}" > "$STATE/version"
 }
 

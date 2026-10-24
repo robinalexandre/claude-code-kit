@@ -23,7 +23,9 @@ done
 "$py" -m venv "$T/venv" || { echo "FAIL venv"; exit 1; }
 if [ -x "$T/venv/bin/python" ]; then BIN="$T/venv/bin"; else BIN="$T/venv/Scripts"; fi
 "$BIN/python" -m pip install -q --upgrade pip > /dev/null
-"$BIN/python" -m pip install -q "$KIT/skills/kb/package[dev]" || { echo "FAIL pip install"; exit 1; }
+PKG="$KIT/skills/kb/package"
+command -v cygpath > /dev/null 2>&1 && PKG=$(cygpath -m "$PKG")
+"$BIN/python" -m pip install -q "$PKG[dev]" || { echo "FAIL pip install"; exit 1; }
 KB=$(ls "$BIN"/kb "$BIN"/kb.exe 2> /dev/null | head -1)
 check "kb installed" '[ -x "$KB" ]'
 
