@@ -32,9 +32,11 @@ check "kb installed" '[ -x "$KB" ]'
 (cd "$KIT/skills/kb/package" && "$BIN/pytest" -q tests > "$T/pytest.log" 2>&1)
 check "the package's own tests pass" '[ $? -eq 0 ]' || tail -5 "$T/pytest.log"
 
-export KB_EMBED=none KB_BIN=$KB
+# Python on Windows takes its home from USERPROFILE, not from this HOME: name the folders.
 NOTES="$HOME/.claude/knowledge"
-mkdir -p "$NOTES"
+mkdir -p "$NOTES" "$HOME/.claude/kb"
+win() { if command -v cygpath > /dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi; }
+export KB_EMBED=none KB_BIN=$KB KB_NOTES="$(win "$NOTES")" KB_DB="$(win "$HOME/.claude/kb/index.sqlite")"
 cat > "$NOTES/acme-accountant.md" << 'EOF'
 ---
 name: acme-accountant
