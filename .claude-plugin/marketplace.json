@@ -623,7 +623,7 @@
     {
       "name": "kb",
       "description": "A personal knowledge base: Markdown notes with links, curated every morning from your Claude Code sessions, recalled at session start and on each prompt; text, semantic and graph search; a server for your other agents.",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "category": "productivity",
       "source": ".",
       "strict": false,

@@ -71,6 +71,13 @@ check "recall prompt: quiet on a slash command" '[ -z "$out" ]'
 mkdir -p "$HOME/dev/my-company"
 out=$(echo "{\"cwd\":\"$HOME/dev/my-company\"}" | CLAUDE_DEV_ROOT="$HOME/dev" bash "$KIT/skills/kb/recall.sh" start)
 check "recall start: the note of this repository, marked as the curator's" '[[ "$out" == *"my-company [project, by the curator]"* ]]'
+check "recall start: says to search before guessing" '[[ "$out" == *"search \"<question>\"\` before guessing"* ]]'
+out=$(echo '{}' | bash "$KIT/skills/kb/recall.sh" start)
+check "recall start: the rule even outside a repository" '[[ "$out" == "Knowledge base: whenever"* ]]'
+printf '#!/bin/sh\nexec sleep 30\n' > "$T/slow-kb" && chmod +x "$T/slow-kb"
+began=$(date +%s)
+out=$(echo '{"prompt":"who is the accounting firm we use for the books"}' | KB_BIN="$T/slow-kb" KB_RECALL_BUDGET=1 bash "$KIT/skills/kb/recall.sh" prompt)
+check "recall prompt: a search past its budget is dropped" '[ -z "$out" ] && [ $(( $(date +%s) - began )) -lt 6 ]'
 out=$(echo '{"prompt":"nothing matches here"}' | KB_BIN=/nowhere/kb bash "$KIT/skills/kb/recall.sh" prompt)
 check "recall: silent when kb is not installed" '[ -z "$out" ]'
 
