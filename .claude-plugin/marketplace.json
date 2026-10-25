@@ -198,7 +198,7 @@
     {
       "name": "wave-check-hook",
       "description": "A warning whenever a reply doesn't start with your marker emoji (the hook form of wave-check, for setups without mods).",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "category": "productivity",
       "source": ".",
       "strict": false,
@@ -389,7 +389,7 @@
     {
       "name": "pr-watch",
       "description": "Tracks your PRs until merged: new comments, votes, CI results, merges, review requests, your pipeline runs (GitHub, Azure DevOps) and the GitHub issues you follow.",
-      "version": "1.6.1",
+      "version": "1.6.2",
       "category": "development",
       "source": ".",
       "strict": false,

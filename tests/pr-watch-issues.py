@@ -118,9 +118,10 @@ def main() -> int:
     # 2. A comment by someone else and a label: reported; the user's own comment is not.
     FakeGitHub.issue = issue("open", "2026-10-21T09:00:00Z", 3, ["bug", "triage"])
     FakeGitHub.comments += [comment("me", "2026-10-21T08:00:00Z", "Which version?"),
-                            comment("ada", "2026-10-21T09:00:00Z", "2.1, on macOS.")]
+                            comment("ada", "2026-10-21T09:00:00Z", "2.1, on\x1b\x9b macOS.")]
     out = run(pr, pr.check, False)
     check("a new comment by another is reported", f"app #5 (Crash on start): new comment by ada: 2.1, on macOS. {ISSUE}" in out)
+    check("its control characters left out", "\x1b" not in out and "\x9b" not in out)
     check("a label added is reported", "labeled triage" in out)
     check("the user's own comment is not", "Which version" not in out)
     check("comments are read only for an issue that has new ones",

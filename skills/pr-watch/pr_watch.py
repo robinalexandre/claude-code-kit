@@ -913,7 +913,7 @@ def build_changes(before: dict, builds: list[dict]) -> list[str]:
 
 def _plain(text: str, width: int) -> str:
     """Third-party text on one line, control characters out, cut at `width`: it is read by a model."""
-    text = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", text).split())
+    text = " ".join(re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", text).split())
     return text if len(text) <= width else text[: width - 1] + "…"
 
 
@@ -1159,11 +1159,12 @@ def github_followed_issues(seen: dict) -> list[dict]:
             "repo": match["repo"],
             "owner": match["owner"],
             "number": match["id"],
-            "title": item["title"],
-            "author": (item.get("user") or {}).get("login") or "ghost",
+            # Anyone can write a title, a label or a comment: kept to plain text, as the review requests.
+            "title": _plain(item["title"] or "", 200),
+            "author": _plain((item.get("user") or {}).get("login") or "ghost", 40),
             "state": item["state"],
             "reason": (item.get("state_reason") or "").replace("_", " "),
-            "labels": sorted(label["name"] for label in item.get("labels") or []),
+            "labels": sorted(_plain(label["name"] or "", 50) for label in item.get("labels") or []),
             "comments": item.get("comments", 0),
             "at": item.get("updated_at") or "",
             "updated": _stamp(item.get("updated_at") or ""),
@@ -1177,8 +1178,8 @@ def github_followed_issues(seen: dict) -> list[dict]:
         found = _http_json(f"{GITHUB_API}/repos/{row['owner']}/{row['repo']}/issues/{row['number']}/comments"
                            f"?since={before['at']}&per_page=100", headers)
         row["newComments"] = [
-            {"author": (comment.get("user") or {}).get("login") or "ghost", "at": comment.get("created_at") or "",
-             "text": (comment.get("body") or "")[:EXCERPT]}
+            {"author": _plain((comment.get("user") or {}).get("login") or "ghost", 40), "at": comment.get("created_at") or "",
+             "text": _plain(comment.get("body") or "", EXCERPT)}
             for comment in found  # type: ignore[union-attr]
             if (comment.get("created_at") or "") > before["at"] and ((comment.get("user") or {}).get("login") or "") != me
         ]
