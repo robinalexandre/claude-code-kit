@@ -104,6 +104,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--max-new", type=int, help="new notes per day at most (default: $KB_CURATE_MAX or 15)"
     )
+    p.add_argument(
+        "--material",
+        type=Path,
+        help="curate this Markdown file instead: what another agent wrote about its own work",
+    )
+    p.add_argument("--name", help="who wrote the material (default: the file's name)")
     p.set_defaults(func=cmd_curate)
 
     p = sub.add_parser("serve", help="serve the index over HTTP (token in $KB_TOKEN)")
@@ -309,22 +315,34 @@ def cmd_extract(args: argparse.Namespace) -> int:
 
 
 def cmd_curate(args: argparse.Namespace) -> int:
-    from kb.curate import DEFAULT_MAX_NEW, DEFAULT_MODEL, ClaudeRunner, curate_day
+    from kb.curate import DEFAULT_MAX_NEW, DEFAULT_MODEL, ClaudeRunner, curate_day, curate_material
 
     day = args.day or date.today() - timedelta(days=1)
     roots = notes_roots(args)
     notes_root = roots[0]
     model = args.model or os.environ.get("KB_CURATE_MODEL") or DEFAULT_MODEL
     max_new = args.max_new or int(os.environ.get("KB_CURATE_MAX") or DEFAULT_MAX_NEW)
-    report = curate_day(
-        day,
-        notes_root,
-        ClaudeRunner(model),
-        transcripts_dir=args.transcripts,
-        max_new=max_new,
-        projects_dir=args.projects,
-        readonly_roots=[r for r in roots[1:] if r.is_dir()],
-    )
+    readonly = [r for r in roots[1:] if r.is_dir()]
+    if args.material:
+        report = curate_material(
+            args.name or args.material.stem,
+            args.material.read_text(encoding="utf-8", errors="replace"),
+            day,
+            notes_root,
+            ClaudeRunner(model),
+            max_new=max_new,
+            readonly_roots=readonly,
+        )
+    else:
+        report = curate_day(
+            day,
+            notes_root,
+            ClaudeRunner(model),
+            transcripts_dir=args.transcripts,
+            max_new=max_new,
+            projects_dir=args.projects,
+            readonly_roots=readonly,
+        )
     data = {
         "day": day.isoformat(),
         "batches": report.batches,

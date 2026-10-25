@@ -2,7 +2,7 @@ import json
 from datetime import date
 from pathlib import Path
 
-from kb.curate import Report, curate_day, parse_proposals
+from kb.curate import Report, curate_day, curate_material, parse_proposals
 from kb.notes import load_note
 
 DAY = date(2026, 10, 22)
@@ -233,6 +233,45 @@ def test_type_and_trust_fall_back(tmp_path: Path):
     curate_day(DAY, notes, runner, transcripts(tmp_path))
     note = load_note(notes / "x.md")
     assert (note.type, note.trust, note.source) == ("fact", "agent", "curator")
+
+
+def test_another_agents_material_is_curated_with_its_own_report(tmp_path: Path):
+    notes = tmp_path / "knowledge"
+    calls = []
+
+    def runner(system: str, material: str) -> str:
+        calls.append((system, material))
+        return proposals_json(
+            {
+                "action": "create",
+                "name": "waha-quotes",
+                "title": "WAHA quotes need the message id",
+                "type": "fact",
+                "trust": "agent",
+                "topics": ["whatsapp"],
+                "sources": ["nightly-review"],
+                "body": "A reply quotes a message by its id, never by its body.",
+            }
+        )
+
+    report = curate_material(
+        "Nightly review",
+        "- WAHA quotes need the id. token ghp_abcdefghijklmnop",
+        DAY,
+        notes,
+        runner,
+    )
+
+    system, material = calls[0]
+    assert 'another agent of the user wrote about its own work ("nightly-review")' in system
+    assert "transcripts of one day" not in system
+    assert "## nightly-review\n\n- WAHA quotes need the id." in material
+    assert "ghp_abcdefghijklmnop" not in material
+    assert report.created == ["waha-quotes: WAHA quotes need the message id"]
+    note = load_note(notes / "waha-quotes.md")
+    assert note.trust == "agent" and "session:nightly-review" in note.source
+    assert (notes / ".curator" / "2026-10-22-nightly-review.md").exists()
+    assert not (notes / ".curator" / "2026-10-22.md").exists()
 
 
 def test_parse_proposals_tolerates_prose_and_fences():

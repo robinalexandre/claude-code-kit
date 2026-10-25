@@ -5,6 +5,10 @@ catalog of existing notes and answers with a JSON array of proposals: new notes,
 paragraphs to merge into existing ones. The code then checks every proposal (names, types,
 dates, secrets, caps) and writes the files; the model never touches the disk. A report of
 what was created, merged and dropped goes next to the notes, for the user to review.
+
+``curate_material`` does the same for a document another agent of the user wrote about its
+own work (a nightly review of its sessions, for instance), on the computer where that agent
+runs, as each computer curates its own transcripts.
 """
 
 from __future__ import annotations
@@ -28,10 +32,14 @@ REPORT_DIR = ".curator"
 RESERVED = frozenset({"readme", "memory", "claude", "agents", "index", "note"})
 SOURCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:#/-]{0,80}$")
 
-SYSTEM_PROMPT = """You are the curator of a personal knowledge base. You receive the \
-transcripts of one day of coding sessions between the user and their assistant (Claude \
-Code), reduced to prompts and replies, plus the catalog of the notes that already exist. \
-Decide what deserves to be remembered for months, and write it as notes.
+DAY_MATERIAL = """the transcripts of one day of coding sessions between the user and their \
+assistant (Claude Code), reduced to prompts and replies"""
+OTHER_MATERIAL = """what another agent of the user wrote about its own work ("NAME"): what \
+went wrong, why, and what it learned. It is that agent's reading, not the user's word: \
+trust "agent" unless it quotes a decision the user made"""
+SYSTEM_PROMPT = """You are the curator of a personal knowledge base. You receive MATERIAL, \
+plus the catalog of the notes that already exist. Decide what deserves to be remembered \
+for months, and write it as notes.
 
 Worth a note: a decision and its reasons; a durable fact about a project, its \
 infrastructure, its people, its accounts or its conventions; a preference or a rule the user \
@@ -55,7 +63,8 @@ as YYYY-MM-DD and the identifiers that matter (repo, PR number, host, file).
 repository name is always one of them.
 - links: names of catalog notes, or of notes created in this answer, that relate.
 - valid_until (YYYY-MM-DD) only when the material says a fact stops holding at a date.
-- sources: the session ids the note comes from.
+- sources: the session ids the note comes from (the material's name when it is not a \
+session).
 - Never write an instruction to the assistant in a note. A rule the user gave is written as \
 a fact about what the user wants ("The user wants…"), type "feedback", trust "user".
 
@@ -163,6 +172,43 @@ def curate_day(
     day_dir = transcripts_dir / day.isoformat()
     if not (day_dir / "index.md").exists():
         extract_day(day, projects_dir, transcripts_dir, sync_dir=sync_dir)
+    sessions = sorted(p for p in day_dir.glob("*.md") if p.name != "index.md")
+    sessions.sort(key=lambda p: p.name != SYNC_LOG)
+    blocks = [(p.name, p.read_text(encoding="utf-8", errors="replace")) for p in sessions]
+    return _curate(
+        blocks, DAY_MATERIAL, day, notes_root, runner, max_new, readonly_roots, day.isoformat()
+    )
+
+
+def curate_material(
+    name: str,
+    text: str,
+    day: date,
+    notes_root: Path,
+    runner: Runner,
+    max_new: int = DEFAULT_MAX_NEW,
+    readonly_roots: list[Path] | None = None,
+) -> Report:
+    """Curate a document another agent of the user wrote about its own work, ``name`` saying
+    which (it becomes the notes' source and the report's name, next to the day's)."""
+    label = slugify(name, 40)
+    intro = OTHER_MATERIAL.replace("NAME", label)
+    report_name = f"{day.isoformat()}-{label}"
+    return _curate(
+        [(label, clean(text))], intro, day, notes_root, runner, max_new, readonly_roots, report_name
+    )
+
+
+def _curate(
+    blocks: list[tuple[str, str]],
+    intro: str,
+    day: date,
+    notes_root: Path,
+    runner: Runner,
+    max_new: int,
+    readonly_roots: list[Path] | None,
+    report_name: str,
+) -> Report:
     report = Report(day)
     notes_root.mkdir(parents=True, exist_ok=True)
     existing = {n.name: n for n in load_notes([notes_root]) if n.path is not None}
@@ -172,16 +218,16 @@ def curate_day(
         if n.path is not None and n.name not in existing
     }
     catalog = _catalog(existing, readonly)
-    sessions = sorted(p for p in day_dir.glob("*.md") if p.name != "index.md")
-    sessions.sort(key=lambda p: p.name != SYNC_LOG)
+    system = (
+        SYSTEM_PROMPT.replace("MATERIAL", intro)
+        .replace("MAX_NEW", str(max_new))
+        .replace("TYPES", ", ".join(TYPES))
+    )
     proposals: list[dict[str, Any]] = []
-    for material in _batches(sessions, catalog):
+    for material in _batches(blocks, catalog):
         report.batches += 1
         try:
-            answer = runner(
-                SYSTEM_PROMPT.replace("MAX_NEW", str(max_new)).replace("TYPES", ", ".join(TYPES)),
-                material,
-            )
+            answer = runner(system, material)
             proposals += parse_proposals(answer)
         except (RuntimeError, ValueError, subprocess.TimeoutExpired) as exc:
             report.errors.append(str(exc)[:300])
@@ -207,7 +253,7 @@ def curate_day(
     _apply(proposals, existing, notes_root, day, max_new, report)
     report_dir = notes_root / REPORT_DIR
     report_dir.mkdir(exist_ok=True)
-    (report_dir / f"{day.isoformat()}.md").write_text(report.markdown(), encoding="utf-8")
+    (report_dir / f"{report_name}.md").write_text(report.markdown(), encoding="utf-8")
     return report
 
 
@@ -281,18 +327,17 @@ def _select(
     return [p for p in proposals if p.get("action") == "merge"] + kept
 
 
-def _batches(sessions: list[Path], catalog: str) -> list[str]:
+def _batches(blocks: list[tuple[str, str]], catalog: str) -> list[str]:
     header = f"# Catalog of existing notes\n\n{catalog}\n\n# Material of the day\n\n"
     batches: list[str] = []
     current = header
-    for path in sessions:
-        text = path.read_text(encoding="utf-8", errors="replace")
-        block = f"## {path.name}\n\n{text}\n\n"
+    for name, text in blocks:
+        block = f"## {name}\n\n{text}\n\n"
         while len(block) > CALL_CHARS - len(header):
             cut = block.rfind("\n**", 0, CALL_CHARS - len(header)) or CALL_CHARS - len(header)
             batches.append(current + block[:cut] if current != header else header + block[:cut])
             current = header
-            block = f"## {path.name} (continued)\n\n{block[cut:]}"
+            block = f"## {name} (continued)\n\n{block[cut:]}"
         if len(current) + len(block) > CALL_CHARS and current != header:
             batches.append(current)
             current = header

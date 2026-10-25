@@ -76,6 +76,7 @@ kb extract                                 # yesterday's Claude Code transcripts
 kb extract --day 2026-10-22 --out ./transcripts
 kb curate                                  # yesterday's transcripts, read by Claude, turned into notes
 kb curate --day 2026-10-22 --model haiku --max-new 5
+kb curate --material review.md --name nightly-review   # what another agent wrote about its own work
 ```
 
 Settings, as options or environment variables (the hook and `morning.sh` also read them from
@@ -102,6 +103,12 @@ secrets, prefers merging into an existing note, caps the new ones, writes the fi
 report in `<notes>/.curator/<day>.md`. The model never writes to disk itself. A note it
 wrote starts its `source` with `curator`, so the recall hook and other agents can say so:
 its `trust` is the model's reading of a session, not the user's word.
+
+`kb curate --material FILE --name NAME` (or `curate_material` from Python, with a runner of
+your own) does the same for a document another agent of yours wrote about its own work, a
+nightly review of its sessions for instance, on the computer or server where that agent
+runs: each place curates what happened there. Its notes have `NAME` as their source, and its
+report is `<notes>/.curator/<day>-<name>.md`.
 
 ## Serve
 
