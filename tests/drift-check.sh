@@ -4,10 +4,12 @@
 set -u
 KIT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 command -v jq > /dev/null || { echo "Install jq first." >&2; exit 1; }
-T=$(mktemp -d "${TMPDIR:-/tmp}/wave-test.XXXXXX")
+T=$(mktemp -d "${TMPDIR:-/tmp}/drift-test.XXXXXX")
 trap 'rm -rf "$T"' EXIT
 H="$KIT/hooks/drift-check.sh"
-export CLAUDE_REPLY_MARKER=🌊
+unset CLAUDE_PLUGIN_OPTION_MARKER
+export CLAUDE_REPLY_MARKER=🌊 CLAUDE_CONFIG_DIR="$T/claude"
+mkdir -p "$CLAUDE_CONFIG_DIR"
 fails=0
 check() { if eval "$2"; then echo "ok   $1"; else echo "FAIL $1"; fails=$((fails + 1)); fi; }
 
@@ -38,5 +40,13 @@ out=$(prompt "$T/missing.jsonl")
 check "prompt: reminds after a reply without it" '[[ "$out" == *"did not start with 🌊"* ]]'
 out=$(CLAUDE_REPLY_MARKER= stop "$T/stale.jsonl" "No marker set")
 check "idle with no marker" '[ -z "$out" ]'
+
+echo '{"pluginConfigs": {"drift-check@inline": {"options": {"marker": "Iris:"}}}}' > "$CLAUDE_CONFIG_DIR/settings.json"
+out=$(stop "$T/stale.jsonl" "Iris: done")
+check "the drift-check setting wins over CLAUDE_REPLY_MARKER, a word as the marker" '[ -z "$out" ]'
+out=$(stop "$T/stale.jsonl" "🌊 The old marker")
+check "warns with the setting's text" '[[ "$out" == *"Reply missing the Iris:"* ]]'
+out=$(CLAUDE_PLUGIN_OPTION_MARKER=🦊 stop "$T/stale.jsonl" "🦊 done")
+check "the plugin's own option wins over the setting" '[ -z "$out" ]'
 
 [ "$fails" -eq 0 ] && echo "All drift-check checks pass." || { echo "$fails check(s) failed."; exit 1; }

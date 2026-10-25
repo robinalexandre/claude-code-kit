@@ -128,8 +128,8 @@
       "name": "drift-check",
       "kind": "mod",
       "group": "base",
-      "what": "A self-check whenever a reply doesn't start with your marker emoji.",
-      "why": "A missing emoji is the first sign Claude stopped following your CLAUDE.md; the check makes it fix that.",
+      "what": "A self-check whenever a reply doesn't start with your opening text (an emoji, a word or a name).",
+      "why": "A missing opening is the first sign Claude stopped following your CLAUDE.md; the check makes it fix that.",
       "when": "After each reply.",
       "who": "Anyone; pick this or drift-check-hook."
     },
@@ -137,7 +137,7 @@
       "name": "drift-check-hook",
       "kind": "hook",
       "group": "base",
-      "what": "A warning whenever a reply doesn't start with your marker emoji (the hook form of drift-check).",
+      "what": "A warning whenever a reply doesn't start with your opening text (the hook form of drift-check).",
       "why": "Same as drift-check, for setups without mods.",
       "when": "After each reply.",
       "who": "Anyone who doesn't load mods."

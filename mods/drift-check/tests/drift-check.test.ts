@@ -40,6 +40,20 @@ test('any emoji can be the marker', async ($, on) => {
   expect(submitted).toEqual([checkPrompt('🦊')])
 })
 
+test('a word or a name can be the marker', async ($, on) => {
+  const submitted = engine(on, { CLAUDE_REPLY_MARKER: 'Iris:' })
+  await finish($, 't1', 'Iris: done.')
+  await finish($, 't2', 'Done.')
+  expect(submitted).toEqual([checkPrompt('Iris:')])
+})
+
+test('the setting wins over CLAUDE_REPLY_MARKER', { options: { marker: '🦊' } }, async ($, on) => {
+  const submitted = engine(on)
+  await finish($, 't1', '🦊 Done.')
+  await finish($, 't2', '🌊 The old marker.')
+  expect(submitted).toEqual([checkPrompt('🦊')])
+})
+
 test('nothing is checked until a marker is set', async ($, on) => {
   const submitted = engine(on, {})
   await finish($, 't1', 'Done, the patch is applied.')

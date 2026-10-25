@@ -1,11 +1,15 @@
 #!/bin/bash
 # Usage: drift-check.sh stop|prompt   (hook input JSON on stdin)
-# Nudges, never blocks: warns when the last reply did not start with the
-# CLAUDE_REPLY_MARKER emoji. Does nothing until that variable is set.
+# Nudges, never blocks: warns when the last reply did not start with the opening text (an emoji, a
+# word, a name). It comes from the plugin's option, else the drift-check setting in settings.json
+# (the Configuration pane writes it), else CLAUDE_REPLY_MARKER. Does nothing until one is set.
 set -u
-MARKER=${CLAUDE_REPLY_MARKER:-${CLAUDE_PLUGIN_OPTION_MARKER:-}}
-[ -n "$MARKER" ] || exit 0
 . "$(dirname "$0")/lib/jq.sh"
+settings=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json
+command -v cygpath >/dev/null 2>&1 && settings=$(cygpath -u "$settings")
+setting=$(jq -r '[.pluginConfigs // {} | to_entries[] | select(.key | test("^drift-check(-hook)?(@|$)")) | .value.options.marker | strings | select(. != "")][0] // empty' "$settings" 2>/dev/null)
+MARKER=${CLAUDE_PLUGIN_OPTION_MARKER:-${setting:-${CLAUDE_REPLY_MARKER:-}}}
+[ -n "$MARKER" ] || exit 0
 input=$(cat)
 judge='sub("^\\s+"; "") | if . == "" then "empty" elif startswith($m) then "ok" else "missing" end'
 

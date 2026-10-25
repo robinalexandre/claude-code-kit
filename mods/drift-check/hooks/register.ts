@@ -24,7 +24,7 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
     const isCheckTurn = checkTurns.delete(e.turnId)
-    const marker = (await $.env.get('CLAUDE_REPLY_MARKER'))?.trim() || optionMarker
+    const marker = optionMarker || (await $.env.get('CLAUDE_REPLY_MARKER'))?.trim()
     if (!marker) return result
 
     const answer = e.answer.trimStart()

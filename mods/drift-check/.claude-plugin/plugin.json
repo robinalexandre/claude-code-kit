@@ -1,7 +1,7 @@
 {
   "name": "drift-check",
-  "version": "0.4.0",
-  "description": "When a reply does not start with your marker emoji (CLAUDE_REPLY_MARKER), asks Claude to check that reply against CLAUDE.md and fix what slipped.",
+  "version": "0.5.0",
+  "description": "When a reply does not start with your opening text (an emoji, a word or a name), asks Claude to check that reply against CLAUDE.md and fix what slipped.",
   "author": {
     "name": "robinalexandre",
     "url": "https://github.com/robinalexandre/claude-code-kit"
@@ -9,8 +9,8 @@
   "userConfig": {
     "marker": {
       "type": "string",
-      "title": "Marker emoji",
-      "description": "The emoji every reply must start with (e.g. 🌊). Add the rule \"Start every message with <emoji>\" to your CLAUDE.md. Empty: the check stays idle. CLAUDE_REPLY_MARKER in settings.json env takes precedence.",
+      "title": "Opening text",
+      "description": "What every reply must start with: an emoji, a word or a name (e.g. 🌊). Your CLAUDE.md needs the rule \"Start every message with <it>\". Empty: the check stays idle. Without it, CLAUDE_REPLY_MARKER in settings.json env is used.",
       "default": ""
     }
   }

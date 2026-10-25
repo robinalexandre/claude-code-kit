@@ -492,13 +492,15 @@ put hooks/kit-update-check.sh hooks/kit-update-check.sh
 frag settings/kit-update-check.json
 chmod +x "$CLAUDE"/hooks/*.sh "$CLAUDE"/hooks/setup/*.sh "$CLAUDE"/skills/*/*.sh 2> /dev/null || true
 
-# The drift-check parts check replies against an emoji the user picks once.
-marker=$(jq -r '.env.CLAUDE_REPLY_MARKER // empty' "$SETTINGS")
+# The drift-check parts check replies against an opening text the user picks once (an emoji, a word,
+# a name), kept as the mod's setting so the Configuration pane shows and changes it.
+marker=$(jq -r '[.pluginConfigs // {} | to_entries[] | select(.key | test("^drift-check(-hook)?(@|$)")) | .value.options.marker | strings | select(. != "")][0] // .env.CLAUDE_REPLY_MARKER // empty' "$SETTINGS")
 if [ -n "$marker_wanted" ] && [ -z "$marker" ]; then
-  marker=$(reply marker "Which emoji should start every reply from Claude (e.g. 🌊, 🦊, ✅)?")
-  marker=${marker//[[:space:]]/}
+  marker=$(reply marker "What should every reply from Claude start with? An emoji, a word or a name (e.g. 🌊, 🦊, Iris:)")
+  marker="${marker#"${marker%%[![:space:]]*}"}"
+  marker="${marker%"${marker##*[![:space:]]}"}"
   if [ -z "$marker" ]; then
-    echo "No emoji given: drift-check stays idle until you set CLAUDE_REPLY_MARKER in $SETTINGS (env)."
+    echo "Nothing given: drift-check stays idle until you set its opening text (/configuration, or CLAUDE_REPLY_MARKER in $SETTINGS env)."
   elif ask marker.rule "Add \"Start every message with $marker\" to ~/.claude/CLAUDE.md? drift-check relies on that rule." y; then
     [ -f "$CLAUDE/CLAUDE.md" ] && [ ! -f "$BACKUP/CLAUDE.md" ] && cp -p "$CLAUDE/CLAUDE.md" "$BACKUP/CLAUDE.md"
     printf '\n- **Start every message with %s.** That includes one-line replies, questions back\n  to me, error reports, and the message after a long run of tool calls.\n' "$marker" >> "$CLAUDE/CLAUDE.md"
@@ -520,7 +522,7 @@ jq --arg h "$home" --arg sep "$sep" --arg marker "$marker" --argjson mods "$(jq 
   | if ($mods | length) > 0 then
       .env.CLAUDE_CODE_PLUGIN_DIRS = ((.env.CLAUDE_CODE_PLUGIN_DIRS // "" | split($sep) | map(select(. != ""))) + $mods | uniq | join($sep))
     else . end
-  | if $marker != "" then .env.CLAUDE_REPLY_MARKER = $marker else . end' \
+  | if $marker != "" then .pluginConfigs["drift-check@inline"].options.marker //= $marker else . end' \
   "$BACKUP/settings.json" > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
 rm -f "$SETTINGS.fragments"
 
