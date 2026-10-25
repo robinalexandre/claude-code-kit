@@ -4,7 +4,6 @@ import type { Engine } from 'claude-code/testing'
 
 const SCROLL = { offset: 0, bodyRows: 40 }
 const PANE_PROPS = { title: 'Do not disturb', isFocused: true, bodyColumns: 64, placement: 'dock' as const, scroll: SCROLL, view: {} }
-const BAND_PROPS = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 80, scroll: SCROLL, view: {} }
 const START = { cwd: '/home/someone/dev/shop', surface: 'terminal' as const, isInteractive: true }
 const SESSION = 'session-1'
 const command = (args: string) => ({ command: 'dnd', args, origin: { kind: 'composer' as const }, presentation: { isFullscreen: true, columns: 160 } })
@@ -32,7 +31,7 @@ const isScript = (argv: string[]) => (argv[1] ?? '').replace(/\\/g, '/').endsWit
 
 // `held`: each `set` waits for it, then writes the profile as dnd.sh would. `files`: what the mod
 // reads and writes, by path.
-const answer = (on: On, world: World, calls: string[][], held?: Promise<void>, files: Files = {}) => {
+const answer = (on: On, world: World, calls: string[][], held?: Promise<void>, files: Files = {}, opened: string[] = []) => {
   const clock = mock.clock(on)
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? HOME : undefined }))
   on('fs.read', ($, e) => {
@@ -103,18 +102,20 @@ const answer = (on: On, world: World, calls: string[][], held?: Promise<void>, f
     return ran(0, '')
   })
   on('ui.render', () => Fragment({}))
-  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  on('ui.open', ($, e) => {
+    opened.push(e.id)
+
+    return { value: { isPlaced: true as const } }
+  })
   on('ui.toast', () => ({ value: undefined }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
 
   return clock
 }
 
-const mountPane = ($: Engine) => $.ui.mount({ plugin: 'dnd', surface: 'terminal', component: 'Pane', requestId: 'configuration', props: PANE_PROPS })
+const mountPane = ($: Engine) => $.ui.mount({ plugin: 'dnd', surface: 'terminal', component: 'Pane', requestId: 'dnd', props: PANE_PROPS })
 
-const mountBand = ($: Engine) => $.ui.mount({ plugin: 'dnd', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
-
-test('a Configuration button on the band; the profile on, read at session start, is written for the status line', async ($, on) => {
+test('the profile on, read at session start, is written for the status line; the band is left to the configuration mod', async ($, on) => {
   const calls: string[][] = []
   const world: World = { active: OFF, profiles: { work: WORK }, rules: [] }
   const files: Files = { [ACTIVE_FILE]: JSON.stringify({ 'session-0': { profile: 'meeting', untilText: '' } }) }
@@ -122,11 +123,9 @@ test('a Configuration button on the band; the profile on, read at session start,
   const shown = () => JSON.parse(files[ACTIVE_FILE] ?? '{}') as Record<string, { profile: string; scope: string; untilText: string }>
 
   await $.session.start(START)
-  const band = await mountBand($)
+  await mountPane($)
 
   expect(calls).toContainEqual(['active', '/home/someone/dev/shop', '--session', SESSION])
-  expect(await band.find({ key: 'configuration', text: 'Configuration' })).toBeDefined()
-  expect(await band.find({ key: 'band-4-configuration' })).toBeDefined()
   expect(shown()[SESSION]).toEqual({ profile: '', scope: '', untilText: '' })
   // The other sessions' entries stay.
   expect(shown()['session-0']).toEqual({ profile: 'meeting', untilText: '' })
@@ -134,20 +133,24 @@ test('a Configuration button on the band; the profile on, read at session start,
   world.active = { ...OFF, profile: 'work', why: 'on Wi-Fi OfficeNet', scope: 'rule', parts: WORK, untilText: '15:00' }
   await $.command.run(command(''))
 
-  // The band keeps its plain button: the status line says what is on.
-  expect(await band.find({ key: 'configuration', text: 'Configuration' })).toBeDefined()
   expect(shown()[SESSION]).toEqual({ profile: 'work', scope: 'rule', untilText: '15:00' })
 })
 
-test('the pane opens on its Do not disturb tab: a profile pressed asks until when and where, then Activate; a name creates one', async ($, on) => {
+test('/dnd opens the pane: a profile pressed asks until when and where, then Activate; a name creates one', async ($, on) => {
   const calls: string[][] = []
-  answer(on, { active: OFF, profiles: { work: WORK }, rules: [] }, calls)
+  const opened: string[] = []
+  answer(on, { active: OFF, profiles: { work: WORK }, rules: [] }, calls, undefined, {}, opened)
 
   await $.session.start(START)
-  await $.command.run({ ...command(''), command: 'configuration' })
+  await $.command.run(command(''))
   const pane = await mountPane($)
 
-  expect(await pane.find({ key: 'tab-dnd', text: 'Do not disturb' })).toBeDefined()
+  expect(opened).toEqual(['dnd'])
+
+  // The Configuration pane, every mod's settings, opens beside it.
+  await pane.press({ key: 'mod-settings' })
+
+  expect(opened).toEqual(['dnd', 'configuration'])
 
   await pane.press({ key: 'turn-on-work' })
 
@@ -281,131 +284,12 @@ test('a checklist press shows at once; the presses are written in turn and every
 
   release()
   await held
-  await pane.press({ key: 'tab-dnd' })
+  await pane.press({ key: 'mod-settings' })
 
   expect(calls).toContainEqual(['set', 'work', 'prs', 'only', '@here', 'someone/garden'])
   expect(calls).toContainEqual(['set', 'work', 'prs', 'only', '@here', 'someone/garden', 'owner/app'])
   expect(calls.filter(([action]) => action === 'json').length).toBe(reads + 1)
   expect(await pane.find({ text: '[x] someone/garden' })).toBeDefined()
-})
-
-const HISTORY_ROW = {
-  key: 'recent-prompts.questions',
-  label: 'Keep questions asked with the picker',
-  kind: 'boolean',
-  value: true,
-  provider: { plugin: 'recent-prompts', tier: 'user' },
-  isLocked: false,
-}
-const BUILTIN_ROW = { ...HISTORY_ROW, key: 'agents-md.instructionFiles', label: 'Instruction files', kind: 'text', value: 'both', provider: { plugin: 'agents-md', tier: 'builtin' } }
-
-// The /config rows the Mods tab reads and writes; a set lands in settings.json as the engine would.
-const answerMods = (on: On, files: Files, sets: unknown[]) => {
-  const rows = [HISTORY_ROW, BUILTIN_ROW]
-  on('config.list', () => ({ value: rows as never }))
-  on('config.set', ($, e) => {
-    sets.push([e.key, e.value])
-    rows[0] = { ...HISTORY_ROW, value: e.value as boolean }
-    files['~/.claude/settings.json'] = JSON.stringify({ pluginConfigs: { 'recent-prompts@inline': { options: { questions: e.value } } } })
-
-    return { value: e.value }
-  })
-}
-
-const openMods = async ($: Engine) => {
-  await $.session.start(START)
-  await $.command.run({ ...command(''), command: 'configuration' })
-  const pane = await mountPane($)
-  await pane.press({ key: 'tab-mods' })
-
-  return pane
-}
-
-test("the Mods tab lists each mod's settings; a change for all computers is a /config change alone", async ($, on) => {
-  const files: Files = { '~/.claude-sync/.machine': 'mac\n', '~/.claude-sync/machines/mac.json': '{ "settings": { "theme": "dark" } }' }
-  const sets: unknown[] = []
-  answer(on, { active: OFF, profiles: {}, rules: [] }, [], undefined, files)
-  answerMods(on, files, sets)
-
-  const pane = await openMods($)
-
-  expect(await pane.find({ key: 'fold-mod|recent-prompts', text: /recent-prompts \(1\)/ })).toBeDefined()
-  expect(await pane.find({ text: /Instruction files/ })).toBeUndefined()
-  expect(await pane.find({ key: 'scope-here', text: 'this computer only (mac)' })).toBeDefined()
-
-  await pane.press({ key: 'set-recent-prompts.questions' })
-
-  expect(sets).toEqual([['recent-prompts.questions', false]])
-  expect(JSON.parse(files['~/.claude-sync/machines/mac.json'] ?? '')).toEqual({ settings: { theme: 'dark' } })
-  expect(await pane.find({ key: 'set-recent-prompts.questions', text: /^\[ \] Keep questions/ })).toBeDefined()
-})
-
-test('a change for this computer only is kept in its machine file, and one for all computers takes it back out', async ($, on) => {
-  const files: Files = { '~/.claude-sync/.machine': 'mac\n', '~/.claude-sync/machines/mac.json': '{ "settings": { "theme": "dark" } }' }
-  const sets: unknown[] = []
-  answer(on, { active: OFF, profiles: {}, rules: [] }, [], undefined, files)
-  answerMods(on, files, sets)
-
-  const pane = await openMods($)
-  await pane.press({ key: 'scope-here' })
-  await pane.press({ key: 'set-recent-prompts.questions' })
-
-  expect(JSON.parse(files['~/.claude-sync/machines/mac.json'] ?? '')).toEqual({
-    settings: { theme: 'dark', pluginConfigs: { 'recent-prompts@inline': { options: { questions: false } } } },
-  })
-  expect(await pane.find({ key: 'set-recent-prompts.questions', text: /\(this computer\)$/ })).toBeDefined()
-  expect(await pane.find({ text: "  used here instead of all computers' value: the default" })).toBeDefined()
-
-  await pane.press({ key: 'scope-all' })
-  await pane.press({ key: 'set-recent-prompts.questions' })
-
-  expect(sets).toEqual([
-    ['recent-prompts.questions', false],
-    ['recent-prompts.questions', true],
-  ])
-  expect(JSON.parse(files['~/.claude-sync/machines/mac.json'] ?? '')).toEqual({ settings: { theme: 'dark' } })
-})
-
-test('a number saved with Enter stays in its field, the same value again included; one that is not a number is not saved', async ($, on) => {
-  const files: Files = {}
-  const sets: unknown[] = []
-  let days = 30
-  answer(on, { active: OFF, profiles: {}, rules: [] }, [], undefined, files)
-  on('config.list', () => ({ value: [{ ...HISTORY_ROW, key: 'pr-pane.issueDays', label: 'Issues active in the last (days)', kind: 'number', value: days, provider: { plugin: 'pr-pane', tier: 'user' } }] as never }))
-  on('config.set', ($, e) => {
-    sets.push([e.key, e.value])
-    days = e.value as number
-
-    return { value: e.value }
-  })
-
-  const pane = await openMods($)
-  const value = async (key: string) => ((await pane.find({ type: 'Input', key })) as { props?: { value?: string } } | undefined)?.props?.value
-
-  expect(await value('set-pr-pane.issueDays-0')).toBe('30')
-
-  await pane.input({ key: 'set-pr-pane.issueDays-0', text: '30', kind: 'submit' })
-
-  expect(sets).toEqual([['pr-pane.issueDays', 30]])
-  // Drawn anew, so what was typed gives way to the saved value.
-  expect(await value('set-pr-pane.issueDays-0')).toBeUndefined()
-  expect(await value('set-pr-pane.issueDays-1')).toBe('30')
-
-  await pane.input({ key: 'set-pr-pane.issueDays-1', text: 'soon', kind: 'submit' })
-
-  expect(sets).toHaveLength(1)
-  expect(await value('set-pr-pane.issueDays-2')).toBe('30')
-})
-
-test('without a private sync, the Mods tab says changes stay on this computer', async ($, on) => {
-  const files: Files = {}
-  answer(on, { active: OFF, profiles: {}, rules: [] }, [], undefined, files)
-  answerMods(on, files, [])
-
-  const pane = await openMods($)
-
-  expect(await pane.find({ key: 'scope-here' })).toBeUndefined()
-  expect(await pane.find({ text: /no private sync/ })).toBeDefined()
 })
 
 test('deleting a profile asks for a second press', async ($, on) => {

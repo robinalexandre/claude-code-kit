@@ -63,8 +63,8 @@ and those closed in the last PR_WATCH_KEEP_DAYS days. `check` reports what chang
 comments by others, closed or reopened, labels), and `status` lists them as `issues`, each with its
 `changes` (issues.json keeps what was seen).
 
-What is looked up, reported and listed follows the PR pane's settings (the Configuration pane's Mods
-tab, pr-pane, kept in Claude Code's settings.json), else the same keys in config.json: `openPrs`,
+What is looked up, reported and listed follows the PR pane's settings (the Configuration pane,
+pr-pane, kept in Claude Code's settings.json), else the same keys in config.json: `openPrs`,
 `parked` (the tracked PRs, open or parked), `recent` (the merged and closed ones), `reviews`,
 `runsPerRepo` (0 to 20 pipeline runs per repo, 20 by default), `issues` and `issueDays`. What is
 turned off is neither fetched nor reported, and its records stay as they were.
@@ -1406,7 +1406,7 @@ SETTINGS = {"openPrs": True, "parked": True, "recent": True, "reviews": True, "r
 
 
 def pane_settings() -> dict:
-    """What the user chose in the PR pane's settings (the Configuration pane's Mods tab, pr-pane),
+    """What the user chose in the PR pane's settings (the Configuration pane, pr-pane),
     which Claude Code keeps in its settings.json; {} without them."""
     path = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "settings.json"
     try:

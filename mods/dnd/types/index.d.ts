@@ -41,27 +41,6 @@ export type DndData = {
   file: string
 }
 
-/** One setting a mod declares (its manifest's userConfig), as the /config menu holds it. */
-export type ModSetting = {
-  /** `<plugin>.<field>`, as `$.config.set` takes it. */
-  key: string
-  plugin: string
-  field: string
-  label: string
-  description?: string
-  kind: 'boolean' | 'choice' | 'text' | 'number'
-  value: boolean | string | number | string[]
-  options?: string[]
-  isLocked: boolean
-  /** Kept for this computer alone, in the private sync's machine file, over the shared value. */
-  isHere: boolean
-  /** With isHere, the value every other computer has (the private sync's shared settings); absent: the default. */
-  shared?: boolean | string | number | string[]
-}
-
-/** The Mods tab: every user mod's settings, and this computer's name in the private sync ('' with none). */
-export type ModsData = { settings: ModSetting[]; machine: string }
-
 declare module 'claude-code' {
   interface PluginState {
     dnd: {
@@ -80,14 +59,6 @@ declare module 'claude-code' {
       /** `<what>|<name>` pressed once: a second press confirms. */
       armed: string
       busy: boolean
-      /** The Configuration pane's tab shown. */
-      tab: string
-      /** The Mods tab's settings; null before the tab is first read. */
-      mods: ModsData | null
-      /** Where a change made in the Mods tab goes: every computer, or this one alone. */
-      modsScope: 'all' | 'here'
-      /** Settings saved from the Mods tab, counted: a typed field is drawn anew with each. */
-      modsSaves: number
     }
   }
 }

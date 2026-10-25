@@ -95,6 +95,12 @@
       "source": "./mods/recent-prompts"
     },
     {
+      "name": "configuration",
+      "description": "The Configuration pane of the kit's panes (a button on the band, /configuration): every mod's settings, for all computers or this one. The pane mods bring it with them.",
+      "category": "productivity",
+      "source": "./mods/configuration"
+    },
+    {
       "name": "dnd",
       "description": "Do not disturb for the history, dev activity and reminders-handoffs panes: profiles that hide a pane or keep only some repos and groups, on by hand (/dnd) or by Wi-Fi, days and hours, or folder.",
       "category": "productivity",
@@ -389,7 +395,7 @@
     {
       "name": "pr-watch",
       "description": "Tracks your PRs until merged: new comments, votes, CI results, merges, review requests, your pipeline runs (GitHub, Azure DevOps) and the GitHub issues you follow.",
-      "version": "1.6.2",
+      "version": "1.6.3",
       "category": "development",
       "source": ".",
       "strict": false,

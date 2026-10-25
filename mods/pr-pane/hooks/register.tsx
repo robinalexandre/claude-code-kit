@@ -2222,7 +2222,7 @@ export const register: Register = (on, options) => {
           </Box>
         )}
         {shown !== null && prs.length === 0 && (
-          <Text dimColor>{shows.openPrs || shows.parked ? 'No PR tracked. Ask Claude to watch one.' : 'PRs turned off in the Configuration pane (Mods, pr-pane).'}</Text>
+          <Text dimColor>{shows.openPrs || shows.parked ? 'No PR tracked. Ask Claude to watch one.' : 'PRs turned off in the Configuration pane (pr-pane).'}</Text>
         )}
         {ours.length > 0 && (
           <Box flexDirection="column" marginTop={1}>

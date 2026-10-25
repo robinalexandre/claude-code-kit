@@ -23,17 +23,16 @@ bash dnd.sh set meeting history hide
 bash dnd.sh list
 ```
 
-The user can also pick in the Configuration pane, Do not disturb tab (its button at the right of
-the band above the prompt, `/configuration` or `/dnd`), or on a terminal: `bash dnd.sh edit work` (arrows,
+The user can also pick in the Do not disturb pane (`/dnd`, or its button in the Configuration
+pane, opened from the band above the prompt or `/configuration`), or on a terminal: `bash dnd.sh edit work` (arrows,
 Enter or Space, the installer's keys). In the pane, `edit` beside a profile opens it: a button per
 mode for each part, and for `only` a checklist of the session's folder, what the part lists now
 and every repo and folder the user works in. Before you create a profile, ask what it should keep
 or hide when the user did not say; propose the names `dnd.sh known prs|reminders|handoffs` prints,
 or the repos and folders under `workspaces` in `dnd.sh json`.
 
-The pane's Mods tab lists every mod's settings (the `/config` rows its manifest declares) and
-changes them for all computers, or, with a private sync, for this computer only: that value is
-written to the sync's `machines/<computer>.json`, whose settings win over the shared ones.
+Every mod's settings are in the Configuration pane (the configuration mod, which the kit's pane
+mods bring with them), for all computers or this one.
 
 ## Turning one on by hand
 

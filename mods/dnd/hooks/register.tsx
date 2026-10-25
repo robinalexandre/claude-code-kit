@@ -1,17 +1,14 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { DndActive, DndData, DndPart, DndPartRule, DndProfile, DndRule, ModSetting, ModsData } from '../types'
+import type { DndActive, DndData, DndPart, DndPartRule, DndProfile, DndRule } from '../types'
 
-// The Configuration pane, a tab per thing set up from it; do not disturb is the first.
-const PANE = 'configuration'
-const TITLE = 'Configuration'
+// The Do not disturb pane. The configuration mod's pane (every mod's settings) opens it, and it opens
+// that one: Claude Code shows the two as tabs.
+const PANE = 'dnd'
+const TITLE = 'Do not disturb'
 const COMMAND = 'dnd'
-const PANE_COMMAND = 'configuration'
-const TABS = [
-  { id: 'dnd', title: 'Do not disturb' },
-  { id: 'mods', title: 'Mods' },
-]
+const CONFIGURATION_PANE = 'configuration'
 const TICK_MS = 60_000
 // Under the pointer, what folds turns to the theme's suggestion color with the text drawn on it in
 // the theme's inverse text color: readable in a light and a dark theme alike.
@@ -26,10 +23,6 @@ const pending = atom({ plugin: 'dnd', key: 'pending' } as const, '')
 const unfolded = atom({ plugin: 'dnd', key: 'unfolded' } as const, {})
 const armed = atom({ plugin: 'dnd', key: 'armed' } as const, '')
 const busy = atom({ plugin: 'dnd', key: 'busy' } as const, false)
-const tab = atom({ plugin: 'dnd', key: 'tab' } as const, 'dnd')
-const mods = atom({ plugin: 'dnd', key: 'mods' } as const, null)
-const modsScope = atom({ plugin: 'dnd', key: 'modsScope' } as const, 'all')
-const modsSaves = atom({ plugin: 'dnd', key: 'modsSaves' } as const, 0)
 
 const PARTS: { part: DndPart; title: string }[] = [
   { part: 'history', title: 'History' },
@@ -52,50 +45,6 @@ const WHERE: [Scope, string][] = [
   ['everywhere', 'all computers'],
 ]
 const scopeOf = (word: string) => (Object.keys(SCOPES) as Scope[]).find(scope => SCOPES[scope].includes(word))
-
-// The band's buttons share one row under everything above the prompt, whatever order the mods
-// draw in: each takes that row out of what the mods beneath drew, adds its own button, and sorts
-// them by key (band-1-history, band-2-prs, band-3-reminders, band-4-dnd).
-const BAND_ROW = 'band-buttons'
-
-type Drawn = { type?: string; props?: { key?: string }; children?: unknown[] }
-
-const keyOf = (node: unknown) => (node !== null && typeof node === 'object' ? ((node as Drawn).props?.key ?? '') : '')
-
-const byBandKey = (one: unknown, other: unknown) => keyOf(one).localeCompare(keyOf(other))
-
-const takeBandRow = (tree: unknown): { rest: unknown; buttons: unknown[] } => {
-  if (Array.isArray(tree)) {
-    let buttons: unknown[] = []
-    const rest = tree.map(child => {
-      if (buttons.length > 0) {
-        return child
-      }
-
-      const taken = takeBandRow(child)
-      buttons = taken.buttons
-
-      return taken.rest
-    })
-
-    // The engine reads every child of a drawn tree: the row taken out leaves no hole.
-    return { rest: rest.filter(child => child !== null && child !== undefined), buttons }
-  }
-
-  const node = tree as Drawn | null
-
-  if (node === null || typeof node !== 'object' || !Array.isArray(node.children)) {
-    return { rest: tree, buttons: [] }
-  }
-
-  if (node.props?.key === BAND_ROW) {
-    return { rest: null, buttons: node.children.flat(Infinity) }
-  }
-
-  const taken = takeBandRow(node.children)
-
-  return taken.buttons.length > 0 ? { rest: { ...node, children: taken.rest }, buttons: taken.buttons } : { rest: tree, buttons: [] }
-}
 
 const slashed = (path: string) => path.replace(/\\/g, '/')
 
@@ -304,141 +253,9 @@ const turnOff = async ($: EngineInterface) => {
   await change($, ['off'])
 }
 
-// The Mods tab. A change for every computer is a /config change, which the private sync shares;
-// one for this computer alone is also written to the sync's machine file, whose settings win
-// over the shared ones at each sync, so the shared value stays for the other computers.
-type Json = Record<string, unknown>
-
-const settingsFile = async ($: EngineInterface) => {
-  const dir = await $.env.get('CLAUDE_CONFIG_DIR')
-
-  return `${dir ? slashed(dir) : `${await home($)}/.claude`}/settings.json`
-}
-
-const readJson = async ($: EngineInterface, path: string): Promise<Json> => {
-  try {
-    const parsed: unknown = JSON.parse(await $.fs.read(path))
-
-    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Json) : {}
-  } catch {
-    return {}
-  }
-}
-
-const objectAt = (value: unknown): Json => (value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Json) : {})
-
-// This computer's file in the private sync, '' when there is no sync to keep a setting apart in.
-const machineFile = async ($: EngineInterface) => {
-  const sync = `${await home($)}/.claude-sync`
-
-  try {
-    const machine = (await $.fs.read(`${sync}/.machine`)).trim()
-    const file = `${sync}/machines/${machine}.json`
-
-    return machine !== '' && (await $.fs.exists(file)) ? { machine, file } : { machine: '', file: '' }
-  } catch {
-    return { machine: '', file: '' }
-  }
-}
-
-// Settings name a plugin's options by its name, with or without `@<where it comes from>`.
-const configKeyOf = (configs: Json, plugin: string) => Object.keys(configs).find(key => key === plugin || key.startsWith(`${plugin}@`))
-
-const overlayValue = (overlay: Json, plugin: string, field: string) => {
-  const configs = objectAt(objectAt(overlay.settings).pluginConfigs)
-  const key = configKeyOf(configs, plugin)
-
-  return key === undefined ? undefined : objectAt(objectAt(configs[key]).options)[field]
-}
-
-const loadMods = async ($: EngineInterface) => {
-  const { machine, file } = await machineFile($)
-  const overlay = file === '' ? {} : await readJson($, file)
-  // The private sync builds settings.json from its shared settings, then the machine file's over them.
-  const shared = file === '' ? {} : { settings: await readJson($, `${await home($)}/.claude-sync/settings.shared.json`) }
-  const settings = (await $.config.list())
-    .filter(row => row.provider.tier === 'user' && row.key.includes('.'))
-    .map((row): ModSetting => {
-      const plugin = row.key.slice(0, row.key.indexOf('.'))
-      const field = row.key.slice(plugin.length + 1)
-      const isHere = overlayValue(overlay, plugin, field) !== undefined
-      const sharedValue = isHere ? overlayValue(shared, plugin, field) : undefined
-
-      return {
-        key: row.key,
-        plugin,
-        field,
-        label: row.label,
-        ...(row.description ? { description: row.description } : {}),
-        kind: row.kind,
-        value: Array.isArray(row.value) ? [...row.value] : (row.value as ModSetting['value']),
-        ...(row.options ? { options: [...row.options] } : {}),
-        isLocked: row.isLocked,
-        isHere,
-        ...(sharedValue !== undefined ? { shared: sharedValue as ModSetting['value'] } : {}),
-      }
-    })
-
-  await update($, mods, () => ({ settings, machine }))
-}
-
-// What every other computer has for a setting this one keeps apart.
-const sharedText = (setting: ModSetting) =>
-  setting.shared === undefined ? 'the default' : setting.shared === true ? 'on' : setting.shared === false ? 'off' : String(setting.shared)
-
-// Writes the field's value into the machine file, or takes it out (undefined), leaving no empty object behind.
-const writeOverlay = async ($: EngineInterface, file: string, setting: ModSetting, value: ModSetting['value'] | undefined) => {
-  const overlay = await readJson($, file)
-  const settings = objectAt(overlay.settings)
-  const configs = objectAt(settings.pluginConfigs)
-  const local = await readJson($, await settingsFile($))
-  const key = configKeyOf(objectAt(local.pluginConfigs), setting.plugin) ?? configKeyOf(configs, setting.plugin) ?? setting.plugin
-  const entry = objectAt(configs[key])
-  const { [setting.field]: _dropped, ...others } = objectAt(entry.options)
-  const options = value === undefined ? others : { ...others, [setting.field]: value }
-  const { options: _old, ...entryRest } = entry
-  const nextEntry = Object.keys(options).length > 0 ? { ...entryRest, options } : entryRest
-  const { [key]: _was, ...otherConfigs } = configs
-  const nextConfigs = Object.keys(nextEntry).length > 0 ? { ...otherConfigs, [key]: nextEntry } : otherConfigs
-  const { pluginConfigs: _configs, ...settingsRest } = settings
-  const nextSettings = Object.keys(nextConfigs).length > 0 ? { ...settingsRest, pluginConfigs: nextConfigs } : settingsRest
-
-  await $.fs.write(file, `${JSON.stringify({ ...overlay, settings: nextSettings }, null, 2)}\n`)
-}
-
-// For this computer, /config writes first so the machine file names the plugin as settings.json
-// does; for every computer, the machine file lets go first so the sync shares the new value.
-const setMod = async ($: EngineInterface, setting: ModSetting, value: ModSetting['value']) => {
-  const { file } = await machineFile($)
-  const isHere = file !== '' && (await read($, modsScope)) === 'here'
-
-  try {
-    if (file !== '' && !isHere && setting.isHere) {
-      await writeOverlay($, file, setting, undefined)
-    }
-
-    const { deny } = await $.config.set({ key: setting.key, value })
-
-    if (deny !== undefined) {
-      $.ui.toast(`Could not change ${setting.label}: ${deny}`)
-    } else if (isHere) {
-      await writeOverlay($, file, setting, value)
-    }
-  } catch (error) {
-    $.ui.toast(`Could not change ${setting.label}: ${String(error).split('\n')[0] ?? ''}`)
-  } finally {
-    await loadMods($)
-    await update($, modsSaves, count => count + 1)
-  }
-}
-
 const openPane = async ($: EngineInterface) => {
   await $.ui.open({ id: PANE, title: TITLE, columns: 64 })
   await load($)
-
-  if ((await read($, tab)) === 'mods') {
-    await loadMods($)
-  }
 }
 
 const isLength = (word: string) => /^(\d+[mhd]|\d{1,2}:\d{2})$/.test(word)
@@ -451,7 +268,7 @@ const command = async ($: EngineInterface, args: string) => {
   if (first === '') {
     await openPane($)
 
-    return 'Configuration pane opened, on Do not disturb.'
+    return 'Do not disturb pane opened.'
   }
 
   if (first === 'off') {
@@ -473,7 +290,7 @@ const command = async ($: EngineInterface, args: string) => {
     await ask($, first, length)
     await openPane($)
 
-    return `Turn on ${first}${length !== '' ? ` for ${length}` : ''}: for this session, this computer or all computers? Choose in the Configuration pane.`
+    return `Turn on ${first}${length !== '' ? ` for ${length}` : ''}: for this session, this computer or all computers? Choose in the Do not disturb pane.`
   }
 
   await turnOn($, first, length, scope)
@@ -518,13 +335,13 @@ const start = async ($: EngineInterface) => {
   await $.command
     .register({ name: COMMAND, description: 'Do not disturb: open the profiles, or turn one on (/dnd work 1h), off (/dnd off)' })
     .catch(() => undefined)
-  await $.command.register({ name: PANE_COMMAND, description: 'Open the Configuration pane: do not disturb profiles' }).catch(() => undefined)
   ticking?.()
   ticking = $.clock.every(TICK_MS, () => void refresh($).catch(() => undefined))
   void refresh($).catch(() => undefined)
 }
 
 let refreshedAt = 0
+let loadAsked = false
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -558,42 +375,16 @@ export const register: Register = on => {
 
   on('command.run', { command: COMMAND }, async ($, e) => ({ text: await command($, e.args) }))
 
-  on('command.run', { command: PANE_COMMAND }, async $ => {
-    await openPane($)
-
-    return { text: 'Configuration pane opened.' }
-  })
-
-  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const beneath = await next(e)
-
-    if (e.props.hasSurvey || e.props.view.agentId !== undefined) {
-      return beneath
-    }
-
-    const { Box, Button } = $.ui.resolve(e)
-
-    // The profile on is the status line's to say (🔕): the band keeps one plain button.
-    const { rest, buttons } = takeBandRow(beneath)
-    const mine = (
-      <Box key="band-4-configuration" flexDirection="row">
-        <Button key="configuration" label={TITLE} dimColor onPress={() => void openPane($)} />
-      </Box>
-    )
-
-    return (
-      <Box flexDirection="column">
-        {rest as never}
-        <Box key={BAND_ROW} flexDirection="row" gap={2}>
-          {[...buttons, mine].sort(byBandKey) as never}
-        </Box>
-      </Box>
-    )
-  })
-
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Button, Input, Text } = $.ui.resolve(e)
     const shown = await read($, data)
+
+    // Opened from the Configuration pane's button, the profiles are read on the first draw.
+    if (shown === null && !loadAsked) {
+      loadAsked = true
+      void load($)
+    }
+
     const now = (await read($, active)) ?? shown?.active ?? null
     const trouble = await read($, problem)
     const waiting = await read($, pending)
@@ -827,146 +618,12 @@ export const register: Register = on => {
     }
 
     const isManual = now?.scope === 'session' || now?.scope === 'computer' || now?.scope === 'everywhere'
-    const currentTab = await read($, tab)
-    const modsShown = await read($, mods)
-    const scope = await read($, modsScope)
-    const saves = await read($, modsSaves)
-
-    const showTab = (id: string) => {
-      void update($, tab, () => id)
-
-      if (id === 'mods') {
-        void loadMods($)
-      }
-    }
-
-    // One setting: a press flips a toggle or moves a choice on; a text or a number is typed.
-    const settingRow = (setting: ModSetting) => {
-      const where = setting.isHere ? ' (this computer)' : ''
-      const title = `${setting.label}${where}`
-
-      if (setting.isLocked) {
-        return <Text key={`setting-${setting.key}`} dimColor>{truncate(`${title}: ${String(setting.value)} (locked)`, width - 4)}</Text>
-      }
-
-      if (setting.kind === 'boolean') {
-        return (
-          <Box key={`setting-${setting.key}`} flexDirection="row" hover={LIT_BOX}>
-            <Button
-              key={`set-${setting.key}`}
-              label={`${setting.value === true ? '[x]' : '[ ]'} ${truncate(title, width - 8)}`}
-              plain
-              hover={LIT_TEXT}
-              onPress={() => void setMod($, setting, setting.value !== true)}
-            />
-          </Box>
-        )
-      }
-
-      if (setting.kind === 'choice') {
-        const options = setting.options ?? []
-        const following = options[(options.indexOf(String(setting.value)) + 1) % Math.max(1, options.length)] ?? ''
-
-        return (
-          <Box key={`setting-${setting.key}`} flexDirection="row" hover={LIT_BOX}>
-            <Button
-              key={`set-${setting.key}`}
-              label={truncate(`${title}: ${String(setting.value)}`, width - 4)}
-              plain
-              hover={LIT_TEXT}
-              onPress={() => void setMod($, setting, following)}
-            />
-          </Box>
-        )
-      }
-
-      // The field keeps what was typed until it is drawn anew: a key per save draws the saved value
-      // again, even when it did not change. A number that does not read as one is not saved.
-      const save = (typed: string) => {
-        if (setting.kind !== 'number') {
-          void setMod($, setting, typed)
-        } else if (typed.trim() !== '' && Number.isFinite(Number(typed))) {
-          void setMod($, setting, Number(typed))
-        } else {
-          void update($, modsSaves, count => count + 1)
-        }
-      }
-
-      return (
-        <Input
-          key={`set-${setting.key}-${saves}`}
-          label={`${truncate(title, Math.floor(width / 2))} `}
-          value={String(setting.value)}
-          submitLabel="save"
-          onSubmit={save}
-        />
-      )
-    }
-
-    const modsTab = () => {
-      if (modsShown === null) {
-        return <Text dimColor>Loading…</Text>
-      }
-
-      const plugins = [...new Set(modsShown.settings.map(setting => setting.plugin))]
-
-      return (
-        <Box flexDirection="column">
-          {modsShown.machine !== '' ? (
-            <Box flexDirection="row" gap={1}>
-              <Text>Changes apply to</Text>
-              <Button key="scope-all" label="all computers" dimColor={scope !== 'all'} onPress={() => void update($, modsScope, () => 'all')} />
-              <Button key="scope-here" label={`this computer only (${modsShown.machine})`} dimColor={scope !== 'here'} onPress={() => void update($, modsScope, () => 'here')} />
-            </Box>
-          ) : (
-            <Text dimColor>Changes apply to this computer: there is no private sync to share them.</Text>
-          )}
-          {plugins.length === 0 && <Text dimColor>No mod has settings.</Text>}
-          {plugins.map(plugin => {
-            const key = `mod|${plugin}`
-            const isOpen = open[key] ?? true
-            const settings = modsShown.settings.filter(setting => setting.plugin === plugin)
-
-            return (
-              <Box key={key} flexDirection="column" marginTop={1}>
-                {foldLine(key, `${plugin} (${settings.length})`, isOpen)}
-                {isOpen && (
-                  <Box flexDirection="column" paddingLeft={2}>
-                    {settings.map(setting => (
-                      <Box key={`row-${setting.key}`} flexDirection="column">
-                        {settingRow(setting)}
-                        {setting.isHere && <Text dimColor>{truncate(`  used here instead of all computers' value: ${sharedText(setting)}`, width - 4)}</Text>}
-                      </Box>
-                    ))}
-                  </Box>
-                )}
-              </Box>
-            )
-          })}
-        </Box>
-      )
-    }
-
-    const tabRow = (
-      <Box flexDirection="row" gap={2} marginBottom={1}>
-        {TABS.map(one => (
-          <Button key={`tab-${one.id}`} label={one.title} plain dimColor={one.id !== currentTab} onPress={() => showTab(one.id)} />
-        ))}
-      </Box>
-    )
-
-    if (currentTab === 'mods') {
-      return (
-        <Box flexDirection="column">
-          {tabRow}
-          {modsTab()}
-        </Box>
-      )
-    }
 
     return (
       <Box flexDirection="column">
-        {tabRow}
+        <Box flexDirection="row" justifyContent="flex-end" marginBottom={1}>
+          <Button key="mod-settings" label="Mod settings ›" dimColor onPress={() => void $.ui.open({ id: CONFIGURATION_PANE, title: 'Configuration', columns: 64 })} />
+        </Box>
         <Text dimColor={now?.profile === ''}>{status()}</Text>
         <Box flexDirection="row" justifyContent="flex-end">
           <Box flexDirection="row" gap={1}>

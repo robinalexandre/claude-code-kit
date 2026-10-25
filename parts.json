@@ -49,15 +49,36 @@
       "name": "recent-prompts",
       "kind": "mod",
       "group": "base",
+      "needs": [
+        "configuration"
+      ],
       "what": "Your last two messages above the prompt, and a searchable history pane.",
       "why": "You find again what you asked without scrolling a long session.",
       "when": "Always on; /prompts for the pane.",
       "who": "Anyone."
     },
     {
+      "name": "configuration",
+      "kind": "mod",
+      "group": "base",
+      "with": [
+        "recent-prompts",
+        "pr-pane",
+        "reminders-handoffs",
+        "dnd"
+      ],
+      "what": "The Configuration pane: every mod's settings (what the history keeps, what the dev activity pane shows and watches…), for all computers or this one, with what the others use.",
+      "why": "Each pane set the way you want from one place, without editing settings files.",
+      "when": "The Configuration button above the prompt, or /configuration.",
+      "who": "Anyone with one of the kit's panes: they bring it with them."
+    },
+    {
       "name": "dnd",
       "kind": "mod",
       "group": "base",
+      "needs": [
+        "configuration"
+      ],
       "with": [
         "recent-prompts",
         "pr-pane",
@@ -65,7 +86,7 @@
       ],
       "what": "Do-not-disturb profiles for the history, dev activity and reminders-handoffs panes: hide a pane, or keep only some repos, reminder groups or the session's own repo.",
       "why": "At the office, in a meeting or in one repo, the panes show only what matters there, by themselves.",
-      "when": "Turned on by hand (the Configuration button, /dnd, or ask Claude), or by a rule: a Wi-Fi network, days and hours, a folder.",
+      "when": "Turned on by hand (/dnd, its button in the Configuration pane, or ask Claude), or by a rule: a Wi-Fi network, days and hours, a folder.",
       "who": "Anyone with one of those panes."
     },
     {
@@ -161,7 +182,8 @@
       "kind": "mod",
       "group": "dev",
       "needs": [
-        "pr-watch"
+        "pr-watch",
+        "configuration"
       ],
       "what": "A /prs pane of the PRs pr-watch tracks: status, CI, what each waits for, your runs and followed issues, open in the browser, live refresh.",
       "why": "All your PRs at a glance, colored by what you have to do.",
@@ -281,6 +303,9 @@
       "name": "reminders-handoffs",
       "kind": "mod",
       "group": "computers",
+      "needs": [
+        "configuration"
+      ],
       "what": "One pane for your reminders (due now, upcoming and repeating, past) and your handoff notes (open, done), a tab each, filed by group, with done, stop, pick, cancel and delete.",
       "why": "What you left for later, on any computer, at a glance, and one click to close it or pick it up.",
       "when": "The button above the prompt, /reminders-pane or /handoffs-pane.",
