@@ -88,8 +88,6 @@ command takes `--json` for other programs and agents.
 
 The curator also reads what changed that day in the config sync: reminders, handoffs, notes,
 memory, `CLAUDE.md` and skills, and every repo's `CLAUDE.md`, `AGENTS.md` and `.claude/*.md`.
-More folders of the sync repo (an assistant's own, for instance) go in its `kb.json`,
-`{"syncFolders": ["assistant"]}`, which the setup asks for: one list for every computer.
 
 `kb extract` reads `~/.claude/projects/*/*.jsonl`, keeps the user's prompts, the
 assistant's replies, the tools used, the files edited and the pull requests, drops every

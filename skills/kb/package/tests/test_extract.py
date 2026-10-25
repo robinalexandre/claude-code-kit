@@ -161,11 +161,6 @@ def test_config_sync_log_keeps_meaningful_files_only(tmp_path: Path):
     assert "added repos/github.com/someone/my-app/CLAUDE.md" in text
     assert "publish-state" not in text
     assert "assistant/memory.md" not in text
-    assert "pr-watch" not in text
-
-    (repo / "kb.json").write_text(json.dumps({"syncFolders": ["notes-box", "/assistant/"]}))
-    text = config_sync_log(DAY, repo)
-    assert "added assistant/memory.md" in text
     assert "the assistant remembers a fact" in text
     assert "pr-watch" not in text
     assert config_sync_log(DAY + timedelta(days=3), repo) == ""

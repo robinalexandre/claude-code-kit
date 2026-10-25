@@ -65,23 +65,9 @@ if ask kb.embed "Semantic search in any language (downloads a 500 MB model once,
 fi
 curate=off
 model=$(setting KB_CURATE_MODEL)
-SHARED="$HOME/.claude-sync/kb.json"
 if ask kb.curate "Curate your Claude Code transcripts into notes every morning (daily-sync, your Claude login)?" y; then
   curate=on
   model=$(reply kb.curateModel "Claude model for the curation (sonnet, haiku, opus):" "${model:-sonnet}")
-  if [ -d "$HOME/.claude-sync/.git" ]; then
-    echo "  The curation also reads what changed in your config sync: reminders, handoffs, notes, memory,"
-    echo "  CLAUDE.md and skills, and every repo's CLAUDE.md and AGENTS.md."
-    current=$(jq -r '(.syncFolders // []) | join(" ")' "$SHARED" 2> /dev/null || true)
-    folders=$(reply kb.syncFolders "Other folders of the config sync to read, such as an assistant's own (space-separated, empty for none; one list for all your computers):" "$current")
-    if [ "$folders" != "$current" ]; then
-      old='{}'
-      [ -f "$SHARED" ] && old=$(cat "$SHARED")
-      printf '%s' "$old" | jq --arg f "$folders" '.syncFolders = ($f | [splits("[ ,]+")] | map(select(. != "")))' > "$SHARED.tmp"
-      mv "$SHARED.tmp" "$SHARED"
-      echo "  Saved in $SHARED: the sync takes it to your other computers."
-    fi
-  fi
 fi
 
 echo "  Installing kb in ${VENV}…"
