@@ -68,6 +68,24 @@ export type BuildRow = {
   stepsFile?: string
 }
 
+/** A GitHub issue the user is subscribed to: open, or closed in the last days. */
+export type IssueRow = {
+  url: string
+  repo: string
+  number: string
+  title: string
+  author: string
+  /** `open` or `closed`; `reason` says how it closed (`completed`, `not planned`). */
+  state: string
+  reason: string
+  labels: string[]
+  comments: number
+  updated: string
+  closed: string
+  /** What changed since the user last saw it: new comments by others, a close or reopen, labels. */
+  changes: string[]
+}
+
 /** One host's share: when and by which computer it was fetched. */
 export type Share = { at: string; by: string }
 
@@ -75,6 +93,8 @@ export type PrSnapshot = {
   prs: PrRow[]
   reviews?: ReviewPr[]
   builds?: BuildRow[]
+  /** Absent from a pr-watch that follows no issue. */
+  issues?: IssueRow[]
   recent?: RecentPr[]
   errors: string[]
   isLive: boolean
@@ -126,9 +146,9 @@ declare module 'claude-code' {
       busy: string
       isRecentOpen: boolean
       openRepos: Record<string, boolean>
-      /** PR URLs whose details are unfolded. */
+      /** PR and issue URLs whose details are unfolded. */
       openPrs: Record<string, boolean>
-      /** The changes the user read by opening a PR, kept on screen for the session. */
+      /** The changes the user read by opening a PR or an issue, kept on screen for the session. */
       readChanges: Record<string, string[]>
     }
   }

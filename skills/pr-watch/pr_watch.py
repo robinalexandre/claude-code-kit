@@ -1,10 +1,11 @@
 """Track pull requests until they are merged: report new comments, votes, CI results and status changes.
 
-    pr_watch.py add URL [--note TEXT]   start tracking a PR (takes a baseline, reports nothing)
+    pr_watch.py add URL [--note TEXT]   start tracking a PR (takes a baseline, reports nothing), or follow
+                                        an issue removed before again
     pr_watch.py check [--peek|--quiet]  what changed on every tracked PR since the last check
                                         (--peek: report without recording it as seen; --quiet:
                                         record it, print nothing, keep it on each PR as unread)
-    pr_watch.py read URL                clear a PR's unread changes
+    pr_watch.py read URL                clear a PR's or a followed issue's unread changes
     pr_watch.py list                    tracked PRs and their status
     pr_watch.py status [--auto|--live]  the same as JSON, with what each PR waits for, from the records
                                         and the shared snapshot (below); each PR's `changes` start with
@@ -23,7 +24,8 @@
     pr_watch.py approve URL             approve a PR (Azure DevOps: vote approved; GitHub: an approving review)
                                         and track it as reviewed until it is merged
     pr_watch.py merge URL               merge a PR (GitHub: squash if the repo allows it; Azure DevOps: complete)
-    pr_watch.py remove URL              stop tracking a PR (and never track it again on its own)
+    pr_watch.py remove URL              stop tracking a PR (and never track it again on its own), or stop
+                                        following an issue
     pr_watch.py park URL [--note WHY]   keep tracking a PR without reporting its changes
     pr_watch.py unpark URL              report them again
     pr_watch.py ack URL [--until DATE] [--note TEXT]
@@ -53,6 +55,19 @@ tracked and recent PRs and of `azureProjects` in config.json; GitHub: in the rep
 recent PRs, those they pushed to lately, and `githubRepos`): running ones and those ended in the last
 PR_WATCH_BUILD_HOURS (default 24) hours. `check` reports a
 run that ended since the last check, and `status` lists them as `builds`.
+
+They also follow the user's GitHub issues (with a token): those involving them in any repo (opened,
+commented on, mentioned or assigned in) and active in the last `issueDays` days (30 by default), and
+those they subscribed to in their own and their organizations' repos; the open ones
+and those closed in the last PR_WATCH_KEEP_DAYS days. `check` reports what changed on each since the user last saw it (new
+comments by others, closed or reopened, labels), and `status` lists them as `issues`, each with its
+`changes` (issues.json keeps what was seen).
+
+What is looked up, reported and listed follows the PR pane's settings (the Configuration pane's Mods
+tab, pr-pane, kept in Claude Code's settings.json), else the same keys in config.json: `openPrs`,
+`parked` (the tracked PRs, open or parked), `recent` (the merged and closed ones), `reviews`,
+`runsPerRepo` (0 to 20 pipeline runs per repo, 20 by default), `issues` and `issueDays`. What is
+turned off is neither fetched nor reported, and its records stay as they were.
 
 Shared snapshot: what `status --auto` or `--live` fetched is shared through the config sync's GitHub
 repo, on its own branch (`pr-cache`, one commit replaced each time, so it never grows), one section per
@@ -93,6 +108,7 @@ WATCH_DIR = Path(os.environ.get("PR_WATCH_DIR", Path.home() / ".claude-sync" / "
 CONFIG = WATCH_DIR / "config.json"
 REVIEWS = WATCH_DIR / "reviews.json"
 BUILDS = WATCH_DIR / "builds.json"
+ISSUES = WATCH_DIR / "issues.json"
 ACKS = WATCH_DIR / "acks.json"
 STEPS_DIR = WATCH_DIR / "steps"
 # Not a .json file: older copies of this script read every .json file here as a tracked PR.
@@ -100,6 +116,7 @@ DISMISSED = WATCH_DIR / "dismissed.txt"
 DONE_DIR = WATCH_DIR / "done"
 KEEP_DAYS = float(os.environ.get("PR_WATCH_KEEP_DAYS", "7"))
 BUILD_HOURS = float(os.environ.get("PR_WATCH_BUILD_HOURS", "24"))
+ISSUE_DAYS = 30
 CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "pr-watch"
 SHARED_LOCAL = CACHE_DIR / "shared.json"
 SHARED_BRANCH = "pr-cache"
@@ -119,6 +136,7 @@ ADO_URL = re.compile(
     r"/(?P<project>[^/]+)/_git/(?P<repo>[^/]+)/pullrequest/(?P<id>\d+)"
 )
 GITHUB_URL = re.compile(r"https://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/(?P<id>\d+)")
+GITHUB_ISSUE_URL = re.compile(r"https://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/issues/(?P<id>\d+)")
 ADO_BUILD_URL = re.compile(
     r"https://dev\.azure\.com/(?P<org>[^/]+)/(?P<project>[^/]+)/_build/results\?buildId=(?P<id>\d+)"
 )
@@ -807,8 +825,10 @@ def fetch_builds(entries: list[tuple[Path, dict]], hosts: tuple[str, ...] = HOST
 
     Asked in the Azure DevOps projects and GitHub repos of the tracked and recent PRs, the GitHub
     repos the user pushed to lately, plus `azureProjects` (`org/project`) and `githubRepos`
-    (`owner/repo`) in config.json. Only on `hosts`.
+    (`owner/repo`) in config.json. Only on `hosts`; none when the user shows none (`runsPerRepo` 0).
     """
+    if runs_per_repo() == 0:
+        return [], []
     projects, repos = config("azureProjects"), config("githubRepos")
     for entry in [entry for _, entry in entries] + done_entries():
         if match := ADO_URL.match(entry["url"]):
@@ -1041,7 +1061,7 @@ def entry_path(url: str) -> Path:
 
 def load_entries() -> list[tuple[Path, dict]]:
     return [(path, json.loads(path.read_text(encoding="utf-8")))
-            for path in sorted(WATCH_DIR.glob("*.json")) if path not in (CONFIG, REVIEWS, BUILDS, ACKS)]
+            for path in sorted(WATCH_DIR.glob("*.json")) if path not in (CONFIG, REVIEWS, BUILDS, ACKS, ISSUES)]
 
 
 def reviews_file() -> dict:
@@ -1069,8 +1089,10 @@ def fetch_review_requests(entries: list[tuple[Path, dict]], hosts: tuple[str, ..
     """Open PRs waiting for the user's review, newest first: (rows, errors).
 
     GitHub needs a token; Azure DevOps is asked per organization, those of the tracked PRs plus
-    `azureOrgs` in config.json. Only on `hosts`.
+    `azureOrgs` in config.json. Only on `hosts`; none when the user turned them off (`reviews`).
     """
+    if not setting("reviews"):
+        return [], []
     orgs = config("azureOrgs") if "ado" in hosts else set()
     for _, entry in entries:
         if "ado" in hosts and (match := ADO_URL.match(entry["url"])):
@@ -1100,6 +1122,161 @@ def _review_place(url: str) -> str:
     if match := ADO_URL.match(url):
         return match["org"] or match["org2"]
     return "github" if GITHUB_URL.match(url) else ""
+
+
+def github_followed_issues(seen: dict) -> list[dict]:
+    """The GitHub issues the person checking follows (none anonymously): those involving them in any
+    repo (opened, commented on, mentioned or assigned in) and those they subscribed to in the repos
+    they own or belong to; the open ones and those closed in the last KEEP_DAYS days, newest first.
+    An issue `seen` already knows carries the comments others posted since (`newComments`), so any
+    computer reading the share can report them."""
+    headers = _github_headers()
+    if not headers:
+        return []
+    def ago(days: float, form: str) -> str:
+        return datetime.fromtimestamp(time.time() - days * 86400, timezone.utc).strftime(form)
+
+    active = float(setting("issueDays"))  # type: ignore[arg-type]
+    # GitHub's subscribed list stops at the repos of the user and their organizations: the search
+    # reaches the issues they opened or joined in anyone's repo, those active lately only, so an old
+    # thread they once commented on stays out until it moves again.
+    items: dict[str, dict] = {}
+    for state in ("state=open", f"state=closed&since={ago(KEEP_DAYS, '%Y-%m-%dT%H:%M:%SZ')}"):
+        found = _http_json(f"{GITHUB_API}/issues?filter=subscribed&{state}&sort=updated&per_page=100", headers)
+        items.update({item["html_url"]: item for item in found if "pull_request" not in item})  # type: ignore[union-attr]
+    for state in (f"is:open updated:>={ago(active, '%Y-%m-%d')}", f"closed:>={ago(KEEP_DAYS, '%Y-%m-%d')}"):
+        query = urllib.parse.quote(f"is:issue involves:@me {state}")
+        found = _http_json(f"{GITHUB_API}/search/issues?q={query}&sort=updated&per_page=100", headers)
+        items.update({item["html_url"]: item for item in found.get("items") or []  # type: ignore[union-attr]
+                      if "pull_request" not in item})
+    me, rows = _github_me(headers), []
+    for item in items.values():
+        match = GITHUB_ISSUE_URL.match(item["html_url"])
+        if match is None:
+            continue
+        rows.append({
+            "url": item["html_url"],
+            "repo": match["repo"],
+            "owner": match["owner"],
+            "number": match["id"],
+            "title": item["title"],
+            "author": (item.get("user") or {}).get("login") or "ghost",
+            "state": item["state"],
+            "reason": (item.get("state_reason") or "").replace("_", " "),
+            "labels": sorted(label["name"] for label in item.get("labels") or []),
+            "comments": item.get("comments", 0),
+            "at": item.get("updated_at") or "",
+            "updated": _stamp(item.get("updated_at") or ""),
+            "closed": _stamp(item.get("closed_at") or ""),
+        })
+
+    def new_comments(row: dict) -> None:
+        before = seen.get(row["url"])
+        if not before or row["comments"] <= before.get("comments", 0) or row["at"] <= before.get("at", ""):
+            return
+        found = _http_json(f"{GITHUB_API}/repos/{row['owner']}/{row['repo']}/issues/{row['number']}/comments"
+                           f"?since={before['at']}&per_page=100", headers)
+        row["newComments"] = [
+            {"author": (comment.get("user") or {}).get("login") or "ghost", "at": comment.get("created_at") or "",
+             "text": (comment.get("body") or "")[:EXCERPT]}
+            for comment in found  # type: ignore[union-attr]
+            if (comment.get("created_at") or "") > before["at"] and ((comment.get("user") or {}).get("login") or "") != me
+        ]
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(new_comments, rows))
+    return sorted(rows, key=lambda row: row["at"], reverse=True)
+
+
+def issues_file() -> dict:
+    """`issues`: those last found; `seen`: each one as the user last saw it; `unread`: what a quiet
+    check found and the user has not read; `dismissed`: the URLs the user stopped following here."""
+    if not ISSUES.exists():
+        return {}
+    return json.loads(ISSUES.read_text(encoding="utf-8"))
+
+
+def cached_issues() -> list[dict]:
+    stored = issues_file()
+    gone = set(stored.get("dismissed", []))
+    rows = [row for row in shared_rows("issues", stored) if row["url"] not in gone]
+    return sorted(rows, key=lambda row: row.get("at", ""), reverse=True)
+
+
+def fetch_issues(hosts: tuple[str, ...] = HOSTS) -> tuple[list[dict], list[str]]:
+    """The followed issues on `hosts` (GitHub only), or those last found when GitHub did not answer;
+    none when the user turned them off (`issues`)."""
+    if "github" not in hosts or not setting("issues"):
+        return [], []
+    stored = issues_file()
+    try:
+        rows, errors = github_followed_issues(stored.get("seen", {})), []
+    except WatchError as error:
+        rows, errors = cached_issues(), [f"issues: {error}"]
+    except (KeyError, TypeError) as error:
+        rows, errors = cached_issues(), [f"issues: unexpected answer ({error!r})"]
+    gone = set(stored.get("dismissed", []))
+    return [row for row in rows if row["url"] not in gone], errors
+
+
+def issue_seen(row: dict) -> dict:
+    return {"state": row["state"], "reason": row["reason"], "labels": row["labels"], "comments": row["comments"],
+            "at": row["at"]}
+
+
+def issue_changes(before: dict, row: dict, ignore: set[str], bots: set[str]) -> list[str]:
+    """What changed on the issue since the user last saw it; nothing for an issue never seen."""
+    if not before:
+        return []
+    lines = []
+    if row["state"] != before.get("state"):
+        lines.append("reopened" if row["state"] == "open" else f"closed ({row['reason'] or 'completed'})")
+    lines += [f"labeled {label}" for label in row["labels"] if label not in before.get("labels", [])]
+    lines += [f"unlabeled {label}" for label in before.get("labels", []) if label not in row["labels"]]
+    for comment in row.get("newComments", []):
+        if comment["at"] <= before.get("at", "") or comment["author"] in ignore:
+            continue
+        bot = " (bot)" if comment["author"] in bots else ""
+        lines.append(f"new comment by {comment['author']}{bot}: {' '.join(comment['text'].split())}")
+    return lines
+
+
+def issue_label(row: dict) -> str:
+    title = row["title"]
+    return f"{row['repo']} #{row['number']} ({title[:57] + '...' if len(title) > 60 else title})"
+
+
+def save_issues(rows: list[dict], seen: dict, unread: dict) -> None:
+    save(ISSUES, {"checked": _now(), "issues": rows, "seen": seen, "unread": unread,
+                  "dismissed": issues_file().get("dismissed", [])})
+
+
+def read_issue(url: str) -> None:
+    stored = issues_file()
+    row = next((row for row in cached_issues() if row["url"] == url), None)
+    if row is None and url not in stored.get("seen", {}):
+        raise WatchError(f"not a followed issue: {url}")
+    seen, unread = stored.get("seen", {}), stored.get("unread", {})
+    if row is not None:
+        seen[url] = issue_seen(row)
+    unread.pop(url, None)
+    save(ISSUES, {**stored, "seen": seen, "unread": unread})
+
+
+def dismiss_issue(url: str) -> None:
+    stored = issues_file()
+    save(ISSUES, {**stored, "dismissed": sorted(set(stored.get("dismissed", [])) | {url})})
+    print(f"no longer followed: {url} (`add` it to follow it again; unsubscribe on GitHub to stop its "
+          "notifications too)")
+
+
+def follow_issue(url: str) -> None:
+    stored = issues_file()
+    if url not in stored.get("dismissed", []):
+        print(f"already followed when GitHub lists it (an issue you are involved in, active lately): {url}")
+        return
+    save(ISSUES, {**stored, "dismissed": sorted(set(stored["dismissed"]) - {url})})
+    print(f"followed again: {url}")
 
 
 AUTO_TRACK = {"opened": "opened by you", "assigned": "assigned to you", "approved": "approved by you"}
@@ -1135,10 +1312,10 @@ def auto_track(entries: list[tuple[Path, dict]], hosts: tuple[str, ...] = HOSTS)
     `entries`: (one line per PR now tracked, errors).
 
     Asked on GitHub with a token, and in the Azure DevOps organizations of the tracked and recent
-    PRs plus `azureOrgs`. Only on `hosts`.
+    PRs plus `azureOrgs`. Only on `hosts`; never when the user turned the open PRs off (`openPrs`).
     """
     kinds = auto_track_kinds()
-    if not kinds:
+    if not kinds or not setting("openPrs"):
         return [], []
     known = {same_pr(entry["url"]) for _, entry in entries} | dismissed()
     orgs = config("azureOrgs") if "ado" in hosts else set()
@@ -1221,6 +1398,57 @@ def config_value(key: str, default: object) -> object:
     if not CONFIG.exists():
         return default
     return json.loads(CONFIG.read_text(encoding="utf-8")).get(key, default)
+
+
+SETTINGS = {"openPrs": True, "parked": True, "recent": True, "reviews": True, "runsPerRepo": BUILDS_PER_PLACE,
+            "issues": True, "issueDays": ISSUE_DAYS}
+
+
+def pane_settings() -> dict:
+    """What the user chose in the PR pane's settings (the Configuration pane's Mods tab, pr-pane),
+    which Claude Code keeps in its settings.json; {} without them."""
+    path = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "settings.json"
+    try:
+        configs = json.loads(path.read_text(encoding="utf-8")).get("pluginConfigs") or {}
+        key = next((key for key in configs if key == "pr-pane" or key.startswith("pr-pane@")), "")
+        return (configs.get(key) or {}).get("options") or {}
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def setting(key: str) -> object:
+    """What pr-watch looks up, reports and lists (SETTINGS): the pane's setting, else config.json's."""
+    chosen = pane_settings()
+    return chosen[key] if key in chosen else config_value(key, SETTINGS[key])
+
+
+def runs_per_repo() -> int:
+    try:
+        return max(0, min(int(setting("runsPerRepo")), BUILDS_PER_PLACE))  # type: ignore[call-overload]
+    except (TypeError, ValueError):
+        return BUILDS_PER_PLACE
+
+
+def shown_runs(builds: list[dict]) -> list[dict]:
+    """The first `runsPerRepo` runs of each repo, in their order."""
+    limit, count, kept = runs_per_repo(), {}, []
+    for row in builds:
+        count[row["repo"]] = count.get(row["repo"], 0) + 1
+        if count[row["repo"]] <= limit:
+            kept.append(row)
+    return kept
+
+
+def watched(entries: list[tuple[Path, dict]]) -> list[tuple[Path, dict]]:
+    """The tracked PRs the user wants: the open ones (`openPrs`) and the parked ones (`parked`)."""
+    wanted = {False: bool(setting("openPrs")), True: bool(setting("parked"))}
+    return [(path, entry) for path, entry in entries if wanted[bool(entry.get("parked"))]]
+
+
+def turned_off() -> list[str]:
+    """The shared sections' lists this computer neither fetches nor shows."""
+    on = {"reviews": bool(setting("reviews")), "builds": runs_per_repo() > 0, "issues": bool(setting("issues"))}
+    return [name for name, is_on in on.items() if not is_on]
 
 
 def host_of(url: str) -> str:
@@ -1431,22 +1659,26 @@ def hosts_due(mode: str, entries: list[tuple[Path, dict]]) -> list[str]:
 def fetch_section(host: str, entries: list[tuple[Path, dict]]) -> tuple[dict | None, list[str]]:
     """Everything on one host now, as its shared section, or None when the host did not answer this
     computer (every lookup failed); the errors."""
-    mine = [(path, entry) for path, entry in entries if host_of(entry["url"]) == host]
-    # The four lookups at once: each waits on the host far more than it computes.
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    mine = [(path, entry) for path, entry in watched(entries) if host_of(entry["url"]) == host]
+    # The five lookups at once: each waits on the host far more than it computes.
+    with ThreadPoolExecutor(max_workers=5) as pool:
         tracking = pool.submit(auto_track, entries, (host,))
         fetching = pool.submit(fetch_all, mine)
         asking = pool.submit(fetch_review_requests, entries, (host,))
         listing = pool.submit(fetch_builds, entries, (host,))
+        following = pool.submit(fetch_issues, (host,))
         (_, errors), fetched = tracking.result(), fetching.result()
         (reviews, review_errors), (builds, build_errors) = asking.result(), listing.result()
-    errors += [f"{entry['url']}: {error}" for _, entry, _, _, error in fetched if error] + review_errors + build_errors
+        issues, issue_errors = following.result()
+    errors += [f"{entry['url']}: {error}" for _, entry, _, _, error in fetched if error] + review_errors + build_errors \
+        + issue_errors
     answered = not errors or any(now is not None for _, _, now, _, _ in fetched) \
         or any(not build.get("stale") for build in builds)
     if not answered:
         return None, errors
     prs = {entry["url"]: {"seen": now, "me": me} for _, entry, now, me, _ in fetched if now is not None}
-    return {"at": _now_seconds(), "by": _machine(), "prs": prs, "reviews": reviews, "builds": builds}, errors
+    return {"at": _now_seconds(), "by": _machine(), "prs": prs, "reviews": reviews, "builds": builds,
+            "issues": issues}, errors
 
 
 def refresh_shared(mode: str, entries: list[tuple[Path, dict]]) -> tuple[list[str], list[str]]:
@@ -1468,7 +1700,11 @@ def refresh_shared(mode: str, entries: list[tuple[Path, dict]]) -> tuple[list[st
                 continue
             errors += found_errors
             local.get("unreachable", {}).pop(host, None)
-            local["sections"][host] = section
+            # What this computer's settings leave out stays as another computer last shared it.
+            unwatched = {entry["url"] for _, entry in entries} - {entry["url"] for _, entry in watched(entries)}
+            kept = {url: pr for url, pr in (shared.get("prs") or {}).items() if url in unwatched}
+            local["sections"][host] = {**section, **{name: shared[name] for name in turned_off() if name in shared},
+                                       "prs": {**kept, **section["prs"]}}
             fetched.append(host)
     if fetched:
         try:
@@ -1538,6 +1774,9 @@ def changes(entry: dict, now: dict, ignore: set[str], bots: set[str]) -> list[st
 
 def add(url: str, note: str) -> None:
     url = normalize(url)
+    if GITHUB_ISSUE_URL.match(url):
+        follow_issue(url)
+        return
     path = entry_path(url)
     if same_pr(url) in (gone := dismissed()):
         save_dismissed(gone - {same_pr(url)})
@@ -1605,7 +1844,8 @@ def check(peek: bool, quiet: bool = False) -> None:
     """
     ignore, bots, report, errors = config("ignoreAuthors"), config("bots"), [], []
     entries = load_entries()
-    for path, entry, now, me, error in fetch_all(entries):
+    off = turned_off()
+    for path, entry, now, me, error in fetch_all(watched(entries)):
         if now is None:
             errors.append(f"{entry['url']}: {error}")
             continue
@@ -1636,12 +1876,33 @@ def check(peek: bool, quiet: bool = False) -> None:
                f"your review: {row['url']}" for row in reviews if row["url"] not in announced]
     errors += review_errors
     builds, build_errors = fetch_builds(entries)
+    builds = shown_runs(builds)
     report += build_changes(builds_file(), builds)
     errors += build_errors
+    issues, issue_errors = fetch_issues()
+    errors += issue_errors
+    stored = issues_file()
+    seen, unread = stored.get("seen", {}), stored.get("unread", {})
+    for row in issues:
+        found = issue_changes(seen.get(row["url"], {}), row, ignore, bots)
+        # Past the very first check, an issue not seen yet is new to the user, or an old one that moved.
+        if row["url"] not in seen and "checked" in stored:
+            found = [f"now followed ({row['state']}, {row['comments']} comment{'' if row['comments'] == 1 else 's'})"]
+        report += [f"{issue_label(row)}: {line} {row['url']}" for line in found]
+        seen[row["url"]] = issue_seen(row)
+        if quiet and found:
+            unread[row["url"]] = list(dict.fromkeys(unread.get(row["url"], []) + found))[-UNREAD_KEPT:]
     if not peek:
-        # Saved even when a host failed: its requests and runs are the ones last found there.
-        save_reviews(reviews, announced=sorted(row["url"] for row in reviews))
-        save_builds(builds)
+        # Saved even when a host failed: its requests, runs and issues are the ones last found there.
+        # What the user turned off is left as it was, so turning it on again reports what changed since.
+        if "reviews" not in off:
+            save_reviews(reviews, announced=sorted(row["url"] for row in reviews))
+        if "builds" not in off:
+            save_builds(builds)
+        if "issues" not in off:
+            if not issue_errors:
+                seen = {url: one for url, one in seen.items() if any(row["url"] == url for row in issues)}
+            save_issues(issues, seen, {url: lines for url, lines in unread.items() if url in seen})
         prune_done()
     if quiet:
         return
@@ -1653,6 +1914,9 @@ def check(peek: bool, quiet: bool = False) -> None:
 def read(url: str) -> None:
     """The person has seen the PR's changes: its unread ones are cleared and, when the host answers,
     what it shows now is recorded as seen, so the next check does not bring them back."""
+    if GITHUB_ISSUE_URL.match(normalize(url)):
+        read_issue(normalize(url))
+        return
     path = entry_path(normalize(url))
     if not path.exists():
         raise WatchError(f"not tracked: {url}")
@@ -1710,13 +1974,14 @@ def status(mode: str) -> None:
     hosts are fetched first (see hosts_due). Records nothing but the PRs it starts tracking."""
     entries = load_entries()
     fetched_hosts, errors = refresh_shared(mode, entries)
-    sections = shared_local()["sections"]
-    reviews, builds = cached_reviews(), cached_builds()
+    sections, off = shared_local()["sections"], turned_off()
+    reviews = [] if "reviews" in off else cached_reviews()
+    builds = [] if "builds" in off else shown_runs(cached_builds())
     ignore, bots, prs, acks = config("ignoreAuthors"), config("bots"), [], acks_file()
     builds = [{**build, "ack": ack_of(build["url"], _build_alert(build), acks),
                **({"stepsFile": str(_steps_path(build["url"]))} if _steps_path(build["url"]).exists() else {})}
               for build in builds]
-    for _, entry in entries:
+    for _, entry in watched(entries):
         section = sections.get(host_of(entry["url"])) or {}
         shared = (section.get("prs") or {}).get(entry["url"])
         is_newer = shared is not None and _epoch(section.get("at", "")) > _epoch(entry.get("checked", ""))
@@ -1751,7 +2016,7 @@ def status(mode: str) -> None:
             "checked": section["at"][:16] + "Z" if now else entry.get("checked", ""),
         })
     recent = []
-    for entry in done_entries():
+    for entry in done_entries() if setting("recent") else []:
         match = ADO_URL.match(entry["url"]) or GITHUB_URL.match(entry["url"])
         recent.append({
             "url": entry["url"],
@@ -1763,9 +2028,16 @@ def status(mode: str) -> None:
             "reviewed": bool(entry.get("reviewed")),
             "ended": entry.get("ended", ""),
         })
+    stored = issues_file()
+    issues = []
+    for row in [] if "issues" in off else cached_issues():
+        news = issue_changes(stored.get("seen", {}).get(row["url"], {}), row, ignore, bots)
+        issues.append({**{key: value for key, value in row.items() if key not in ("newComments", "at", "owner")},
+                       "changes": list(dict.fromkeys(stored.get("unread", {}).get(row["url"], []) + news))})
     shares = {host: {"at": section.get("at", ""), "by": section.get("by", "")} for host, section in sections.items()}
     print(json.dumps({"live": mode != "cached", "fetched": fetched_hosts, "sections": shares, "prs": merge_order(prs),
-                      "reviews": reviews, "builds": builds, "recent": recent, "errors": grouped_errors(errors)},
+                      "reviews": reviews, "builds": builds, "issues": issues, "recent": recent,
+                      "errors": grouped_errors(errors)},
                      ensure_ascii=False))
 
 
@@ -1867,13 +2139,16 @@ def merge(url: str) -> None:
 
 
 def open_(url: str) -> None:
-    if not any(pattern.match(url) for pattern in (ADO_URL, GITHUB_URL, ADO_BUILD_URL, GITHUB_RUN_URL)):
-        raise WatchError(f"unsupported PR or build URL (Azure DevOps or GitHub): {url}")
+    if not any(pattern.match(url) for pattern in (ADO_URL, GITHUB_URL, ADO_BUILD_URL, GITHUB_RUN_URL, GITHUB_ISSUE_URL)):
+        raise WatchError(f"unsupported PR, build or issue URL (Azure DevOps or GitHub): {url}")
     if not webbrowser.open(url):
         raise WatchError(f"no browser could open {url}")
 
 
 def remove(url: str) -> None:
+    if GITHUB_ISSUE_URL.match(normalize(url)):
+        dismiss_issue(normalize(url))
+        return
     path = entry_path(normalize(url))
     if not path.exists():
         raise WatchError(f"not tracked: {url}")

@@ -55,10 +55,11 @@ jobs:
           bash tests/install-sandbox.sh --auto tests/answers-skip-a-group.txt
       - name: Updates of an install.sh install
         run: bash tests/kit-update-check.sh
-      - name: pr-watch's shared snapshot
+      - name: pr-watch's shared snapshot and followed issues
         run: |
           py=$(command -v python3 || command -v python)
           "$py" -I tests/pr-watch-shared.py
+          "$py" -I tests/pr-watch-issues.py
       - name: Knowledge base
         run: bash tests/kb.sh
       - name: The sync's minute poll

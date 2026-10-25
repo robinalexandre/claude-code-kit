@@ -85,7 +85,8 @@ class FakeGitHub(BaseHTTPRequestHandler):
 
 def load(skill: Path, root: Path):
     os.environ.update({"PR_WATCH_DIR": str(root / "sync" / "pr-watch"), "PR_WATCH_SHARED": "owner/sync",
-                       "GITHUB_TOKEN": "test-token", "XDG_CACHE_HOME": str(root / "mac")})
+                       "GITHUB_TOKEN": "test-token", "XDG_CACHE_HOME": str(root / "mac"),
+                       "CLAUDE_CONFIG_DIR": str(root / "claude")})
     spec = importlib.util.spec_from_file_location("pr_watch", skill / "pr_watch.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -149,6 +150,7 @@ def main() -> int:
     pr.auto_track = lambda entries, hosts=pr.HOSTS: ([], [])
     pr.fetch_review_requests = lambda entries, hosts=pr.HOSTS: ([], [])
     pr.fetch_builds = lambda entries, hosts=pr.HOSTS: ([], [])
+    pr.fetch_issues = lambda hosts=pr.HOSTS: ([], [])
     failures: list[str] = []
 
     def check(what: str, ok: bool) -> None:

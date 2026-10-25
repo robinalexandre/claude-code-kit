@@ -1,7 +1,7 @@
 {
   "name": "pr-pane",
-  "version": "0.9.1",
-  "description": "A pane listing the PRs pr-watch tracks: status, CI, votes and what each one waits for; open one in the browser, refresh them live.",
+  "version": "0.10.0",
+  "description": "A pane listing the PRs pr-watch tracks: status, CI, votes and what each one waits for, plus your pipeline runs and the issues you follow; open one in the browser, refresh them live.",
   "types": "./types/index.d.ts",
   "author": {
     "name": "robinalexandre",
@@ -9,5 +9,49 @@
   },
   "dependencies": [
     "pr-watch"
-  ]
+  ],
+  "userConfig": {
+    "openPrs": {
+      "type": "boolean",
+      "title": "Open PRs",
+      "description": "The tracked PRs still open: needing your attention, waiting for others, approved. Off, pr-watch neither checks them nor starts tracking your new ones.",
+      "default": true
+    },
+    "parked": {
+      "type": "boolean",
+      "title": "Parked PRs",
+      "description": "The PRs you parked. Off, pr-watch stops checking them until you turn them on again.",
+      "default": true
+    },
+    "recent": {
+      "type": "boolean",
+      "title": "Merged and closed PRs",
+      "description": "The PRs merged, abandoned or closed in the last days.",
+      "default": true
+    },
+    "reviews": {
+      "type": "boolean",
+      "title": "Review requests",
+      "description": "The PRs waiting for your review. Off, pr-watch stops looking them up.",
+      "default": true
+    },
+    "runsPerRepo": {
+      "type": "number",
+      "title": "Pipeline runs per repo",
+      "description": "How many of your latest pipeline runs to show per repo, 0 to 20. 0: none, and pr-watch stops looking them up.",
+      "default": 20
+    },
+    "issues": {
+      "type": "boolean",
+      "title": "GitHub issues I follow",
+      "description": "The issues you opened, commented on, were mentioned or assigned in, or subscribed to in your repos. Off, pr-watch stops looking them up.",
+      "default": true
+    },
+    "issueDays": {
+      "type": "number",
+      "title": "Issues active in the last (days)",
+      "description": "An open issue you only joined is followed while it moved in that many days; those subscribed to in your repos always are.",
+      "default": 30
+    }
+  }
 }

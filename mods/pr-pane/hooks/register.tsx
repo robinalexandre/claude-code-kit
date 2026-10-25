@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, RenderChildren } from 'claude-code'
+import type { EngineInterface, PluginOptions, Register, RenderChildren } from 'claude-code'
 
-import type { Ack, BuildRow, BuildStep, CiCheck, DndActive, PrRow, PrSnapshot, RecentPr, ReviewPr } from '../types'
+import type { Ack, BuildRow, BuildStep, CiCheck, DndActive, IssueRow, PrRow, PrSnapshot, RecentPr, ReviewPr } from '../types'
 
 const PANE = 'tracked-prs'
 const TITLE = 'Tracked PRs'
@@ -295,9 +295,42 @@ const dndActive = atom({ plugin: 'dnd', key: 'active' } as const, null, { shape:
 
 const repoTail = (repo: string) => (slashed(repo).replace(/\/+$/, '').split('/').pop() ?? repo).toLowerCase()
 
+// What the user chose to see (the manifest's userConfig, set in the Configuration pane). pr-watch
+// reads the same settings and stops looking up what is off; the pane leaves it out at once.
+type Shows = { openPrs: boolean; parked: boolean; recent: boolean; reviews: boolean; runsPerRepo: number; issues: boolean }
+
+const showsOf = (options: PluginOptions): Shows => ({
+  openPrs: options.openPrs !== false,
+  parked: options.parked !== false,
+  recent: options.recent !== false,
+  reviews: options.reviews !== false,
+  runsPerRepo: typeof options.runsPerRepo === 'number' ? Math.max(0, Math.floor(options.runsPerRepo)) : 20,
+  issues: options.issues !== false,
+})
+
+let shows = showsOf({})
+
+const bySettings = (shown: PrSnapshot): PrSnapshot => {
+  const runs = new Map<string, number>()
+
+  return {
+    ...shown,
+    prs: shown.prs.filter(pr => (pr.parked === true ? shows.parked : shows.openPrs)),
+    reviews: shows.reviews ? shown.reviews : [],
+    builds: (shown.builds ?? []).filter(build => {
+      runs.set(build.repo, (runs.get(build.repo) ?? 0) + 1)
+
+      return (runs.get(build.repo) ?? 0) <= shows.runsPerRepo
+    }),
+    issues: shows.issues ? shown.issues : [],
+    recent: shows.recent ? shown.recent : [],
+  }
+}
+
 // null when the profile hides them all; else the snapshot with the repos it keeps.
 const dndSnapshot = async ($: EngineInterface): Promise<{ shown: PrSnapshot | null; on: DndActive | null; isHidden: boolean; isFiltered: boolean }> => {
-  const shown = await read($, snapshot)
+  const stored = await read($, snapshot)
+  const shown = stored === null ? null : bySettings(stored)
   const on = await read($, dndActive)
   const rule = on?.profile ? on.parts?.prs : undefined
 
@@ -318,6 +351,7 @@ const dndSnapshot = async ($: EngineInterface): Promise<{ shown: PrSnapshot | nu
       prs: shown.prs.filter(keeps),
       reviews: shown.reviews?.filter(keeps),
       builds: shown.builds?.filter(keeps),
+      issues: shown.issues?.filter(keeps),
       recent: shown.recent?.filter(keeps),
     },
     on,
@@ -937,7 +971,7 @@ const recentByRepo = (recent: RecentPr[]) => {
 }
 
 // Sections and repo blocks start collapsed: what the user toggles stays that way for the session.
-const repoKey = (section: 'builds' | 'attention' | 'reviews' | 'waiting' | 'approved' | 'parked' | 'recent', repo: string) =>
+const repoKey = (section: 'builds' | 'attention' | 'reviews' | 'issues' | 'waiting' | 'approved' | 'parked' | 'recent', repo: string) =>
   `${section}|${repo}`
 
 const toggleRepo = ($: EngineInterface, key: string, isOpen: boolean) =>
@@ -953,26 +987,57 @@ const togglePr = async ($: EngineInterface, pr: PrRow, isOpen: boolean) => {
   }
 }
 
-const markRead = async ($: EngineInterface, pr: PrRow) => {
-  const kept = (await read($, readChanges))[pr.url] ?? []
-  const fresh = pr.changes.filter(change => !kept.includes(change))
+const markRead = async ($: EngineInterface, row: { url: string; changes: string[] }) => {
+  const kept = (await read($, readChanges))[row.url] ?? []
+  const fresh = row.changes.filter(change => !kept.includes(change))
 
   if (fresh.length === 0) {
     return
   }
 
-  await update($, readChanges, all => ({ ...all, [pr.url]: [...kept, ...fresh] }))
+  const cleared = <T extends { url: string; changes: string[] }>(one: T) => (one.url === row.url ? { ...one, changes: [] } : one)
+  await update($, readChanges, all => ({ ...all, [row.url]: [...kept, ...fresh] }))
   await update($, snapshot, shown =>
-    shown === null ? shown : { ...shown, prs: shown.prs.map(one => (one.url === pr.url ? { ...one, changes: [] } : one)) }
+    shown === null ? shown : { ...shown, prs: shown.prs.map(cleared), issues: shown.issues?.map(cleared) }
   )
-  await prWatch($, ['read', pr.url], 60_000).catch(() => undefined)
+  await prWatch($, ['read', row.url], 60_000).catch(() => undefined)
 }
+
+// An issue is one line until opened, like a PR: opening it reads its changes.
+const toggleIssue = async ($: EngineInterface, issue: IssueRow, isOpen: boolean) => {
+  await update($, openPrs, open => ({ ...open, [issue.url]: !isOpen }))
+
+  if (!isOpen) {
+    await markRead($, issue)
+  }
+}
+
+// Unfollowing only writes in pr-watch's folder: the issue leaves the pane at once, a failure brings it
+// back, and pr-watch's `add` follows it again.
+const unfollowIssue = async ($: EngineInterface, issue: IssueRow) => {
+  await update($, snapshot, shown => (shown === null ? shown : { ...shown, issues: shown.issues?.filter(one => one.url !== issue.url) }))
+  const ran = await prWatch($, ['remove', issue.url], 60_000).catch(error => ({ exitCode: 1, stdout: '', stderr: String(error) }))
+
+  if (ran.exitCode !== 0) {
+    $.ui.toast(`Could not unfollow #${issue.number}: ${ran.stderr.trim().split('\n')[0]}`)
+    await load($, 'cached')
+
+    return
+  }
+
+  $.ui.toast(`No longer following ${issue.repo} #${issue.number} (ask Claude to follow it again)`)
+}
+
+// Yellow: something happened since the user last looked. Gray: nothing new, or closed.
+const issueColor = (issue: IssueRow) => (issue.changes.length > 0 ? 'yellow' : 'gray')
+
+const updatedIssues = (shown: PrSnapshot | null) => (shown?.issues ?? []).filter(issue => issue.changes.length > 0).length
 
 // A line that folds, as drawn now (its default applied), and how deep it sits: a section 0, a repo
 // 1, a PR 2, its CI 3; in a run, a job 0, a step 1. Unfolding or folding all goes through the folds
 // whose content the pane already has: a pipeline run and a failing check's log, read from the host
 // when opened, are left as they are.
-type Fold = { kind: 'repo' | 'recent' | 'pr' | 'ci' | 'step'; key: string; isOpen: boolean; level: number; pr?: PrRow }
+type Fold = { kind: 'repo' | 'recent' | 'pr' | 'ci' | 'step'; key: string; isOpen: boolean; level: number; pr?: PrRow | IssueRow }
 
 const setFolds = async ($: EngineInterface, folds: Fold[], isOpen: boolean) => {
   const changed = folds.filter(fold => fold.isOpen !== isOpen)
@@ -995,7 +1060,8 @@ const setFolds = async ($: EngineInterface, folds: Fold[], isOpen: boolean) => {
 }
 
 // What the band says the user has to do, most urgent first: red, act on a PR; yellow, a review to
-// give, a run in progress or pr-watch not running; green, a PR to merge; nothing, all waits for others.
+// give, a run in progress, an issue that moved or pr-watch not running; green, a PR to merge; nothing,
+// all waits for others.
 const bandTone = (shown: PrSnapshot | null, isBroken: boolean) => {
   const prs = (shown?.prs ?? []).filter(pr => pr.parked !== true)
 
@@ -1003,7 +1069,7 @@ const bandTone = (shown: PrSnapshot | null, isBroken: boolean) => {
     return 'red'
   }
 
-  if (isBroken || (shown?.reviews?.length ?? 0) > 0 || (shown?.builds ?? []).some(isBuildWatched)) {
+  if (isBroken || (shown?.reviews?.length ?? 0) > 0 || (shown?.builds ?? []).some(isBuildWatched) || updatedIssues(shown) > 0) {
     return 'yellow'
   }
 
@@ -1061,7 +1127,9 @@ const start = async ($: EngineInterface) => {
   void reloadCached($)
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  shows = showsOf(options)
+
   on('session.start', async ($, e, next) => {
     await start($)
 
@@ -1091,6 +1159,7 @@ export const register: Register = on => {
     const prs = (shown?.prs ?? []).filter(pr => pr.parked !== true)
     const reviews = shown?.reviews?.length ?? 0
     const running = (shown?.builds ?? []).filter(isBuildWatched).length
+    const moved = updatedIssues(shown)
     const isBroken = (await read($, problem)) !== ''
 
     if (e.props.hasSurvey || e.props.view.agentId !== undefined || isHidden || (!(await read($, isActive)) && !isBroken)) {
@@ -1103,7 +1172,7 @@ export const register: Register = on => {
     const red = redCount(shown)
     const label =
       `${BAND_NAME}${red > 0 ? ` ${red} !` : ''}${reviews > 0 ? ` · ${reviews} to review` : ''}` +
-      `${running > 0 ? ` · ${running} running` : ''}`
+      `${running > 0 ? ` · ${running} running` : ''}${moved > 0 ? ` · ${moved} issue${moved === 1 ? '' : 's'} updated` : ''}`
     const text = isBroken ? `${BAND_NAME} ?` : label
 
     const { rest, buttons } = takeBandRow(beneath)
@@ -1163,6 +1232,13 @@ export const register: Register = on => {
       return kept.length === 0 ? pr : { ...pr, changes: [...kept, ...pr.changes.filter(change => !kept.includes(change))] }
     })
     const reviews = shown?.reviews ?? []
+    // An issue keeps the changes read this session too.
+    const issues = (shown?.issues ?? []).map(issue => {
+      const kept = alreadyRead[issue.url] ?? []
+
+      return kept.length === 0 ? issue : { ...issue, changes: [...kept, ...issue.changes.filter(change => !kept.includes(change))] }
+    })
+    const isIssuesOpen = expanded[repoKey('issues', '*')] ?? false
     const builds = shown?.builds ?? []
     const runningBuilds = builds.filter(isBuildWatched).length
     const isBuildsOpen = expanded[repoKey('builds', '*')] ?? false
@@ -1276,6 +1352,11 @@ export const register: Register = on => {
     const repoFolds = (section: 'builds' | 'reviews' | 'recent', rows: { repo: string }[]) =>
       byRepo(rows).map(([repo]) => repoFold(repoKey(section, repo), 1))
 
+    const issueFold = (issue: IssueRow): Fold => ({ kind: 'pr', key: issue.url, isOpen: openDetails[issue.url] ?? false, level: 2, pr: issue })
+
+    const issueRepoFolds = (rows: IssueRow[]) =>
+      byRepo(rows).flatMap(([repo, ofRepo]) => [repoFold(repoKey('issues', repo), 1), ...ofRepo.map(issueFold)])
+
     // A job, folded unless a step had a problem, then its steps that have messages.
     const jobFold = (url: string, group: ReturnType<typeof byJob>[number], jobIndex: number): Fold[] => {
       const key = stepKey(url, `job-${jobIndex}`)
@@ -1291,11 +1372,12 @@ export const register: Register = on => {
     const jobFolds = (url: string, steps: BuildStep[]) => byJob(steps).flatMap((group, jobIndex) => jobFold(url, group, jobIndex))
 
     // Each section's own fold and the folds under it, for its arrow and the one beside refresh.
-    type Section = 'builds' | 'attention' | 'reviews' | 'waiting' | 'approved' | 'parked' | 'recent'
+    type Section = 'builds' | 'attention' | 'reviews' | 'issues' | 'waiting' | 'approved' | 'parked' | 'recent'
     const sectionFolds: Record<Section, { own: Fold; under: Fold[] }> = {
       builds: { own: repoFold(repoKey('builds', '*'), 0), under: repoFolds('builds', builds) },
       attention: { own: repoFold(repoKey('attention', '*'), 0), under: prRepoFolds('attention', attention) },
       reviews: { own: repoFold(repoKey('reviews', '*'), 0), under: repoFolds('reviews', reviews) },
+      issues: { own: repoFold(repoKey('issues', '*'), 0), under: issueRepoFolds(issues) },
       waiting: { own: repoFold(repoKey('waiting', '*'), 0), under: prRepoFolds('waiting', ours) },
       approved: { own: repoFold(repoKey('approved', '*'), 0), under: prRepoFolds('approved', approved) },
       parked: { own: repoFold(repoKey('parked', '*'), 0), under: prRepoFolds('parked', parked) },
@@ -1305,6 +1387,7 @@ export const register: Register = on => {
       builds.length > 0 && 'builds',
       attention.length > 0 && 'attention',
       reviews.length > 0 && 'reviews',
+      issues.length > 0 && 'issues',
       ours.length > 0 && 'waiting',
       approved.length > 0 && 'approved',
       parked.length > 0 && 'parked',
@@ -1911,6 +1994,91 @@ export const register: Register = on => {
       )
     }
 
+    // A followed issue on one line: a dot (yellow when it moved since the user last looked), its
+    // number, title and state or last activity. Opened, it says who opened it, its labels and
+    // comments, then what changed.
+    const issueRow = (issue: IssueRow, closedBy: string) => {
+      const id = `${issue.repo}-${issue.number}`
+      const isOpen = openDetails[issue.url] ?? false
+      const color = issueColor(issue)
+      const isClosed = issue.state === 'closed'
+      const state = isClosed ? `closed${issue.reason && issue.reason !== 'completed' ? ` (${issue.reason})` : ''}` : 'open'
+      const age = ageText(issue.updated, nowMs)
+      const room = inner - '▸ ● '.length - `#${issue.number} `.length - button('open') - 1
+      const tail = ` · ${state}${age === '' ? '' : ` · ${age}`}`
+      const titleWidth = Math.max(4, room - tail.length)
+      const lit = litGroup(`issue-${id}`)
+      const facts = [`by ${issue.author}`, issue.labels.join(', '), `${issue.comments} comment${issue.comments === 1 ? '' : 's'}`]
+        .filter(part => part !== '')
+        .join(' · ')
+
+      return (
+        <Box key={`issue-${id}`} flexDirection="column" paddingLeft={2}>
+          <Box flexDirection="row" justifyContent="space-between">
+            <Box flexDirection="row" flexShrink={1} overflow="hidden">
+              <Box flexDirection="row" hover={lit.box}>
+                <Button key={`issue-toggle-${id}`} label={isOpen ? '▾' : '▸'} plain hover={lit.text} onPress={() => void toggleIssue($, issue, isOpen)} />
+                <Text hover={lit.text}>
+                  {' '}
+                  <Text color={color} hover={lit.text}>
+                    ●{' '}
+                  </Text>
+                </Text>
+              </Box>
+              <Link href={issue.url} label={`#${issue.number}`} />
+              <Box flexDirection="row" hover={lit.box}>
+                {foldText(
+                  `issue-title-${id}`,
+                  ` ${truncate(issue.title, titleWidth)}${tail}`,
+                  [
+                    <Text bold={!isClosed} dimColor={isClosed} hover={lit.text}>
+                      {' '}
+                      {truncate(issue.title, titleWidth)}
+                    </Text>,
+                    <Text color={issue.changes.length > 0 ? 'yellow' : undefined} dimColor={issue.changes.length === 0} hover={lit.text}>
+                      {tail}
+                    </Text>,
+                  ],
+                  () => void toggleIssue($, issue, isOpen),
+                  lit.text
+                )}
+              </Box>
+            </Box>
+            <Button key={`issue-open-${id}`} label="open" dimColor onPress={() => void openPr($, issue.url)} />
+          </Box>
+          {isOpen && (
+            <Box flexDirection="column" paddingLeft={2}>
+              <Box flexDirection="row" justifyContent="space-between">
+                <Box flexDirection="column" flexShrink={1}>
+                  {wrap(facts, inner - 3 - button('unfollow')).map(line => (
+                    <Text dimColor>{line}</Text>
+                  ))}
+                </Box>
+                <Button key={`issue-unfollow-${id}`} label="unfollow" dimColor onPress={() => void unfollowIssue($, issue)} />
+              </Box>
+              {issue.changes.flatMap(change => wrap(`• ${change}`, inner - 2)).map(line => (
+                <Text color="cyan">{line}</Text>
+              ))}
+              {closingBar(closedBy)}
+            </Box>
+          )}
+        </Box>
+      )
+    }
+
+    // The followed issues of each repo; a folded block says how many moved.
+    const issueBlocks = () =>
+      byRepo(issues).map(([repo, ofRepo]) => {
+        const key = repoKey('issues', repo)
+        const isOpen = expanded[key] ?? false
+        const moved = ofRepo.filter(issue => issue.changes.length > 0).length
+        const hint = !isOpen && moved > 0 ? <Text color="yellow">{` · ${moved} updated`}</Text> : null
+        const buttonKey = `issues-repo-${repo}`
+
+        return repoBlock(key, buttonKey, repo, ofRepo.length, isOpen, hint, () => ofRepo.map(issue => issueRow(issue, `all-${buttonKey}`)),
+          worst(ofRepo.map(issueColor)), ofRepo.map(issueFold))
+      })
+
     // The runs of each repo; a folded one says what it is doing.
     const buildBlocks = () =>
       byRepo(builds).map(([repo, runs]) => {
@@ -2026,7 +2194,24 @@ export const register: Register = on => {
               )}
           </Box>
         )}
-        {shown !== null && prs.length === 0 && <Text dimColor>No PR tracked. Ask Claude to watch one.</Text>}
+        {issues.length > 0 && (
+          <Box flexDirection="column" marginTop={1}>
+            {sectionLine('issues', [
+              <Text color={worst(issues.map(issueColor))}>● </Text>,
+              <Button
+                key="issues"
+                label={`${isIssuesOpen ? '▾' : '▸'} Issues I follow (${issues.length})`}
+                plain
+                onPress={() => void toggleRepo($, repoKey('issues', '*'), isIssuesOpen)}
+              />,
+              !isIssuesOpen && updatedIssues(shown) > 0 && <Text color="yellow"> · {updatedIssues(shown)} updated</Text>,
+            ])}
+            {isIssuesOpen && closingBlock('fold-all', issueBlocks())}
+          </Box>
+        )}
+        {shown !== null && prs.length === 0 && (
+          <Text dimColor>{shows.openPrs || shows.parked ? 'No PR tracked. Ask Claude to watch one.' : 'PRs turned off in the Configuration pane (Mods, pr-pane).'}</Text>
+        )}
         {ours.length > 0 && (
           <Box flexDirection="column" marginTop={1}>
             {sectionLine('waiting', [

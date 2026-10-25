@@ -151,7 +151,7 @@
       "tools": [
         "python3"
       ],
-      "what": "Tracks your PRs until merged: new comments, votes, CI results, merges; your own PRs and review requests too.",
+      "what": "Tracks your PRs until merged: new comments, votes, CI results, merges; your own PRs, review requests and the GitHub issues you follow too.",
       "why": "You know when a PR needs you without refreshing pages.",
       "when": "Each session start, and when you ask.",
       "who": "GitHub (gh) or Azure DevOps (az or a PAT) users."
@@ -163,7 +163,7 @@
       "needs": [
         "pr-watch"
       ],
-      "what": "A /prs pane of the PRs pr-watch tracks: status, CI, what each waits for, open in the browser, live refresh.",
+      "what": "A /prs pane of the PRs pr-watch tracks: status, CI, what each waits for, your runs and followed issues, open in the browser, live refresh.",
       "why": "All your PRs at a glance, colored by what you have to do.",
       "when": "The PRs button above the prompt, or /prs.",
       "who": "pr-watch users."

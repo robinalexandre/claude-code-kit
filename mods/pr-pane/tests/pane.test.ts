@@ -1169,6 +1169,104 @@ test('opening a PR with a new comment reads it: pr-watch clears it, the pane kee
   expect(await bandColor(band)).toBeUndefined()
 })
 
+const issue = (number: string, fields: Record<string, unknown>) => ({
+  url: `https://github.com/o/app/issues/${number}`,
+  repo: 'app',
+  number,
+  title: `Crash ${number}`,
+  author: 'grace',
+  state: 'open',
+  reason: '',
+  labels: ['bug'],
+  comments: 2,
+  updated: '2026-01-01T10:00Z',
+  closed: '',
+  changes: [],
+  ...fields,
+})
+
+test('the issues I follow are listed per repo; one that moved marks the band and is read by opening it', async ($, on) => {
+  mock.clock(on)
+  const calls: string[] = []
+  const issues = [
+    issue('5', { changes: ['new comment by ada: 2.1, on macOS.', 'labeled triage'] }),
+    issue('8', { state: 'closed', reason: 'not planned', labels: [] }),
+  ]
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
+  on('process.run', ($, e) => {
+    calls.push(e.argv.slice(2).join(' '))
+
+    return ran(0, e.argv[2] === 'status' ? JSON.stringify({ live: false, prs: [], issues, errors: [] }) : '')
+  })
+  on('ui.render', () => Fragment({}))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+
+  await $.command.run(RUN)
+  const band = await $.ui.mount({ plugin: 'pr-pane', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
+  const pane = await mountPane($, 'terminal')
+
+  // Something to read, not a problem: yellow, no `!`.
+  expect(await band.find({ key: 'prs', text: 'PRs & CI · 1 issue updated' })).toBeDefined()
+  expect(await bandColor(band)).toBe('yellow')
+  expect(await pane.find({ key: 'issues', text: '▸ Issues I follow (2)' })).toBeDefined()
+  expect(await pane.find({ text: ' · 1 updated' })).toBeDefined()
+  expect(await pane.find({ key: 'issues-repo-app' })).toBeUndefined()
+
+  await pane.press({ key: 'issues' })
+  await pane.press({ key: 'issues-repo-app' })
+
+  expect(await pane.find({ key: 'issue-toggle-app-5', text: '▸' })).toBeDefined()
+  expect(await pane.find({ text: /closed \(not planned\)/ })).toBeDefined()
+  expect(await pane.find({ text: /new comment by ada/ })).toBeUndefined()
+
+  await pane.press({ key: 'issue-title-app-5' })
+
+  expect(calls).toContain('read https://github.com/o/app/issues/5')
+  expect(await pane.find({ text: /by grace · bug · 2 comments/ })).toBeDefined()
+  expect(await pane.find({ text: /new comment by ada: 2\.1, on macOS\./ })).toBeDefined()
+  expect(await bandColor(band)).toBeUndefined()
+
+  await pane.press({ key: 'issue-open-app-8' })
+
+  expect(calls.at(-1)).toBe('open https://github.com/o/app/issues/8')
+
+  // Unfollowed from its details: gone at once, pr-watch records it.
+  await pane.press({ key: 'issue-unfollow-app-5' })
+
+  expect(calls.at(-1)).toBe('remove https://github.com/o/app/issues/5')
+  expect(await pane.find({ key: 'issue-toggle-app-5' })).toBeUndefined()
+  expect(await pane.find({ key: 'issues', text: '▾ Issues I follow (1)' })).toBeDefined()
+})
+
+const SETTINGS_OFF = { parked: false, recent: false, reviews: false, issues: false, runsPerRepo: 1 }
+
+test('what the settings turn off is left out of the pane and the band, and the runs keep to so many per repo', { options: SETTINGS_OFF }, async ($, on) => {
+  mock.clock(on)
+  const everything = {
+    ...BUILDS,
+    prs: [row('1', {}), row('2', { parked: true })],
+    reviews: [{ url: 'https://github.com/o/app/pull/9', repo: 'app', number: '9', title: 'feat: nine', author: 'ada', updated: '2026-01-01T09:00Z' }],
+    issues: [issue('5', { changes: ['labeled triage'] })],
+    recent: [{ url: 'https://github.com/o/app/pull/3', repo: 'app', number: '3', title: 'fix: three', status: 'merged', ended: '2026-01-01T08:00Z' }],
+  }
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
+  on('process.run', ($, e) => ran(0, e.argv[2] === 'status' ? JSON.stringify(everything) : ''))
+  on('ui.render', () => Fragment({}))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+
+  await $.command.run(RUN)
+  const band = await $.ui.mount({ plugin: 'pr-pane', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
+  const pane = await mountPane($, 'terminal')
+
+  expect(await pane.find({ text: /^1 PR · / })).toBeDefined()
+  expect(await pane.find({ key: 'builds', text: '▸ Pipeline runs (2)' })).toBeDefined()
+  expect(await pane.find({ key: 'parked' })).toBeUndefined()
+  expect(await pane.find({ key: 'reviews' })).toBeUndefined()
+  expect(await pane.find({ key: 'issues' })).toBeUndefined()
+  expect(await pane.find({ key: 'recent' })).toBeUndefined()
+  expect(await band.find({ text: /issue/ })).toBeUndefined()
+})
+
 test('with pr-watch installed the band shows PRs & CI before anything is tracked, and again after a /clear', async ($, on) => {
   const clock = mock.clock(on)
   const calls: string[][] = []
