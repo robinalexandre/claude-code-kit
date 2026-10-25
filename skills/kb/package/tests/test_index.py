@@ -30,11 +30,11 @@ def notes(tmp_path: Path) -> Path:
     write(
         root,
         "my-company",
-        "My Company is the user's company. Its bank is [[qonto]].",
+        "My Company is the user's company. Its bank is [[northbank]].",
         title="My Company, the company",
         type="project",
     )
-    write(root, "qonto", "Qonto holds the business account.", title="Qonto bank account")
+    write(root, "northbank", "Northbank holds the business account.", title="Northbank bank account")
     write(
         root,
         "old-accountant",
@@ -58,7 +58,7 @@ def test_update_counts_and_incremental(tmp_path: Path, notes: Path):
     assert stats.chunks_embedded == 4
     stats = index.update(load_notes([notes]), [notes])
     assert (stats.added, stats.changed, stats.unchanged, stats.chunks_embedded) == (0, 0, 4, 0)
-    (notes / "qonto.md").write_text("---\nname: qonto\n---\nQonto, changed.\n")
+    (notes / "northbank.md").write_text("---\nname: northbank\n---\nNorthbank, changed.\n")
     (notes / "old-accountant.md").unlink()
     stats = index.update(load_notes([notes]), [notes])
     assert (stats.changed, stats.removed, stats.unchanged) == (1, 1, 2)
@@ -76,7 +76,7 @@ def test_text_search_finds_exact_words_with_accents_folded(tmp_path: Path, notes
 def test_vector_search_contributes(tmp_path: Path, notes: Path):
     index = make_index(tmp_path, notes)
     hits = index.search("business bank account")
-    assert hits[0].name == "qonto"
+    assert hits[0].name == "northbank"
 
 
 def test_filters(tmp_path: Path, notes: Path):
@@ -93,12 +93,12 @@ def test_filters(tmp_path: Path, notes: Path):
 
 def test_related_walks_links_both_ways(tmp_path: Path, notes: Path):
     index = make_index(tmp_path, notes)
-    nodes, edges = index.related("qonto", depth=2)
+    nodes, edges = index.related("northbank", depth=2)
     by_name = {n["name"]: n["depth"] for n in nodes}
-    assert by_name == {"qonto": 0, "my-company": 1, "acme-accountant": 2}
-    assert set(edges) == {("acme-accountant", "my-company"), ("my-company", "qonto")}
-    nodes, _ = index.related("qonto", depth=1)
-    assert {n["name"] for n in nodes} == {"qonto", "my-company"}
+    assert by_name == {"northbank": 0, "my-company": 1, "acme-accountant": 2}
+    assert set(edges) == {("acme-accountant", "my-company"), ("my-company", "northbank")}
+    nodes, _ = index.related("northbank", depth=1)
+    assert {n["name"] for n in nodes} == {"northbank", "my-company"}
 
 
 def test_dangling_link_reported(tmp_path: Path, notes: Path):

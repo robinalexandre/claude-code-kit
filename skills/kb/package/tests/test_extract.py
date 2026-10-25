@@ -17,7 +17,7 @@ def line(kind: str, content, hour: int = 10, **extra) -> str:
     record = {
         "type": kind,
         "message": {"role": kind, "content": content},
-        "cwd": "/home/alex/dev/home-agent",
+        "cwd": "/home/me/dev/my-app",
         "gitBranch": "feat/kb",
         "timestamp": stamp(hour),
         "entrypoint": "cli",
@@ -28,7 +28,7 @@ def line(kind: str, content, hour: int = 10, **extra) -> str:
 
 
 def write_transcript(projects: Path, session: str, lines: list[str]) -> Path:
-    folder = projects / "-home-alex-dev-home-agent"
+    folder = projects / "-home-me-dev-my-app"
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"{session}.jsonl"
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -47,7 +47,7 @@ def test_extract_day_keeps_dialogue_and_drops_tool_output(tmp_path: Path):
                 {
                     "type": "tool_use",
                     "name": "Edit",
-                    "input": {"file_path": "/home/alex/dev/home-agent/kb/index.py"},
+                    "input": {"file_path": "/home/me/dev/my-app/kb/index.py"},
                 },
                 {"type": "tool_use", "name": "Read", "input": {"file_path": "/x"}},
             ],
@@ -63,25 +63,25 @@ def test_extract_day_keeps_dialogue_and_drops_tool_output(tmp_path: Path):
         line("user", "sidechain noise", hour=11, isSidechain=True),
         line("user", "yesterday's message", hour=-5),
         json.dumps(
-            {"type": "pr-link", "prRepository": "robinalexandre/home-agent", "prNumber": 12}
+            {"type": "pr-link", "prRepository": "someone/my-app", "prNumber": 12}
         ),
     ]
     write_transcript(projects, "abcdef12-0000", lines)
     out = tmp_path / "out"
-    summary = extract_day(DAY, projects, out, dev_root=Path("/home/alex/dev"))
+    summary = extract_day(DAY, projects, out, dev_root=Path("/home/me/dev"))
 
     assert len(summary.sessions) == 1
     session = summary.sessions[0]
-    assert session.repo == "home-agent"
+    assert session.repo == "my-app"
     assert session.title == "Build the knowledge base"
     assert session.user_messages == 2
     assert session.assistant_messages == 2
     assert session.tool_results == 1
-    assert session.files_edited == ["/home/alex/dev/home-agent/kb/index.py"]
-    assert session.prs == ["robinalexandre/home-agent#12"]
+    assert session.files_edited == ["/home/me/dev/my-app/kb/index.py"]
+    assert session.prs == ["someone/my-app#12"]
     assert dict(session.tools) == {"Edit": 1, "Read": 1}
 
-    text = (summary.out_dir / "home-agent--abcdef12.md").read_text()
+    text = (summary.out_dir / "my-app--abcdef12.md").read_text()
     assert "ghp___SECRET__" in text
     assert "ghp_abcdefghijklmnop1234" not in text
     assert "huge output" not in text
@@ -91,14 +91,14 @@ def test_extract_day_keeps_dialogue_and_drops_tool_output(tmp_path: Path):
     assert "**User (11:00):** merci" in text
     assert "_[tools: Edit, Read]_" in text
     index = (summary.out_dir / "index.md").read_text()
-    assert "1 sessions in 1 repositories: home-agent (1)" in index
-    assert "PRs robinalexandre/home-agent#12" in index
+    assert "1 sessions in 1 repositories: my-app (1)" in index
+    assert "PRs someone/my-app#12" in index
 
 
 def test_scripted_sessions_and_empty_days_are_skipped(tmp_path: Path):
     projects = tmp_path / "projects"
     write_transcript(projects, "sdk", [line("user", "automated", entrypoint="sdk-py")])
-    summary = extract_day(DAY, projects, tmp_path / "out", dev_root=Path("/home/alex/dev"))
+    summary = extract_day(DAY, projects, tmp_path / "out", dev_root=Path("/home/me/dev"))
     assert summary.sessions == []
     assert "No session that day." in (summary.out_dir / "index.md").read_text()
 
@@ -110,12 +110,12 @@ def test_read_session_outside_dev_root_uses_last_folders(tmp_path: Path):
     session = read_session(path, start, start + timedelta(days=1), Path("/elsewhere"))
     assert session is not None
     assert session.repo == "Documents/Code"
-    path = write_transcript(projects, "s2", [line("user", "hi", cwd="/home/alex/dev")])
-    session = read_session(path, start, start + timedelta(days=1), Path("/home/alex/dev"))
+    path = write_transcript(projects, "s2", [line("user", "hi", cwd="/home/me/dev")])
+    session = read_session(path, start, start + timedelta(days=1), Path("/home/me/dev"))
     assert session is not None and session.repo == "dev"
 
 
-def test_config_sync_log_keeps_meaningful_files_only(tmp_path: Path):
+def test_config_sync_log_keeps_meaningful_files_only(tmp_path: Path, monkeypatch):
     import shutil
     import subprocess
 
@@ -145,17 +145,29 @@ def test_config_sync_log_keeps_meaningful_files_only(tmp_path: Path):
     (repo / "pr-watch").mkdir()
     (repo / "reminders" / "2026-10-22-call-lea.md").write_text("call")
     (repo / "pr-watch" / "builds.json").write_text("{}")
+    project = repo / "repos" / "github.com" / "someone" / "my-app"
+    (project / ".claude").mkdir(parents=True)
+    (project / "CLAUDE.md").write_text("rules")
+    (project / ".claude" / "publish-state.json").write_text("{}")
     git("add", "-A")
     git("commit", "-q", "-m", "chore(sync): update from mac")
-    (repo / "jarvis").mkdir()
-    (repo / "jarvis" / "memory.md").write_text("fact")
+    (repo / "assistant").mkdir()
+    (repo / "assistant" / "memory.md").write_text("fact")
     git("add", "-A")
-    git("commit", "-q", "-m", "chore(sync): jarvis remembers a fact")
+    git("commit", "-q", "-m", "chore(sync): the assistant remembers a fact")
 
+    monkeypatch.delenv("KB_SYNC_FOLDERS", raising=False)
     text = config_sync_log(DAY, repo)
     assert "added reminders/2026-10-22-call-lea.md" in text
-    assert "added jarvis/memory.md" in text
-    assert "jarvis remembers a fact" in text
+    assert "added repos/github.com/someone/my-app/CLAUDE.md" in text
+    assert "publish-state" not in text
+    assert "assistant/memory.md" not in text
+    assert "pr-watch" not in text
+
+    monkeypatch.setenv("KB_SYNC_FOLDERS", "notes-box, assistant/")
+    text = config_sync_log(DAY, repo)
+    assert "added assistant/memory.md" in text
+    assert "the assistant remembers a fact" in text
     assert "pr-watch" not in text
     assert config_sync_log(DAY + timedelta(days=3), repo) == ""
     assert config_sync_log(DAY, tmp_path / "nope") == ""

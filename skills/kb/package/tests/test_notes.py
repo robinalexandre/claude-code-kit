@@ -3,8 +3,8 @@ from pathlib import Path
 from kb.notes import Note, iter_note_files, parse_front_matter, parse_note, slugify
 
 CLAUDE_MEMORY = """---
-name: vps-layout
-description: Where home-agent runs and what must not be touched there
+name: server-layout
+description: Where my-app runs and what must not be touched there
 metadata:
   node_type: memory
   type: project
@@ -12,7 +12,7 @@ metadata:
   modified: 2026-10-22T14:46:40.018Z
 ---
 
-home-agent runs on the shared VPS. See [[push-main-allowed]] and [[Takoon Bot|takoon-bot]].
+my-app runs on the shared server. See [[deploy-rules]] and [[Mail Bot|mail-bot]].
 """
 
 KB_NOTE = """---
@@ -32,14 +32,14 @@ Mails from Acme Books concern My Company or the holding.
 
 
 def test_claude_code_memory_reads_as_a_note():
-    note = parse_note(CLAUDE_MEMORY, Path("/x/vps-layout.md"))
-    assert note.name == "vps-layout"
-    assert note.title.startswith("Where home-agent runs")
+    note = parse_note(CLAUDE_MEMORY, Path("/x/server-layout.md"))
+    assert note.name == "server-layout"
+    assert note.title.startswith("Where my-app runs")
     assert note.type == "project"
     assert note.created == "2026-10-22"
     assert note.source == "b9d6bd51"
-    assert note.links == ["push-main-allowed", "Takoon Bot"]
-    assert note.body.startswith("home-agent runs")
+    assert note.links == ["deploy-rules", "Mail Bot"]
+    assert note.body.startswith("my-app runs")
 
 
 def test_kb_note_fields():

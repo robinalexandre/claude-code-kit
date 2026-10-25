@@ -25,10 +25,13 @@ MAX_MESSAGE_CHARS = 3000
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 SYNC_LOG = "config-sync.md"
 # Folders of the config sync whose changes mean something happened to the user: reminders
-# left or closed, handoffs, the agent's tasks and memory, notes, config. State files,
-# PR-watch snapshots and inventories are machine noise.
-SYNC_FOLDERS = ("reminders/", "handoffs/", "jarvis/", "knowledge/", "memory", "mcp/")
-SYNC_FILES = re.compile(r"^claude/(CLAUDE\.md|skills/[^/]+/SKILL\.md)$")
+# left or closed, handoffs, notes, config, every repo's agent docs, plus KB_SYNC_FOLDERS (an
+# assistant's own folder). State files, PR-watch snapshots and inventories are machine noise.
+SYNC_FOLDERS = ("reminders/", "handoffs/", "knowledge/", "memory", "mcp/")
+SYNC_FILES = re.compile(
+    r"^(claude/(CLAUDE\.md|skills/[^/]+/SKILL\.md)"
+    r"|(repos|folders)/.+/((CLAUDE|CLAUDE\.local|AGENTS)\.md|\.claude/.+\.md))$"
+)
 MAX_SYNC_LINES = 150
 SECRET = re.compile(
     r"(?P<p1>ghp_|gho_|github_pat_|sk-ant-[a-z0-9-]*|sk-[A-Za-z0-9]{2,}-|AKIA|xox[abp]-)"
@@ -145,6 +148,8 @@ def config_sync_log(day: date, sync_dir: Path) -> str:
         )
     except (OSError, subprocess.TimeoutExpired):
         return ""
+    extra = re.split(r"[\s,;:]+", os.environ.get("KB_SYNC_FOLDERS", ""))
+    folders = SYNC_FOLDERS + tuple(f.rstrip("/") + "/" for f in extra if f.strip("/"))
     lines: list[str] = []
     stamp = ""
     for raw in proc.stdout.splitlines():
@@ -159,7 +164,7 @@ def config_sync_log(day: date, sync_dir: Path) -> str:
         if len(parts) < 2:
             continue
         status, path = parts[0][:1], parts[-1]
-        if not (path.startswith(SYNC_FOLDERS) or SYNC_FILES.match(path)):
+        if not (path.startswith(folders) or SYNC_FILES.match(path)):
             continue
         verb = {"A": "added", "D": "removed", "M": "changed", "R": "renamed"}.get(status, status)
         lines.append(f"- {stamp}: {verb} {path}")

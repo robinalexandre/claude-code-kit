@@ -27,9 +27,9 @@ def base(tmp_path: Path, monkeypatch) -> Path:
         "---\nname: acme\ntitle: Acme Books accountant\ntopics: [compta]\n---\n"
         "Acme Books est le cabinet comptable. Contact Sam. " + "Long text. " * 100 + "\n"
     )
-    (notes / "qonto.md").write_text(
-        "---\nname: qonto\ntitle: Qonto account\ntopics: [compta, banque]\n---\n"
-        "Qonto holds the business account. See [[acme]].\n"
+    (notes / "northbank.md").write_text(
+        "---\nname: northbank\ntitle: Northbank account\ntopics: [compta, banque]\n---\n"
+        "Northbank holds the business account. See [[acme]].\n"
     )
     (notes / "surf.md").write_text("---\nname: surf\ntitle: Surf spots\n---\nWaves and wind.\n")
     monkeypatch.setenv("KB_NOTES", str(notes))
@@ -55,25 +55,25 @@ def test_text_search_never_loads_the_model(base, capsys, monkeypatch):
 def test_auto_mode_falls_back_to_hybrid(base, capsys):
     code, out = run(capsys, "--json", "search", "business bank")
     assert code == 0
-    assert json.loads(out)[0]["name"] == "qonto"
+    assert json.loads(out)[0]["name"] == "northbank"
 
 
 def test_show_brief_and_several(base, capsys):
-    code, out = run(capsys, "show", "--brief", "acme", "qonto")
+    code, out = run(capsys, "show", "--brief", "acme", "northbank")
     assert code == 0
     assert out.startswith("# acme  [fact, agent]  Acme Books accountant")
     assert "topics: compta" in out
     assert "[…]" in out and len(out) < 1200
-    assert "# qonto" in out
+    assert "# northbank" in out
     code, out = run(capsys, "show", "nope")
     assert code == 1 and "Unknown note: nope" in out
 
 
 def test_related_lists_links_then_topics(base, capsys):
-    code, out = run(capsys, "related", "qonto")
+    code, out = run(capsys, "related", "northbank")
     assert code == 0
     lines = out.splitlines()
-    assert lines[0].startswith("qonto  [fact]")
+    assert lines[0].startswith("northbank  [fact]")
     assert lines[1].startswith("  acme  [fact]")
     assert "Same topics:" not in out
     code, out = run(capsys, "related", "acme")

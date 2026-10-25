@@ -19,15 +19,15 @@ def notes(tmp_path: Path) -> Path:
     root.mkdir()
     (root / "acme.md").write_text(
         "---\nname: acme\ntitle: Acme Books accountant\ntype: fact\ntrust: user\n"
-        "topics: [compta]\n---\nAcme Books est le cabinet comptable. See [[qonto]].\n"
+        "topics: [compta]\n---\nAcme Books est le cabinet comptable. See [[northbank]].\n"
     )
-    (root / "qonto.md").write_text(
-        "---\nname: qonto\ntitle: Qonto account\ntopics: [compta, banque]\n"
-        'source: "curator, session:abcd"\n---\nQonto holds the business account.\n'
+    (root / "northbank.md").write_text(
+        "---\nname: northbank\ntitle: Northbank account\ntopics: [compta, banque]\n"
+        'source: "curator, session:abcd"\n---\nNorthbank holds the business account.\n'
     )
     (root / "rumor.md").write_text(
         "---\nname: rumor\ntitle: What the newsletter said\ntrust: third-party\n---\n"
-        "The newsletter says Qonto raises its fees.\n"
+        "The newsletter says Northbank raises its fees.\n"
     )
     return root
 
@@ -72,18 +72,18 @@ def test_search_related_and_notes(server):
     assert names[0] == "acme" and "rumor" not in names
     assert data["hits"][0]["source"] == ""
 
-    status, data = get(base, "/search?q=qonto&mode=text&n=1")
+    status, data = get(base, "/search?q=northbank&mode=text&n=1")
     assert status == 200 and len(data["hits"]) == 1
     assert data["hits"][0]["source"].startswith("curator")
 
     status, data = get(base, "/related?name=acme&depth=1")
-    assert status == 200 and {n["name"] for n in data["nodes"]} == {"acme", "qonto"}
-    assert data["edges"] == [["acme", "qonto"]]
+    assert status == 200 and {n["name"] for n in data["nodes"]} == {"acme", "northbank"}
+    assert data["edges"] == [["acme", "northbank"]]
 
-    status, note = get(base, "/notes/qonto")
-    assert status == 200 and note["title"] == "Qonto account"
+    status, note = get(base, "/notes/northbank")
+    assert status == 200 and note["title"] == "Northbank account"
     assert note["topics"] == ["compta", "banque"]
-    assert "hash" not in note and "Qonto holds" in note["body"]
+    assert "hash" not in note and "Northbank holds" in note["body"]
     assert get(base, "/notes/nobody")[0] == 404
 
 
@@ -94,7 +94,7 @@ def test_bad_requests_are_400_and_limits_are_clamped(server):
     assert get(base, "/search?q=x&n=abc")[0] == 400
     assert get(base, "/related")[0] == 400
     assert get(base, "/elsewhere")[0] == 404
-    status, data = get(base, "/search?q=qonto&n=9999&mode=text")
+    status, data = get(base, "/search?q=northbank&n=9999&mode=text")
     assert status == 200 and len(data["hits"]) <= 30
 
 

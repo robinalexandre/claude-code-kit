@@ -7,7 +7,7 @@ every search, semantic ones included, answers in a fraction of a second.
 
 Routes, all GET and JSON:
 
-- ``/search?q=…&n=8&type=decision&topic=qonto&trust=user&mode=auto|text|hybrid&all=1``
+- ``/search?q=…&n=8&type=decision&topic=billing&trust=user&mode=auto|text|hybrid&all=1``
 - ``/related?name=…&depth=2``
 - ``/notes/<name>``: one note, front matter and body
 - ``/stats``

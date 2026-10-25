@@ -83,7 +83,9 @@ Settings, as options or environment variables (the hook and `morning.sh` also re
 is where the curator writes) / `KB_NOTES` (several folders separated by the OS path separator),
 `--db FILE` / `KB_DB` (default `~/.claude/kb/index.sqlite`), `--embed fastembed|hash|none` /
 `KB_EMBED`, `KB_EMBED_MODEL`, `KB_MODEL_DIR`, `KB_CURATE_MODEL` (default `sonnet`),
-`KB_CURATE_MAX` (new notes per day, default 15), `KB_BIN` (the `kb` the hooks run). Every
+`KB_CURATE_MAX` (new notes per day, default 15), `KB_SYNC_FOLDERS` (more folders of the
+config sync whose changes the curator reads, such as an assistant's own folder, separated by
+spaces or commas; asked by the setup), `KB_BIN` (the `kb` the hooks run). Every
 command takes `--json` for other programs and agents.
 
 `kb extract` reads `~/.claude/projects/*/*.jsonl`, keeps the user's prompts, the

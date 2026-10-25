@@ -12,8 +12,8 @@ def transcripts(tmp_path: Path) -> Path:
     root = tmp_path / "transcripts" / DAY.isoformat()
     root.mkdir(parents=True)
     (root / "index.md").write_text("# sessions\n")
-    (root / "home-agent--abcd1234.md").write_text(
-        "---\nsession: abcd1234\nrepo: home-agent\n---\n\n**User (10:00):** on garde SQLite\n"
+    (root / "my-app--abcd1234.md").write_text(
+        "---\nsession: abcd1234\nrepo: my-app\n---\n\n**User (10:00):** on garde SQLite\n"
     )
     return tmp_path / "transcripts"
 
@@ -25,9 +25,9 @@ def proposals_json(*items: dict) -> str:
 def test_creates_merges_caps_and_reports(tmp_path: Path):
     notes = tmp_path / "knowledge"
     notes.mkdir()
-    (notes / "qonto.md").write_text(
-        "---\nname: qonto\ntitle: Qonto account\ntopics: [banque]\n---\n\n"
-        "Qonto holds the account.\n"
+    (notes / "northbank.md").write_text(
+        "---\nname: northbank\ntitle: Northbank account\ntopics: [banque]\n---\n\n"
+        "Northbank holds the account.\n"
     )
     calls = []
 
@@ -40,15 +40,15 @@ def test_creates_merges_caps_and_reports(tmp_path: Path):
                 "title": "SQLite chosen for the knowledge base",
                 "type": "decision",
                 "trust": "user",
-                "topics": ["home-agent", "KB"],
-                "links": ["qonto", "Missing Note"],
+                "topics": ["my-app", "KB"],
+                "links": ["northbank", "Missing Note"],
                 "sources": ["abcd1234"],
                 "body": "On 2026-10-22 the user chose SQLite over a graph database.",
             },
             {
                 "action": "merge",
-                "name": "qonto",
-                "title": "Qonto receipts",
+                "name": "northbank",
+                "title": "Northbank receipts",
                 "topics": ["compta"],
                 "links": ["kb-storage-choice"],
                 "valid_until": "2027-01-01",
@@ -77,24 +77,24 @@ def test_creates_merges_caps_and_reports(tmp_path: Path):
 
     assert report.batches == 2 and report.proposals == 6
     system, material = calls[0]
-    assert "at most 1 notes" in system and "qonto — Qonto account" in material
+    assert "at most 1 notes" in system and "northbank — Northbank account" in material
     assert "on garde SQLite" in material
     assert report.created == ["kb-storage-choice: SQLite chosen for the knowledge base"]
-    assert report.merged == ["qonto: Qonto receipts"]
+    assert report.merged == ["northbank: Northbank receipts"]
     assert [d.split(":")[0] for d in report.dropped] == ["second", "leak", "kb-storage-choice", "?"]
 
     created = load_note(notes / "kb-storage-choice.md")
     assert created.type == "decision" and created.trust == "user"
-    assert created.topics == ["home-agent", "kb"]
-    assert created.links == ["qonto"]
+    assert created.topics == ["my-app", "kb"]
+    assert created.links == ["northbank"]
     assert created.created == "2026-10-22" and created.source == "curator, session:abcd1234"
 
-    merged = load_note(notes / "qonto.md")
+    merged = load_note(notes / "northbank.md")
     assert "## 2026-10-22" in merged.body and "Receipts are attached" in merged.body
     assert "[[kb-storage-choice]]" in merged.body
     assert merged.topics == ["banque", "compta"]
     assert merged.valid_until == "2027-01-01"
-    assert merged.title == "Qonto account"
+    assert merged.title == "Northbank account"
 
     report_file = notes / ".curator" / "2026-10-22.md"
     assert report_file.exists()
@@ -105,10 +105,10 @@ def test_readonly_memory_is_listed_linked_never_written(tmp_path: Path):
     notes = tmp_path / "knowledge"
     memory = tmp_path / "memory"
     memory.mkdir()
-    (memory / "vps-layout.md").write_text(
-        "---\nname: vps-layout\ndescription: Where home-agent runs\n---\n\nOn the VPS.\n"
+    (memory / "server-layout.md").write_text(
+        "---\nname: server-layout\ndescription: Where my-app runs\n---\n\nOn the server.\n"
     )
-    before = (memory / "vps-layout.md").read_text()
+    before = (memory / "server-layout.md").read_text()
     calls = []
 
     def runner(system: str, material: str) -> str:
@@ -117,26 +117,26 @@ def test_readonly_memory_is_listed_linked_never_written(tmp_path: Path):
             [
                 {
                     "action": "merge",
-                    "name": "vps-layout",
-                    "title": "WAHA moved to the VPS",
+                    "name": "server-layout",
+                    "title": "Mail bot moved to the server",
                     "type": "event",
-                    "body": "On 2026-10-22 the WAHA moved there.",
+                    "body": "On 2026-10-22 the mail bot moved there.",
                 }
             ]
         )
 
     report = curate_day(DAY, notes, runner, transcripts(tmp_path), readonly_roots=[memory])
-    assert "vps-layout — Where home-agent runs (memory, link only)" in calls[0]
-    assert (memory / "vps-layout.md").read_text() == before
-    assert report.created == ["waha-moved-to-the-vps: WAHA moved to the VPS"]
-    note = load_note(notes / "waha-moved-to-the-vps.md")
-    assert note.links == ["vps-layout"]
+    assert "server-layout — Where my-app runs (memory, link only)" in calls[0]
+    assert (memory / "server-layout.md").read_text() == before
+    assert report.created == ["mail-bot-moved-to-the-server: Mail bot moved to the server"]
+    note = load_note(notes / "mail-bot-moved-to-the-server.md")
+    assert note.links == ["server-layout"]
 
 
 def test_selection_pass_keeps_the_ranked_notes_and_every_merge(tmp_path: Path):
     notes = tmp_path / "knowledge"
     notes.mkdir()
-    (notes / "qonto.md").write_text("---\nname: qonto\ntitle: Qonto\n---\n\nBank.\n")
+    (notes / "northbank.md").write_text("---\nname: northbank\ntitle: Northbank\n---\n\nBank.\n")
     systems = []
 
     def runner(system: str, material: str) -> str:
@@ -155,14 +155,14 @@ def test_selection_pass_keeps_the_ranked_notes_and_every_merge(tmp_path: Path):
                 },
                 {"action": "create", "name": "b", "title": "B", "body": "Body b."},
                 {"action": "create", "name": "c", "title": "C", "body": "Body c."},
-                {"action": "merge", "name": "qonto", "title": "Q", "body": "More."},
+                {"action": "merge", "name": "northbank", "title": "Q", "body": "More."},
             ]
         )
 
     report = curate_day(DAY, notes, runner, transcripts(tmp_path), max_new=2)
     assert report.batches == 2
     assert report.created == ["c: C", "a: A"]
-    assert report.merged == ["qonto: Q"]
+    assert report.merged == ["northbank: Q"]
     assert report.dropped == ["b: not kept by the ranking"]
     assert not (notes / "b.md").exists()
     assert load_note(notes / "a.md").links == ["c"]
