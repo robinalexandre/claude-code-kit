@@ -1,6 +1,6 @@
 import type { Register } from 'claude-code'
 
-const TAG = '[wave-check]'
+const TAG = '[drift-check]'
 
 export const checkPrompt = (marker: string) =>
   [

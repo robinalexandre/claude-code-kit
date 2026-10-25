@@ -22,8 +22,8 @@ Every part is a plugin of this repo's marketplace. Add it once, then install the
 /plugin install paste-preview@claude-code-kit
 /plugin install recent-activity@claude-code-kit
 /plugin install session-registry@claude-code-kit
-/plugin install wave-check@claude-code-kit
-/plugin install wave-check-hook@claude-code-kit
+/plugin install drift-check@claude-code-kit
+/plugin install drift-check-hook@claude-code-kit
 /plugin install nocturne-notify@claude-code-kit
 
 # Development work
@@ -60,7 +60,7 @@ From a terminal it's the same with `claude plugin marketplace add …` and `clau
 
 By hand: `claude plugin marketplace update claude-code-kit`, then `claude plugin update <part>@claude-code-kit`.
 
-**Setup:** a part that needs a few answers (the status line in your settings, the emails for the email guard, where pr-watch looks, the phone for reminders, your private repo for config-sync, the zsh line for session-registry) says so at the first session after install, and Claude gives you the command to run in your terminal; it stops asking once it's done or you say no. Options: the language of the team rules and the emoji of wave-check are asked when you install from `/plugin`, and changed with `claude plugin configure <part>@claude-code-kit`.
+**Setup:** a part that needs a few answers (the status line in your settings, the emails for the email guard, where pr-watch looks, the phone for reminders, your private repo for config-sync, the zsh line for session-registry) says so at the first session after install, and Claude gives you the command to run in your terminal; it stops asking once it's done or you say no. Options: the language of the team rules and the emoji of drift-check are asked when you install from `/plugin`, and changed with `claude plugin configure <part>@claude-code-kit`.
 
 ### With install.sh
 
@@ -126,7 +126,7 @@ Mods change Claude Code's own interface. They install as plugins like the other 
 | [recent-prompts](mods/recent-prompts) | Shows your last two messages above the prompt, and a searchable history pane; click one to scroll the transcript to it. With the learn mod, the history also lists each 💡 lesson between the messages it answered. |
 | [dnd](mods/dnd) | Do not disturb for the [recent-prompts](mods/recent-prompts), [pr-pane](mods/pr-pane) and [reminders-handoffs](mods/reminders-handoffs) panes. A profile hides a pane (its band button too), or keeps only some repos, reminder groups or handoff repos, `@here` being the session's own repo; counts and colors follow what is kept. Turn one on by hand with `/dnd work 1h` or by asking Claude, for this session, this computer or all computers (asked when you don't say; the [status line](#status-line) shows `🔕 work · session` while one is on), or let a rule turn it on: a Wi-Fi network, days and hours (`days=weekend`, `from=19:00 to=08:00`), a folder (a repo shows only its own). A `Configuration` button at the right of the band, `/configuration` and `/dnd` open the Configuration pane on its Do not disturb tab: a press per profile asks until when and where, then `Activate` turns it on; a name creates one, and each profile unfolds to what it keeps (a checklist) and the rules that turn it on; `dnd.sh edit <profile>` is the same checklist on a terminal, with the installer's keys. Profiles live in the sync repo when there is one, so every computer gets them. Offered only beside one of those panes. |
 | [learn](mods/learn) | Learn while working: when the work touches security (the attack a line stops or lets in), an architecture choice and its cost, a design pattern or a performance trap, Claude ends its reply with a short "💡 Learn:" block quoting the real code (`file:line`, or a small before/after), never a lecture, and nothing on most turns. `/learn off|brief|normal|deep` sets it for the session (`brief`: one point, for security or a lasting decision; `deep`: up to three, with the trade-off and a reference), `/learn default <level>` for new sessions; the status line shows it as 💡 and the level name. The lessons stay in the chat, never in your repos. |
-| [wave-check](mods/wave-check) | When a reply doesn't start with your marker emoji, asks Claude to check that reply against your `CLAUDE.md` and fix what slipped. |
+| [drift-check](mods/drift-check) | When a reply doesn't start with your marker emoji, asks Claude to check that reply against your `CLAUDE.md` and fix what slipped. Formerly `wave-check`: `/plugin uninstall wave-check@claude-code-kit`, then install `drift-check`. |
 
 ### Hooks
 
@@ -136,7 +136,7 @@ Mods change Claude Code's own interface. They install as plugins like the other 
 | [file-tools-guard](hooks/file-tools-guard.sh) | PreToolUse (Bash) | Denies shell workarounds for files (`cat`/`head`/`tail` to read, `sed -i`, `sed -n`, heredocs, `cat > file`, `python -c`) so Claude uses its Read, Edit and Write tools. Pipelines are still allowed. |
 | [recent-activity](hooks/recent-activity.sh) | Stop, SessionStart | Keeps a small record of each session under your dev folder (`CLAUDE_DEV_ROOT`, default `~/dev`) and starts every session with a digest of the last 14 days: titles, branches, PRs, last asks. Lets Claude resolve "the bug from yesterday" across repos. |
 | [session-registry](hooks/session-registry.sh) + [claude-resume-here.zsh](hooks/claude-resume-here.zsh) | SessionStart, SessionEnd | Records open sessions. In a new JetBrains or Ghostty terminal tab (zsh), lists the sessions left open in that folder by title (the `/rename` title, else the first prompt) with a brief (prompts, last use, last prompt): check the ones to resume, forget the rest or leave them for the next tab. |
-| [wave-check-hook](hooks/wave-check.sh) | UserPromptSubmit, Stop | Warns when a reply didn't start with your marker emoji, and reminds Claude on the next prompt. |
+| [drift-check-hook](hooks/drift-check.sh) | UserPromptSubmit, Stop | Warns when a reply didn't start with your marker emoji, and reminds Claude on the next prompt. Formerly `wave-check-hook`. |
 | [nocturne-notify](hooks/nocturne-notify.sh) | most events | Sends Claude's state to [Agent Nocturne](https://github.com/taekchef/agent-nocturne) (keyboard-backlight signals) without the ~2 s per tool call its own adapter adds. |
 
 ### Status line
@@ -157,7 +157,7 @@ Built alongside the kit, in their own repos:
 
 ## The marker emoji
 
-The wave-check mod and hook rest on one line in `~/.claude/CLAUDE.md`: "Start every message with 🌊" (or any emoji you like). A reply without it is a cheap, visible sign that Claude has started to drift from your instructions, usually deep in a long task. The installer asks for your emoji, stores it as `CLAUDE_REPLY_MARKER` in the `env` of `~/.claude/settings.json` and offers to add the rule to your `CLAUDE.md`. Until the variable is set, both parts stay idle.
+The drift-check mod and hook rest on one line in `~/.claude/CLAUDE.md`: "Start every message with 🌊" (or any emoji you like). A reply without it is a cheap, visible sign that Claude has started to drift from your instructions, usually deep in a long task. The installer asks for your emoji, stores it as `CLAUDE_REPLY_MARKER` in the `env` of `~/.claude/settings.json` and offers to add the rule to your `CLAUDE.md`. Until the variable is set, both parts stay idle.
 
 ## Installing by hand
 

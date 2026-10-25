@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"__HOME__/.claude/hooks/wave-check.sh\" prompt 2>/dev/null || true",
+            "command": "bash \"__HOME__/.claude/hooks/drift-check.sh\" prompt 2>/dev/null || true",
             "timeout": 5
           }
         ]
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"__HOME__/.claude/hooks/wave-check.sh\" stop 2>/dev/null || true",
+            "command": "bash \"__HOME__/.claude/hooks/drift-check.sh\" stop 2>/dev/null || true",
             "timeout": 5
           }
         ]

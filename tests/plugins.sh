@@ -106,8 +106,8 @@ out=$(run_event config-sync SessionStart)
 check "config-sync: offers to set up the sync" '[[ "$out" == *"config-sync plugin is installed but not set up"* && "$out" == *"sync/setup.sh"* ]]'
 out=$(run_event daily-sync SessionStart)
 check "daily-sync: offers its setup" '[[ "$out" == *"daily-sync plugin is installed but not set up"* ]]'
-out=$(run_event wave-check-hook UserPromptSubmit)
-check "wave-check-hook: idle with no marker" '[ -z "$out" ]'
+out=$(run_event drift-check-hook UserPromptSubmit)
+check "drift-check-hook: idle with no marker" '[ -z "$out" ]'
 
 # A second computer: what the setup leaves came with the config sync, so nothing is asked.
 mkdir -p "$HOME/.claude-sync/pr-watch" && echo '{}' > "$HOME/.claude-sync/pr-watch/config.json"

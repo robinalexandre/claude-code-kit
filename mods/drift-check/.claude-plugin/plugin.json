@@ -1,6 +1,6 @@
 {
-  "name": "wave-check",
-  "version": "0.3.0",
+  "name": "drift-check",
+  "version": "0.4.0",
   "description": "When a reply does not start with your marker emoji (CLAUDE_REPLY_MARKER), asks Claude to check that reply against CLAUDE.md and fix what slipped.",
   "author": {
     "name": "robinalexandre",

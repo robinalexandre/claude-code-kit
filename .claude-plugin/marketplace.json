@@ -190,15 +190,15 @@
       }
     },
     {
-      "name": "wave-check",
+      "name": "drift-check",
       "description": "When a reply doesn't start with your marker emoji, asks Claude to check it against your CLAUDE.md and fix what slipped.",
       "category": "productivity",
-      "source": "./mods/wave-check"
+      "source": "./mods/drift-check"
     },
     {
-      "name": "wave-check-hook",
-      "description": "A warning whenever a reply doesn't start with your marker emoji (the hook form of wave-check, for setups without mods).",
-      "version": "1.0.2",
+      "name": "drift-check-hook",
+      "description": "A warning whenever a reply doesn't start with your marker emoji (the hook form of drift-check, for setups without mods).",
+      "version": "1.1.0",
       "category": "productivity",
       "source": ".",
       "strict": false,
@@ -219,7 +219,7 @@
             "hooks": [
               {
                 "type": "command",
-                "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/wave-check.sh\" prompt 2>/dev/null || true",
+                "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/drift-check.sh\" prompt 2>/dev/null || true",
                 "timeout": 5
               }
             ]
@@ -230,7 +230,7 @@
             "hooks": [
               {
                 "type": "command",
-                "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/wave-check.sh\" stop 2>/dev/null || true",
+                "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/drift-check.sh\" stop 2>/dev/null || true",
                 "timeout": 5
               }
             ]

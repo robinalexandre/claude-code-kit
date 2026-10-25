@@ -46,7 +46,7 @@ source_of() {
     rules) echo "rules/$1.md" ;;
     statusline) echo statusline-command.sh ;;
     sync) echo sync/setup.sh ;;
-    hook) if [ "$1" = wave-check-hook ]; then echo hooks/wave-check.sh; else echo "hooks/$1.sh"; fi ;;
+    hook) if [ "$1" = drift-check-hook ]; then echo hooks/drift-check.sh; else echo "hooks/$1.sh"; fi ;;
   esac
 }
 
@@ -456,7 +456,7 @@ for p in $picked; do
       ;;
     hook)
       case "$p" in
-        wave-check-hook) put hooks/wave-check.sh hooks/wave-check.sh && frag settings/wave-check.json ;;
+        drift-check-hook) put hooks/drift-check.sh hooks/drift-check.sh && frag settings/drift-check.json ;;
         session-registry)
           put hooks/session-registry.sh hooks/session-registry.sh
           put hooks/claude-resume-here.zsh hooks/claude-resume-here.zsh
@@ -482,7 +482,7 @@ for p in $picked; do
       fi
       ;;
   esac
-  case "$p" in wave-check | wave-check-hook) marker_wanted=1 ;; esac
+  case "$p" in drift-check | drift-check-hook) marker_wanted=1 ;; esac
   echo "Installed $p"
 done
 # The setup scripts and every hook read these. The update check comes with every install.
@@ -492,14 +492,14 @@ put hooks/kit-update-check.sh hooks/kit-update-check.sh
 frag settings/kit-update-check.json
 chmod +x "$CLAUDE"/hooks/*.sh "$CLAUDE"/hooks/setup/*.sh "$CLAUDE"/skills/*/*.sh 2> /dev/null || true
 
-# The wave-check parts check replies against an emoji the user picks once.
+# The drift-check parts check replies against an emoji the user picks once.
 marker=$(jq -r '.env.CLAUDE_REPLY_MARKER // empty' "$SETTINGS")
 if [ -n "$marker_wanted" ] && [ -z "$marker" ]; then
   marker=$(reply marker "Which emoji should start every reply from Claude (e.g. 🌊, 🦊, ✅)?")
   marker=${marker//[[:space:]]/}
   if [ -z "$marker" ]; then
-    echo "No emoji given: wave-check stays idle until you set CLAUDE_REPLY_MARKER in $SETTINGS (env)."
-  elif ask marker.rule "Add \"Start every message with $marker\" to ~/.claude/CLAUDE.md? wave-check relies on that rule." y; then
+    echo "No emoji given: drift-check stays idle until you set CLAUDE_REPLY_MARKER in $SETTINGS (env)."
+  elif ask marker.rule "Add \"Start every message with $marker\" to ~/.claude/CLAUDE.md? drift-check relies on that rule." y; then
     [ -f "$CLAUDE/CLAUDE.md" ] && [ ! -f "$BACKUP/CLAUDE.md" ] && cp -p "$CLAUDE/CLAUDE.md" "$BACKUP/CLAUDE.md"
     printf '\n- **Start every message with %s.** That includes one-line replies, questions back\n  to me, error reports, and the message after a long run of tool calls.\n' "$marker" >> "$CLAUDE/CLAUDE.md"
   fi

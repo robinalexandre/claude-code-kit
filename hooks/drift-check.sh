@@ -1,5 +1,5 @@
 #!/bin/bash
-# Usage: wave-check.sh stop|prompt   (hook input JSON on stdin)
+# Usage: drift-check.sh stop|prompt   (hook input JSON on stdin)
 # Nudges, never blocks: warns when the last reply did not start with the
 # CLAUDE_REPLY_MARKER emoji. Does nothing until that variable is set.
 set -u
