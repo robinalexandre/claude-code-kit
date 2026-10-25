@@ -64,6 +64,8 @@ export type BuildRow = {
   ack?: Ack | null
   /** What started it: the user by hand, or a push of theirs; absent on runs recorded before. */
   trigger?: 'manual' | 'push' | null
+  /** The title of the commit it ran on; absent when the host does not say or on runs recorded before. */
+  commit?: string
   /** The file holding the steps pr-watch read for this ended run, when it kept them. */
   stepsFile?: string
 }

@@ -1849,6 +1849,13 @@ export const register: Register = (on, options) => {
           </Box>
           {shownDetails !== undefined && (
             <Box flexDirection="column" paddingLeft={4}>
+              {build.commit
+                ? wrap(build.commit, inner - 6).map(line => (
+                    <Text key={`build-commit-${build.number}-${line}`} dimColor>
+                      {line}
+                    </Text>
+                  ))
+                : null}
               {isEnded && (
                 <Box flexDirection="row">
                   <Button

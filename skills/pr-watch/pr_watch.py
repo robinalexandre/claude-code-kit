@@ -601,11 +601,17 @@ def ado_my_builds(org: str, project: str) -> list[dict]:
             "status": status,
             "requestedBy": (build.get("requestedFor") or {}).get("displayName", ""),
             "trigger": "manual" if build.get("reason") == "manual" else "push",
+            "commit": _commit_title((build.get("triggerInfo") or {}).get("ci.message") or ""),
             "queued": _stamp(build.get("queueTime") or ""),
             "started": _stamp(build.get("startTime") or ""),
             "ended": _stamp(build.get("finishTime") or "") if status not in BUILD_RUNNING else "",
         })
     return rows
+
+
+def _commit_title(message: str) -> str:
+    """A commit message's first line, kept to plain text: anyone who pushes writes it."""
+    return _plain(message.strip().split("\n")[0], 200)
 
 
 _GITHUB_ME: list[str] = []
@@ -656,6 +662,7 @@ def github_my_runs(owner: str, repo: str) -> list[dict]:
             "status": status,
             "requestedBy": (run.get("actor") or {}).get("login", ""),
             "trigger": "push" if run.get("event") == "push" else "manual",
+            "commit": _commit_title((run.get("head_commit") or {}).get("message") or run.get("display_title") or ""),
             "queued": _stamp(run.get("created_at") or ""),
             "started": _stamp(run.get("run_started_at") or ""),
             "ended": _stamp(run.get("updated_at") or "") if status not in BUILD_RUNNING else "",

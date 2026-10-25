@@ -1270,7 +1270,27 @@ test('the issues come after the PRs waiting for others, and a repo unfollows all
   expect(await pane.find({ key: 'issues', text: '▾ Issues I follow (1)' })).toBeDefined()
 })
 
-const SETTINGS_OFF ={ parked: false, recent: false, reviews: false, issues: false, runsPerRepo: 1 }
+test('an unfolded run says the title of the commit it ran on', async ($, on) => {
+  mock.clock(on)
+  const shown = { ...BUILDS, builds: BUILDS.builds.map(build => (build.number === '42' ? { ...build, commit: 'fix(shop): keep the cart on reload' } : build)) }
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
+  on('process.run', ($, e) => ran(0, e.argv[2] === 'status' ? JSON.stringify(shown) : JSON.stringify({ steps: [] })))
+  on('ui.render', () => Fragment({}))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+
+  await $.command.run(RUN)
+  const pane = await mountPane($, 'terminal')
+  await pane.press({ key: 'builds' })
+  await pane.press({ key: 'builds-repo-shop' })
+
+  expect(await pane.find({ text: 'fix(shop): keep the cart on reload' })).toBeUndefined()
+
+  await pane.press({ key: 'build-toggle-42' })
+
+  expect(await pane.find({ text: 'fix(shop): keep the cart on reload' })).toBeDefined()
+})
+
+const SETTINGS_OFF = { parked: false, recent: false, reviews: false, issues: false, runsPerRepo: 1 }
 
 test('what the settings turn off is left out of the pane and the band, and the runs keep to so many per repo', { options: SETTINGS_OFF }, async ($, on) => {
   mock.clock(on)
