@@ -17,6 +17,8 @@ import json
 import os
 import re
 import subprocess
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -127,6 +129,68 @@ class ClaudeRunner:
         if data.get("is_error"):
             raise RuntimeError(f"claude -p error: {data.get('result')}")
         return str(data.get("result") or "")
+
+
+class ApiRunner:
+    """The Messages API with an API key, for a computer without a Claude login: billed per
+    call instead of the subscription. One call, no tools, the answer's text."""
+
+    URL = "https://api.anthropic.com/v1/messages"
+    # Claude Code's short names, as on the subscription; any other name is a model id.
+    MODELS = {
+        "sonnet": "claude-sonnet-5-5",
+        "opus": "claude-opus-5-5",
+        "haiku": "claude-haiku-5-5",
+    }
+
+    def __init__(
+        self, api_key: str, model: str = DEFAULT_MODEL, max_tokens: int = 16_000, timeout: int = 900
+    ):
+        self.api_key = api_key
+        self.model = self.MODELS.get(model, model)
+        self.max_tokens = max_tokens
+        self.timeout = timeout
+
+    def __call__(self, system: str, material: str) -> str:
+        body = {
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "system": system,
+            "messages": [{"role": "user", "content": material}],
+        }
+        request = urllib.request.Request(  # noqa: S310
+            self.URL,
+            data=json.dumps(body).encode(),
+            headers={
+                "x-api-key": self.api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:  # noqa: S310
+                data = json.load(response)
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode(errors="replace")[:500]
+            raise RuntimeError(f"the API refused the call ({exc.code}): {detail}") from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise RuntimeError(f"the API could not be reached: {exc}") from exc
+        blocks = data.get("content", [])
+        return "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+
+
+def runner_from_env(model: str = DEFAULT_MODEL) -> Runner:
+    """KB_CURATE_ENGINE picks who answers: "subscription" (the default, ``claude -p``) or
+    "api" (KB_ANTHROPIC_API_KEY, else ANTHROPIC_API_KEY)."""
+    engine = os.environ.get("KB_CURATE_ENGINE") or "subscription"
+    if engine == "subscription":
+        return ClaudeRunner(model)
+    if engine != "api":
+        raise ValueError(f'KB_CURATE_ENGINE is "{engine}": "subscription" or "api"')
+    key = os.environ.get("KB_ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+    if not key:
+        raise ValueError("KB_CURATE_ENGINE=api needs KB_ANTHROPIC_API_KEY or ANTHROPIC_API_KEY")
+    return ApiRunner(key, model)
 
 
 @dataclass

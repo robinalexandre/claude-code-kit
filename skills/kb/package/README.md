@@ -57,8 +57,9 @@ computers, where only the virtualenv is left to make (`bash install.sh` again th
 - **Every morning** (through the daily-sync skill): `morning.sh` curates every day not yet
   curated, up to a week back, then hands the new notes to the sync.
 
-Needs Python 3.12 or newer, jq, and the Claude Code CLI logged in (the curator runs
-`claude -p` with the user's own subscription).
+Needs Python 3.12 or newer and jq. The curator runs `claude -p` with the user's own
+subscription (the Claude Code CLI logged in), or the Messages API with an API key on a
+computer without it: the setup asks which.
 
 ## Use
 
@@ -84,6 +85,8 @@ Settings, as options or environment variables (the hook and `morning.sh` also re
 is where the curator writes) / `KB_NOTES` (several folders separated by the OS path separator),
 `--db FILE` / `KB_DB` (default `~/.claude/kb/index.sqlite`), `--embed fastembed|hash|none` /
 `KB_EMBED`, `KB_EMBED_MODEL`, `KB_MODEL_DIR`, `KB_CURATE_MODEL` (default `sonnet`),
+`KB_CURATE_ENGINE` (`subscription`, the default, or `api` with `KB_ANTHROPIC_API_KEY`, else
+`ANTHROPIC_API_KEY`),
 `KB_CURATE_MAX` (new notes per day, default 15), `KB_BIN` (the `kb` the hooks run). Every
 command takes `--json` for other programs and agents.
 
@@ -97,7 +100,7 @@ under `~/.claude/kb/transcripts/<day>/` plus an `index.md`. Scripted sessions (t
 background reviews) are skipped. Nothing leaves the computer.
 
 `kb curate` extracts the day if needed, then calls `claude -p` with no tools, no hooks, no
-plugins and no MCP servers, once per 90,000 characters of transcript, with the catalog of
+plugins and no MCP servers (or the API, one plain call), once per 90,000 characters of transcript, with the catalog of
 existing notes. Claude answers with proposals; the code checks names, types, dates and
 secrets, prefers merging into an existing note, caps the new ones, writes the files and a
 report in `<notes>/.curator/<day>.md`. The model never writes to disk itself. A note it

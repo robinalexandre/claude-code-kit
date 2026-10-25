@@ -65,20 +65,45 @@ if ask kb.embed "Semantic search in any language (downloads a 500 MB model once,
 fi
 curate=off
 model=$(setting KB_CURATE_MODEL)
-if ask kb.curate "Curate your Claude Code transcripts into notes every morning (daily-sync, your Claude login)?" y; then
+engine=$(setting KB_CURATE_ENGINE)
+key=$(setting KB_ANTHROPIC_API_KEY)
+if ask kb.curate "Curate your Claude Code transcripts into notes every morning (daily-sync)?" y; then
   curate=on
+  # The subscription when Claude Code is signed in here; the API for a computer without it.
+  if [ -z "$engine" ]; then
+    engine=subscription
+    command -v claude > /dev/null 2>&1 || engine=api
+  fi
+  default_answer=y
+  [ "$engine" = api ] && default_answer=n
+  if ask kb.curateSubscription "Run it on your Claude subscription (claude -p, your login)? No: the API, billed per call" "$default_answer"; then
+    engine=subscription
+    key=""
+  else
+    engine=api
+    # Read here, hidden and never recorded with the other answers.
+    if kit_tty && [ -z "${KIT_INSTALL_ANSWERS:-}" ]; then
+      read -rs -p "Anthropic API key (kept in $ENVFILE, this computer only; empty: keep it, or \$ANTHROPIC_API_KEY): " key < /dev/tty || key=""
+      echo >&2
+    fi
+    key=${key:-$(setting KB_ANTHROPIC_API_KEY)}
+  fi
   model=$(reply kb.curateModel "Claude model for the curation (sonnet, haiku, opus):" "${model:-sonnet}")
 fi
 
 echo "  Installing kb in ${VENV}…"
 install "$extra"
 mkdir -p "$notes"
+umask 077
 {
   printf 'KB_NOTES=%s\n' "$notes"
   printf 'KB_EMBED=%s\n' "$embed"
   printf 'KB_CURATE=%s\n' "$curate"
   [ -n "$model" ] && printf 'KB_CURATE_MODEL=%s\n' "$model"
+  [ -n "$engine" ] && printf 'KB_CURATE_ENGINE=%s\n' "$engine"
+  [ -n "$key" ] && printf 'KB_ANTHROPIC_API_KEY=%s\n' "$key"
 } > "$ENVFILE"
+chmod 600 "$ENVFILE" 2> /dev/null || true
 echo "  Indexing ${notes}…"
 KB_NOTES=$notes KB_EMBED=$embed "$(venv_bin kb)" index || echo "  The first index failed; the next session start tries again."
 echo "  Saved in $ENVFILE. Ask Claude \"what do you know about…\" or \"note this for good\"."

@@ -1,8 +1,20 @@
+import io
 import json
+import urllib.request
 from datetime import date
 from pathlib import Path
 
-from kb.curate import Report, curate_day, curate_material, parse_proposals
+import pytest
+
+from kb.curate import (
+    ApiRunner,
+    ClaudeRunner,
+    Report,
+    curate_day,
+    curate_material,
+    parse_proposals,
+    runner_from_env,
+)
 from kb.notes import load_note
 
 DAY = date(2026, 10, 22)
@@ -284,3 +296,44 @@ def test_report_markdown():
     text = report.markdown()
     assert "2 call(s) to Claude, 3 proposal(s): 1 created, 0 merged, 1 dropped." in text
     assert "## Created" in text and "## Dropped" in text and "## Merged" not in text
+
+
+def test_the_engine_setting_picks_the_subscription_or_the_api(monkeypatch):
+    for name in ("KB_CURATE_ENGINE", "KB_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    assert isinstance(runner_from_env("opus"), ClaudeRunner)
+    monkeypatch.setenv("KB_CURATE_ENGINE", "api")
+    with pytest.raises(ValueError, match="needs KB_ANTHROPIC_API_KEY"):
+        runner_from_env()
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-env")
+    monkeypatch.setenv("KB_ANTHROPIC_API_KEY", "sk-kb")
+    runner = runner_from_env("opus")
+    assert isinstance(runner, ApiRunner) and runner.api_key == "sk-kb"
+    assert runner.model == "claude-opus-5-5"
+    assert ApiRunner("k", "claude-some-model").model == "claude-some-model"
+    monkeypatch.setenv("KB_CURATE_ENGINE", "cloud")
+    with pytest.raises(ValueError, match='"subscription" or "api"'):
+        runner_from_env()
+
+
+def test_the_api_runner_sends_one_call_and_returns_the_text(monkeypatch):
+    sent = []
+
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+    def urlopen(request, timeout):
+        sent.append((request, json.loads(request.data)))
+        answer = {"content": [{"type": "text", "text": "[]"}, {"type": "thinking"}]}
+        return Response(json.dumps(answer).encode())
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    assert ApiRunner("sk-test", "sonnet")("You curate.", "The day.") == "[]"
+    [(request, body)] = sent
+    assert request.get_header("X-api-key") == "sk-test"
+    assert body["model"] == "claude-sonnet-5-5" and body["system"] == "You curate."
+    assert body["messages"] == [{"role": "user", "content": "The day."}]
