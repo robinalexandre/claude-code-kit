@@ -43,6 +43,10 @@ export type DndData = {
 
 declare module 'claude-code' {
   interface PluginState {
+    /** The configuration mod's low power mode, read under its shape `low-power/1`. */
+    configuration: {
+      power: Shaped<{ setting: string; isLow: boolean } | null>
+    }
     dnd: {
       /**
        * What the other panes read to hide or filter what they show; null before the first read.

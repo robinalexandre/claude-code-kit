@@ -330,13 +330,26 @@ const ruleText = (rule: DndRule) =>
     .join(', ')
 
 let ticking: (() => void) | undefined
+let ticks = 0
+
+// In the kit's low power mode (the configuration mod's, read under its shape), one tick in five reads.
+const LOW_POWER_FACTOR = 5
+const lowPower = atom({ plugin: 'configuration', key: 'power' } as const, null, { shape: 'low-power/1' })
+
+const tick = async ($: EngineInterface) => {
+  ticks += 1
+
+  if ((await read($, lowPower))?.isLow !== true || ticks % LOW_POWER_FACTOR === 0) {
+    await refresh($)
+  }
+}
 
 const start = async ($: EngineInterface) => {
   await $.command
     .register({ name: COMMAND, description: 'Do not disturb: open the profiles, or turn one on (/dnd work 1h), off (/dnd off)' })
     .catch(() => undefined)
   ticking?.()
-  ticking = $.clock.every(TICK_MS, () => void refresh($).catch(() => undefined))
+  ticking = $.clock.every(TICK_MS, () => void tick($).catch(() => undefined))
   void refresh($).catch(() => undefined)
 }
 

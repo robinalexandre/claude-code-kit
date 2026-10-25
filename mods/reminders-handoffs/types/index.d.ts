@@ -58,6 +58,10 @@ declare module 'claude-code' {
     dnd: {
       active: Shaped<DndActive | null>
     }
+    /** The configuration mod's low power mode, read under its shape `low-power/1`. */
+    configuration: {
+      power: Shaped<{ setting: string; isLow: boolean } | null>
+    }
     'reminders-handoffs': {
       reminders: Reminder[] | null
       handoffs: Handoff[] | null

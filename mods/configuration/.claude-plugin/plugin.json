@@ -1,10 +1,19 @@
 {
   "name": "configuration",
-  "version": "0.1.1",
-  "description": "The Configuration pane of the kit's panes (a button on the band, /configuration): every mod's settings, for all computers or this one, with the value the other computers use; the Do not disturb pane opens from it when dnd is installed.",
+  "version": "0.2.0",
+  "description": "The Configuration pane of the kit's panes (a button on the band, /configuration): every mod's settings, for all computers or this one, with the value the other computers use, and a low power mode for everything that fetches by itself; the Do not disturb pane opens from it when dnd is installed.",
   "types": "./types/index.d.ts",
   "author": {
     "name": "robinalexandre",
     "url": "https://github.com/robinalexandre/claude-code-kit"
+  },
+  "userConfig": {
+    "lowPower": {
+      "type": "string",
+      "title": "Low power mode",
+      "description": "Everything the kit fetches by itself (the dev activity pane and pr-watch, the reminders and handoffs, do not disturb) does it five times less often: on, off, or on battery (while the computer runs on its battery or in its low power mode). A refresh button still reads everything; the status line shows 🔋 low power while it is on.",
+      "options": ["on battery", "on", "off"],
+      "default": "on battery"
+    }
   }
 }

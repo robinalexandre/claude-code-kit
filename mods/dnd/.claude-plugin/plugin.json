@@ -1,6 +1,6 @@
 {
   "name": "dnd",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Do not disturb for the kit's panes: profiles that hide the history, the dev activity, the reminders or the handoffs, or keep only some repos and groups; turned on by hand, by Wi-Fi, by days and hours, or by folder. Its pane opens from the Configuration pane.",
   "types": "./types/index.d.ts",
   "author": {

@@ -338,10 +338,15 @@ const POLL_CLOSED_MS = 5 * 60_000
 let nextPoll: { cancel: () => void } | undefined
 let seenHead = ''
 
+// In the kit's low power mode (the configuration mod's, read under its shape), five times slower.
+const LOW_POWER_FACTOR = 5
+const lowPower = atom({ plugin: 'configuration', key: 'power' } as const, null, { shape: 'low-power/1' })
+
 const schedulePoll = async ($: EngineInterface) => {
   const isShown = (await $.ui.panes().catch(() => [])).some(pane => pane.id === PANE)
+  const factor = (await read($, lowPower))?.isLow === true ? LOW_POWER_FACTOR : 1
   nextPoll?.cancel()
-  nextPoll = $.clock.after(isShown ? POLL_OPEN_MS : POLL_CLOSED_MS, () => void poll($).catch(() => undefined))
+  nextPoll = $.clock.after((isShown ? POLL_OPEN_MS : POLL_CLOSED_MS) * factor, () => void poll($).catch(() => undefined))
 }
 
 const poll = async ($: EngineInterface) => {

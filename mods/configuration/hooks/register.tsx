@@ -19,6 +19,7 @@ const mods = atom({ plugin: 'configuration', key: 'mods' } as const, null)
 const scope = atom({ plugin: 'configuration', key: 'scope' } as const, 'all')
 const saves = atom({ plugin: 'configuration', key: 'saves' } as const, 0)
 const unfolded = atom({ plugin: 'configuration', key: 'unfolded' } as const, {})
+const power = atom({ plugin: 'configuration', key: 'power' } as const, null, { shape: 'low-power/1' })
 
 // Set by dnd once it has read what is on: dnd is installed. Read under dnd's shape.
 const dndActive = atom({ plugin: 'dnd', key: 'active' } as const, null, { shape: 'dnd-active/1' })
@@ -207,11 +208,118 @@ const openPane = async ($: EngineInterface) => {
   await loadMods($)
 }
 
+// Low power mode, for every part of the kit that fetches by itself: `on`, `off`, or `on battery`
+// (while the computer runs on its battery or in its low power mode). The mods read it under the
+// shape `low-power/1`; scripts (pr-watch, the status line) from ~/.claude/.low-power.json.
+const POWER_FILE = '.low-power.json'
+const POWER_EVERY_MS = 60_000
+// A PowerShell call costs a second: Windows is asked less often.
+const POWER_EVERY_WINDOWS_MS = 5 * 60_000
+const POWER_KEPT_MS = 10 * 60_000
+const LINUX_MAINS = ['AC', 'ACAD', 'AC0', 'ADP0', 'ADP1']
+
+type PowerWay = 'pmset' | 'linux' | 'windows' | 'none'
+let powerWay: PowerWay | undefined
+
+const ran = async ($: EngineInterface, argv: string[]) => {
+  try {
+    const result = await $.process.run(argv, { timeoutMs: 10_000 })
+
+    return result.exitCode === 0 ? result.stdout : undefined
+  } catch {
+    return undefined
+  }
+}
+
+const linuxMains = async ($: EngineInterface) => {
+  for (const name of LINUX_MAINS) {
+    const online = await $.fs.read(`/sys/class/power_supply/${name}/online`).catch(() => undefined)
+
+    if (online !== undefined) {
+      return online.trim()
+    }
+  }
+
+  return undefined
+}
+
+// Whether the computer runs on its battery or in its low power mode; false when it cannot tell.
+const onBattery = async ($: EngineInterface) => {
+  if (powerWay === undefined || powerWay === 'pmset') {
+    const battery = await ran($, ['pmset', '-g', 'batt'])
+
+    if (battery !== undefined) {
+      powerWay = 'pmset'
+      const settings = (await ran($, ['pmset', '-g'])) ?? ''
+
+      return battery.includes("'Battery Power'") || /lowpowermode\s+1/.test(settings)
+    }
+  }
+
+  if (powerWay === undefined || powerWay === 'linux') {
+    const online = await linuxMains($)
+
+    if (online !== undefined) {
+      powerWay = 'linux'
+
+      return online === '0'
+    }
+  }
+
+  if (powerWay === undefined || powerWay === 'windows') {
+    const status = await ran($, ['powershell', '-NoProfile', '-NonInteractive', '-Command', '(Get-CimInstance Win32_Battery).BatteryStatus'])
+
+    if (status !== undefined) {
+      powerWay = 'windows'
+
+      // 1: the battery is discharging, on battery power.
+      return status.trim().split(/\s+/).includes('1')
+    }
+  }
+
+  powerWay = 'none'
+
+  return false
+}
+
+let powerSetting = 'on battery'
+let powerWritten = { text: '', at: 0 }
+
+const checkPower = async ($: EngineInterface) => {
+  const isLow = powerSetting === 'on' || (powerSetting === 'on battery' && (await onBattery($)))
+  const now = await $.clock.now()
+  await update($, power, () => ({ setting: powerSetting, isLow }))
+  const text = JSON.stringify({ setting: powerSetting, lowPower: isLow })
+
+  // Written when it changes, and now and then so the scripts know it is still checked.
+  if (text !== powerWritten.text || now - powerWritten.at >= POWER_KEPT_MS / 2) {
+    const dir = await $.env.get('CLAUDE_CONFIG_DIR')
+    const path = `${dir ? slashed(dir) : `${await home($)}/.claude`}/${POWER_FILE}`
+    await $.fs
+      .write(path, `${JSON.stringify({ setting: powerSetting, lowPower: isLow, at: new Date(now).toISOString() })}\n`)
+      .then(() => {
+        powerWritten = { text, at: now }
+      })
+      .catch(() => undefined)
+  }
+}
+
+let powerTicking: { cancel: () => void } | undefined
+
+const startPower = async ($: EngineInterface) => {
+  powerTicking?.cancel()
+  await checkPower($)
+  powerTicking = $.clock.every(powerWay === 'windows' ? POWER_EVERY_WINDOWS_MS : POWER_EVERY_MS, () => void checkPower($).catch(() => undefined))
+}
+
 let loadAsked = false
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  powerSetting = typeof options.lowPower === 'string' ? options.lowPower : 'on battery'
+
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: COMMAND, description: "Open the Configuration pane: every mod's settings" }).catch(() => undefined)
+    void startPower($).catch(() => undefined)
 
     return next(e)
   })
@@ -224,6 +332,12 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const beneath = await next(e)
+
+    // A reload (a setting changed) brings no session start: the power check starts again here.
+    if (powerTicking === undefined) {
+      powerTicking = { cancel: () => undefined }
+      void startPower($).catch(() => undefined)
+    }
 
     if (e.props.hasSurvey || e.props.view.agentId !== undefined) {
       return beneath

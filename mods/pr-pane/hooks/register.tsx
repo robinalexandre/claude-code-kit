@@ -506,9 +506,12 @@ const refresh = async ($: EngineInterface, mode: Mode = 'auto') => {
   await scheduleRefresh($)
 }
 
-// In low power mode (pr-watch's `lowPower`, set in the Configuration pane), every pace is this many
-// times slower, pr-watch's and the pane's own.
+// In the kit's low power mode (the configuration mod's, read under its shape), every pace is this
+// many times slower, pr-watch's and the pane's own.
 const LOW_POWER_FACTOR = 5
+const lowPower = atom({ plugin: 'configuration', key: 'power' } as const, null, { shape: 'low-power/1' })
+
+const isLowPower = async ($: EngineInterface) => (await read($, lowPower))?.isLow === true || (await read($, snapshot))?.lowPower === true
 
 const scheduleRefresh = async ($: EngineInterface) => {
   nextRefresh?.cancel()
@@ -518,7 +521,7 @@ const scheduleRefresh = async ($: EngineInterface) => {
     : anyRunning(shown?.prs ?? [], shown?.builds ?? [])
       ? WHILE_RUNNING_EVERY_MS
       : IDLE_EVERY_MS
-  nextRefresh = $.clock.after(every * (shown?.lowPower === true ? LOW_POWER_FACTOR : 1), () => void refresh($))
+  nextRefresh = $.clock.after(every * ((await isLowPower($)) ? LOW_POWER_FACTOR : 1), () => void refresh($))
 }
 
 const toggleDetails = async ($: EngineInterface, url: string, name: string) => {

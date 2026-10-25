@@ -1,5 +1,5 @@
 import type { On } from 'claude-code'
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
 const SCROLL = { offset: 0, bodyRows: 40 }
@@ -170,6 +170,43 @@ test('a number saved with Enter stays in its field, the same value again include
 
   expect(sets).toHaveLength(1)
   expect(await value('set-pr-pane.issueDays-2')).toBe('30')
+})
+
+test('on battery, low power mode is on by default and written for the scripts; plugged in, it goes off', async ($, on) => {
+  const clock = mock.clock(on)
+  const files: Files = {}
+  let source = "Now drawing from 'Battery Power'"
+  answer(on, files)
+  answerRows(on, files, [])
+  on('process.run', ($, e) => {
+    const out = e.argv.join(' ') === 'pmset -g batt' ? source : e.argv.join(' ') === 'pmset -g' ? 'lowpowermode 0' : ''
+
+    return { value: { exitCode: 0, stdout: out, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+
+  await $.session.start(START)
+  await clock.advance(0)
+  const written = () => JSON.parse(files['~/.claude/.low-power.json'] ?? '{}') as { setting?: string; lowPower?: boolean }
+
+  expect(written()).toMatchObject({ setting: 'on battery', lowPower: true })
+
+  source = "Now drawing from 'AC Power'"
+  await clock.advance(60_000)
+
+  expect(written()).toMatchObject({ setting: 'on battery', lowPower: false })
+})
+
+test('low power mode set off is never on, whatever powers the computer', { options: { lowPower: 'off' } }, async ($, on) => {
+  const clock = mock.clock(on)
+  const files: Files = {}
+  answer(on, files)
+  answerRows(on, files, [])
+  on('process.run', () => ({ value: { exitCode: 0, stdout: "Now drawing from 'Battery Power'", stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+
+  await $.session.start(START)
+  await clock.advance(0)
+
+  expect(JSON.parse(files['~/.claude/.low-power.json'] ?? '{}')).toMatchObject({ setting: 'off', lowPower: false })
 })
 
 test('without a private sync, the pane says changes stay on this computer', async ($, on) => {

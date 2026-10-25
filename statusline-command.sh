@@ -85,9 +85,9 @@ if [ -n "$session_id" ] && [ -f "$dnd_file" ]; then
   [ -n "$dnd" ] && dnd_str=$(printf '🔕 \033[35m%s\033[0m' "$dnd")
 fi
 
-# pr-watch's low power mode, from what it last wrote: on, or on battery and the computer on its
-# battery or in its low power mode, checked here on macOS and Linux, else as pr-watch last saw it
-power_file="${XDG_CACHE_HOME:-$HOME/.cache}/pr-watch/power.json"
+# The kit's low power mode, as the configuration mod last wrote it: on, or on battery and the
+# computer on its battery or in its low power mode, checked here on macOS and Linux, else as written
+power_file="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.low-power.json"
 if [ -f "$power_file" ]; then
   power_setting=$(jq -r '.setting // empty' "$power_file" 2>/dev/null | tr -d '\r')
   power_low=$(jq -r '.lowPower // false' "$power_file" 2>/dev/null | tr -d '\r')

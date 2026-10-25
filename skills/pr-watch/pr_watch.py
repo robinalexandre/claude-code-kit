@@ -68,9 +68,10 @@ What is looked up, reported and listed follows the PR pane's settings (the Confi
 pr-pane, kept in Claude Code's settings.json), else the same keys in config.json: `openPrs`,
 `parked` (the tracked PRs, open or parked), `recent` (the merged and closed ones), `reviews`,
 `runsPerRepo` (0 to 20 pipeline runs per repo, 20 by default), `issues` and `issueDays`. What is
-turned off is neither fetched nor reported, and its records stay as they were. `lowPower` (`off`,
-`on`, or `on battery` by default: while on battery or in the system's low power mode) makes the
-automatic refresh five times slower; `status` says it as `lowPower`.
+turned off is neither fetched nor reported, and its records stay as they were. The kit's low power
+mode (the configuration mod's `lowPower`: `off`, `on`, or `on battery` by default, while on battery or
+in the system's low power mode; read from ~/.claude/.low-power.json) makes the automatic refresh
+five times slower; `status` says it as `lowPower`.
 
 Shared snapshot: what `status --auto` or `--live` fetched is shared through the config sync's GitHub
 repo, on its own branch (`pr-cache`, one commit replaced each time, so it never grows), one section per
@@ -124,7 +125,8 @@ BUILD_HOURS = float(os.environ.get("PR_WATCH_BUILD_HOURS", "24"))
 ISSUE_DAYS = 30
 CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "pr-watch"
 SHARED_LOCAL = CACHE_DIR / "shared.json"
-POWER = CACHE_DIR / "power.json"
+CLAUDE_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+POWER = CLAUDE_DIR / ".low-power.json"
 SHARED_BRANCH = "pr-cache"
 SHARED_PATH = "pr-watch/snapshot.json"
 GITHUB_API = os.environ.get("PR_WATCH_GITHUB_API", "https://api.github.com")
@@ -1424,19 +1426,23 @@ def config_value(key: str, default: object) -> object:
 
 
 SETTINGS = {"openPrs": True, "parked": True, "recent": True, "reviews": True, "runsPerRepo": BUILDS_PER_PLACE,
-            "issues": True, "issueDays": ISSUE_DAYS, "lowPower": "on battery"}
+            "issues": True, "issueDays": ISSUE_DAYS}
 
 
-def pane_settings() -> dict:
-    """What the user chose in the PR pane's settings (the Configuration pane, pr-pane),
-    which Claude Code keeps in its settings.json; {} without them."""
-    path = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "settings.json"
+def plugin_options(plugin: str) -> dict:
+    """A plugin's settings as the user chose them in the Configuration pane, which Claude Code keeps
+    in its settings.json; {} without them."""
     try:
-        configs = json.loads(path.read_text(encoding="utf-8")).get("pluginConfigs") or {}
-        key = next((key for key in configs if key == "pr-pane" or key.startswith("pr-pane@")), "")
+        configs = json.loads((CLAUDE_DIR / "settings.json").read_text(encoding="utf-8")).get("pluginConfigs") or {}
+        key = next((key for key in configs if key == plugin or key.startswith(f"{plugin}@")), "")
         return (configs.get(key) or {}).get("options") or {}
     except (OSError, ValueError, AttributeError):
         return {}
+
+
+def pane_settings() -> dict:
+    """What the user chose in the PR pane's settings (the Configuration pane, pr-pane)."""
+    return plugin_options("pr-pane")
 
 
 def setting(key: str) -> object:
@@ -1525,20 +1531,21 @@ def on_battery() -> bool:
         return False
 
 
+POWER_KEPT_SECONDS = 15 * 60
+
+
 def low_power() -> bool:
-    """`lowPower`: `on`, `off`, or `on battery` (the default: while on battery or in low power mode),
-    the automatic refresh then LOW_POWER_FACTOR times slower."""
-    chosen = str(setting("lowPower"))
-    is_low = chosen == "on" or (chosen == "on battery" and on_battery())
-    # The status line says it from this file (and checks the battery itself where that is cheap).
+    """The kit's low power mode, the automatic refresh then LOW_POWER_FACTOR times slower: as the
+    configuration mod last wrote it in ~/.claude/.low-power.json, else from its `lowPower` setting
+    (`on`, `off`, or `on battery` by default: while on battery or in the low power mode)."""
     try:
-        if POWER.exists() and json.loads(POWER.read_text(encoding="utf-8")) == {"setting": chosen, "lowPower": is_low}:
-            return is_low
-        POWER.parent.mkdir(parents=True, exist_ok=True)
-        POWER.write_text(json.dumps({"setting": chosen, "lowPower": is_low}), encoding="utf-8")
-    except (OSError, ValueError):
+        state = json.loads(POWER.read_text(encoding="utf-8"))
+        if time.time() - _epoch(state.get("at", "")) < POWER_KEPT_SECONDS:
+            return bool(state.get("lowPower"))
+    except (OSError, ValueError, AttributeError):
         pass
-    return is_low
+    chosen = str(plugin_options("configuration").get("lowPower", "on battery"))
+    return chosen == "on" or (chosen == "on battery" and on_battery())
 
 
 def cache_minutes() -> dict[str, float]:

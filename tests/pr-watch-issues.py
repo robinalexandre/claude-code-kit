@@ -16,6 +16,7 @@ import os
 import sys
 import tempfile
 import threading
+import time
 
 from contextlib import redirect_stdout
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -175,18 +176,33 @@ def main() -> int:
     pane({"runsPerRepo": 2})
     check("the pane's count wins", [one["url"] for one in pr.shown_runs(runs)] == ["1", "2", "3"])
 
-    # 7. Low power mode: every pace five times slower, on battery by default.
+    # 7. The kit's low power mode (the configuration mod's): every pace five times slower, on battery
+    # by default; what the mod last wrote wins while it is fresh.
     battery = [False]
     pr.on_battery = lambda: battery[0]
-    pane({})
+
+    def kit(low_power: str | None, minutes_prs: int | None = None) -> None:
+        options = {"pr-pane@inline": {"options": {} if minutes_prs is None else {"minutesPrs": minutes_prs}}}
+        if low_power is not None:
+            options["configuration@inline"] = {"options": {"lowPower": low_power}}
+        settings.write_text(json.dumps({"pluginConfigs": options}), encoding="utf-8")
+
+    kit(None)
     check("on mains, the usual paces", pr.cache_minutes()["running"] == 1.0)
     battery[0] = True
     check("on battery, five times slower by default", pr.cache_minutes() == {"running": 5.0, "runs": 25.0, "prs": 50.0, "lists": 75.0})
-    pane({"lowPower": "off"})
+    kit("off")
     check("off, the usual paces even on battery", pr.cache_minutes()["prs"] == 10.0)
     battery[0] = False
-    pane({"lowPower": "on", "minutesPrs": 4})
+    kit("on", 4)
     check("on, slower even on mains, from the pane's own paces", pr.cache_minutes()["prs"] == 20.0)
+    kit("off")
+    power = root / "claude" / ".low-power.json"
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    power.write_text(json.dumps({"setting": "on battery", "lowPower": True, "at": stamp}), encoding="utf-8")
+    check("what the configuration mod wrote wins while fresh", pr.low_power() is True)
+    power.write_text(json.dumps({"setting": "on battery", "lowPower": True, "at": "2026-01-01T00:00:00Z"}), encoding="utf-8")
+    check("and is left out once old", pr.low_power() is False)
 
     server.shutdown()
     print(f"{len(failures)} failed" if failures else "all passed")

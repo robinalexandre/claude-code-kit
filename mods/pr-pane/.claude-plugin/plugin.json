@@ -1,6 +1,6 @@
 {
   "name": "pr-pane",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "description": "A pane listing the PRs pr-watch tracks: status, CI, votes and what each one waits for, plus your pipeline runs and the issues you follow; open one in the browser, refresh them live.",
   "types": "./types/index.d.ts",
   "author": {
@@ -47,13 +47,6 @@
       "title": "GitHub issues I follow",
       "description": "The issues you opened, commented on, were mentioned or assigned in, or subscribed to in your repos. Off, pr-watch stops looking them up.",
       "default": true
-    },
-    "lowPower": {
-      "type": "string",
-      "title": "Low power mode",
-      "description": "Refresh five times less often, by itself and in the background: on, off, or on battery (while the computer runs on its battery or in its low power mode). The refresh button still reads everything.",
-      "options": ["on battery", "on", "off"],
-      "default": "on battery"
     },
     "minutesRunning": {
       "type": "number",

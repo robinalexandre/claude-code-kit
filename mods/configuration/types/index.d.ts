@@ -19,6 +19,9 @@ export type ModSetting = {
 /** Every user mod's settings, and this computer's name in the private sync ('' with none). */
 export type ModsData = { settings: ModSetting[]; machine: string }
 
+/** Low power mode: what the user chose, and whether it slows the kit now. */
+export type LowPower = { setting: string; isLow: boolean }
+
 /** What dnd shares under the shape `dnd-active/1`; only whether it is set is read here. */
 export type DndActiveSeen = Record<string, unknown>
 
@@ -33,6 +36,11 @@ declare module 'claude-code' {
       saves: number
       /** The mods folded (`mod|<plugin>`: false), open by default. */
       unfolded: Record<string, boolean>
+      /**
+       * Low power mode as the other mods read it, under the shape `low-power/1`: the setting (`on`,
+       * `off`, `on battery`) and whether it is on now. null before the first check.
+       */
+      power: Shaped<LowPower | null>
     }
     dnd: {
       active: Shaped<DndActiveSeen | null>
