@@ -63,7 +63,7 @@
         "pr-pane",
         "reminders-handoffs"
       ],
-      "what": "Do-not-disturb profiles for the history, PR & CI and reminders-handoffs panes: hide a pane, or keep only some repos, reminder groups or the session's own repo.",
+      "what": "Do-not-disturb profiles for the history, dev activity and reminders-handoffs panes: hide a pane, or keep only some repos, reminder groups or the session's own repo.",
       "why": "At the office, in a meeting or in one repo, the panes show only what matters there, by themselves.",
       "when": "Turned on by hand (the Configuration button, /dnd, or ask Claude), or by a rule: a Wi-Fi network, days and hours, a folder.",
       "who": "Anyone with one of those panes."

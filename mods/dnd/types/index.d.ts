@@ -1,4 +1,4 @@
-/** The panes a profile quiets: the history, the PRs & CI, the reminders, the handoffs. */
+/** The panes a profile quiets: the history, the dev activity, the reminders, the handoffs. */
 export type DndPart = 'history' | 'prs' | 'reminders' | 'handoffs'
 
 /**
@@ -55,6 +55,8 @@ export type ModSetting = {
   isLocked: boolean
   /** Kept for this computer alone, in the private sync's machine file, over the shared value. */
   isHere: boolean
+  /** With isHere, the value every other computer has (the private sync's shared settings); absent: the default. */
+  shared?: boolean | string | number | string[]
 }
 
 /** The Mods tab: every user mod's settings, and this computer's name in the private sync ('' with none). */
@@ -84,6 +86,8 @@ declare module 'claude-code' {
       mods: ModsData | null
       /** Where a change made in the Mods tab goes: every computer, or this one alone. */
       modsScope: 'all' | 'here'
+      /** Settings saved from the Mods tab, counted: a typed field is drawn anew with each. */
+      modsSaves: number
     }
   }
 }

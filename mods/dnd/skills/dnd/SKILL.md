@@ -1,12 +1,12 @@
 ---
 name: dnd
-description: Do not disturb for the kit's panes (history, PRs & CI, reminders, handoffs). Creates profiles that hide a pane or keep only some repos, groups or the session's folder, turns one on by hand (for a while, for this session or the whole computer), and sets the rules that turn one on by themselves (a Wi-Fi network, days and hours, a folder). Use when the user says "do not disturb", "DnD", "focus mode", "I'm in a meeting", "at the office only show…", "hide the PRs", "only this repo", "make a work profile", "turn on <profile>", "turn it off", or when a pane shows something the user wants out of the way.
+description: Do not disturb for the kit's panes (history, dev activity, reminders, handoffs). Creates profiles that hide a pane or keep only some repos, groups or the session's folder, turns one on by hand (for a while, for this session or the whole computer), and sets the rules that turn one on by themselves (a Wi-Fi network, days and hours, a folder). Use when the user says "do not disturb", "DnD", "focus mode", "I'm in a meeting", "at the office only show…", "hide the PRs", "only this repo", "make a work profile", "turn on <profile>", "turn it off", or when a pane shows something the user wants out of the way.
 ---
 
 # Do not disturb
 
 `dnd.sh`, next to this file, holds the profiles and their rules. The dnd mod reads it every minute
-and the history, PR & CI and reminders-handoffs panes hide or filter what they show by what is on.
+and the history, dev activity and reminders-handoffs panes hide or filter what they show by what is on.
 Run it with `bash`; `bash dnd.sh` alone prints every command.
 
 ## What a profile holds

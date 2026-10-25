@@ -4,7 +4,7 @@ import type { EngineInterface, PluginOptions, Register, RenderChildren } from 'c
 import type { Ack, BuildRow, BuildStep, CiCheck, DndActive, IssueRow, PrRow, PrSnapshot, RecentPr, ReviewPr } from '../types'
 
 const PANE = 'tracked-prs'
-const TITLE = 'Tracked PRs'
+const TITLE = 'Dev activity'
 const COMMAND = 'prs'
 const LIVE_TIMEOUT_MS = 180_000
 const RELOAD_EVERY_MS = 5 * 60_000
@@ -66,7 +66,7 @@ const runColor = (build: BuildRow) => (build.ack ? 'blue' : buildColor(build.sta
 
 const isRedRun = (build: BuildRow) => !build.ack && build.stale !== true && buildColor(build.status) === 'red'
 
-const BAND_NAME = 'PRs & CI'
+const BAND_NAME = 'Dev activity'
 
 // The band's buttons share one row under everything above the prompt, whatever order the mods
 // draw in: each takes that row out of what the mods beneath drew, adds its own button, and sorts
@@ -289,7 +289,7 @@ const runs = async ($: EngineInterface, argv: string[]) => {
 
 const slashed = (path: string) => path.replace(/\\/g, '/')
 
-// The do-not-disturb profile on now, when the dnd mod is installed: it hides the PRs & CI, or keeps
+// The do-not-disturb profile on now, when the dnd mod is installed: it hides the dev activity, or keeps
 // only some repos. Read under dnd's shape: another one (an older or newer dnd) reads as nothing on.
 const dndActive = atom({ plugin: 'dnd', key: 'active' } as const, null, { shape: 'dnd-active/1' })
 
@@ -1014,18 +1014,35 @@ const toggleIssue = async ($: EngineInterface, issue: IssueRow, isOpen: boolean)
 
 // Unfollowing only writes in pr-watch's folder: the issue leaves the pane at once, a failure brings it
 // back, and pr-watch's `add` follows it again.
-const unfollowIssue = async ($: EngineInterface, issue: IssueRow) => {
-  await update($, snapshot, shown => (shown === null ? shown : { ...shown, issues: shown.issues?.filter(one => one.url !== issue.url) }))
-  const ran = await prWatch($, ['remove', issue.url], 60_000).catch(error => ({ exitCode: 1, stdout: '', stderr: String(error) }))
+const dropIssues = async ($: EngineInterface, issues: IssueRow[], what: string) => {
+  const urls = new Set(issues.map(issue => issue.url))
+  await update($, snapshot, shown => (shown === null ? shown : { ...shown, issues: shown.issues?.filter(one => !urls.has(one.url)) }))
+  const ran = await prWatch($, ['remove', ...urls], 60_000).catch(error => ({ exitCode: 1, stdout: '', stderr: String(error) }))
 
   if (ran.exitCode !== 0) {
-    $.ui.toast(`Could not unfollow #${issue.number}: ${ran.stderr.trim().split('\n')[0]}`)
+    $.ui.toast(`Could not unfollow ${what}: ${ran.stderr.trim().split('\n')[0]}`)
     await load($, 'cached')
 
     return
   }
 
-  $.ui.toast(`No longer following ${issue.repo} #${issue.number} (ask Claude to follow it again)`)
+  $.ui.toast(`No longer following ${what} (ask Claude to follow again)`)
+}
+
+const unfollowIssue = ($: EngineInterface, issue: IssueRow) => dropIssues($, [issue], `${issue.repo} #${issue.number}`)
+
+const unfollowKey = (repo: string) => `unfollow|${repo}`
+
+// Every issue of a repo at once: the first press arms the button, the second unfollows them.
+const unfollowRepo = async ($: EngineInterface, repo: string, issues: IssueRow[]) => {
+  if ((await read($, armed)) !== unfollowKey(repo)) {
+    await update($, armed, () => unfollowKey(repo))
+
+    return
+  }
+
+  await update($, armed, () => '')
+  await dropIssues($, issues, `the ${issues.length} issue${issues.length === 1 ? '' : 's'} of ${repo}`)
 }
 
 // Yellow: something happened since the user last looked. Gray: nothing new, or closed.
@@ -1196,7 +1213,7 @@ export const register: Register = (on, options) => {
   on('command.run', { command: COMMAND }, async $ => {
     await openPane($)
 
-    return { text: 'Tracked PRs pane opened.' }
+    return { text: 'Dev activity pane opened.' }
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
@@ -1387,8 +1404,8 @@ export const register: Register = (on, options) => {
       builds.length > 0 && 'builds',
       attention.length > 0 && 'attention',
       reviews.length > 0 && 'reviews',
-      issues.length > 0 && 'issues',
       ours.length > 0 && 'waiting',
+      issues.length > 0 && 'issues',
       approved.length > 0 && 'approved',
       parked.length > 0 && 'parked',
       recentCount > 0 && 'recent',
@@ -2074,9 +2091,19 @@ export const register: Register = (on, options) => {
         const moved = ofRepo.filter(issue => issue.changes.length > 0).length
         const hint = !isOpen && moved > 0 ? <Text color="yellow">{` · ${moved} updated`}</Text> : null
         const buttonKey = `issues-repo-${repo}`
+        const isArmed = armedKey === unfollowKey(repo)
+        const unfollowAll = (
+          <Button
+            key={`unfollow-all-${repo}`}
+            label={isArmed ? `press again to unfollow ${ofRepo.length}` : 'unfollow all'}
+            variant={isArmed ? 'primary' : undefined}
+            dimColor={!isArmed}
+            onPress={() => void unfollowRepo($, repo, ofRepo)}
+          />
+        )
 
         return repoBlock(key, buttonKey, repo, ofRepo.length, isOpen, hint, () => ofRepo.map(issue => issueRow(issue, `all-${buttonKey}`)),
-          worst(ofRepo.map(issueColor)), ofRepo.map(issueFold))
+          worst(ofRepo.map(issueColor)), ofRepo.map(issueFold), unfollowAll)
       })
 
     // The runs of each repo; a folded one says what it is doing.
@@ -2194,21 +2221,6 @@ export const register: Register = (on, options) => {
               )}
           </Box>
         )}
-        {issues.length > 0 && (
-          <Box flexDirection="column" marginTop={1}>
-            {sectionLine('issues', [
-              <Text color={worst(issues.map(issueColor))}>● </Text>,
-              <Button
-                key="issues"
-                label={`${isIssuesOpen ? '▾' : '▸'} Issues I follow (${issues.length})`}
-                plain
-                onPress={() => void toggleRepo($, repoKey('issues', '*'), isIssuesOpen)}
-              />,
-              !isIssuesOpen && updatedIssues(shown) > 0 && <Text color="yellow"> · {updatedIssues(shown)} updated</Text>,
-            ])}
-            {isIssuesOpen && closingBlock('fold-all', issueBlocks())}
-          </Box>
-        )}
         {shown !== null && prs.length === 0 && (
           <Text dimColor>{shows.openPrs || shows.parked ? 'No PR tracked. Ask Claude to watch one.' : 'PRs turned off in the Configuration pane (Mods, pr-pane).'}</Text>
         )}
@@ -2225,6 +2237,21 @@ export const register: Register = (on, options) => {
               !isWaitingOpen && hasRunningCi(ours) && <Text color="yellow"> · CI running</Text>,
             ])}
             {isWaitingOpen && closingBlock('fold-all', repoBlocks('waiting', ours, false))}
+          </Box>
+        )}
+        {issues.length > 0 && (
+          <Box flexDirection="column" marginTop={1}>
+            {sectionLine('issues', [
+              <Text color={worst(issues.map(issueColor))}>● </Text>,
+              <Button
+                key="issues"
+                label={`${isIssuesOpen ? '▾' : '▸'} Issues I follow (${issues.length})`}
+                plain
+                onPress={() => void toggleRepo($, repoKey('issues', '*'), isIssuesOpen)}
+              />,
+              !isIssuesOpen && updatedIssues(shown) > 0 && <Text color="yellow"> · {updatedIssues(shown)} updated</Text>,
+            ])}
+            {isIssuesOpen && closingBlock('fold-all', issueBlocks())}
           </Box>
         )}
         {approved.length > 0 && (

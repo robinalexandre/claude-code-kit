@@ -24,8 +24,8 @@
     pr_watch.py approve URL             approve a PR (Azure DevOps: vote approved; GitHub: an approving review)
                                         and track it as reviewed until it is merged
     pr_watch.py merge URL               merge a PR (GitHub: squash if the repo allows it; Azure DevOps: complete)
-    pr_watch.py remove URL              stop tracking a PR (and never track it again on its own), or stop
-                                        following an issue
+    pr_watch.py remove URL...           stop tracking a PR (and never track it again on its own), or stop
+                                        following an issue; several at once
     pr_watch.py park URL [--note WHY]   keep tracking a PR without reporting its changes
     pr_watch.py unpark URL              report them again
     pr_watch.py ack URL [--until DATE] [--note TEXT]
@@ -2314,7 +2314,8 @@ def main(argv: list[str]) -> int:
         elif command == "merge" and args:
             merge(args[0])
         elif command == "remove" and args:
-            remove(args[0])
+            for url in args:
+                remove(url)
         elif command == "park" and args:
             park(args[0], args[args.index("--note") + 1] if "--note" in args[1:-1] else "")
         elif command == "unpark" and args:

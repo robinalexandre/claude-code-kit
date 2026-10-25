@@ -29,10 +29,11 @@ const busy = atom({ plugin: 'dnd', key: 'busy' } as const, false)
 const tab = atom({ plugin: 'dnd', key: 'tab' } as const, 'dnd')
 const mods = atom({ plugin: 'dnd', key: 'mods' } as const, null)
 const modsScope = atom({ plugin: 'dnd', key: 'modsScope' } as const, 'all')
+const modsSaves = atom({ plugin: 'dnd', key: 'modsSaves' } as const, 0)
 
 const PARTS: { part: DndPart; title: string }[] = [
   { part: 'history', title: 'History' },
-  { part: 'prs', title: 'PRs & CI' },
+  { part: 'prs', title: 'Dev activity' },
   { part: 'reminders', title: 'Reminders' },
   { part: 'handoffs', title: 'Handoffs' },
 ]
@@ -353,11 +354,15 @@ const overlayValue = (overlay: Json, plugin: string, field: string) => {
 const loadMods = async ($: EngineInterface) => {
   const { machine, file } = await machineFile($)
   const overlay = file === '' ? {} : await readJson($, file)
+  // The private sync builds settings.json from its shared settings, then the machine file's over them.
+  const shared = file === '' ? {} : { settings: await readJson($, `${await home($)}/.claude-sync/settings.shared.json`) }
   const settings = (await $.config.list())
     .filter(row => row.provider.tier === 'user' && row.key.includes('.'))
     .map((row): ModSetting => {
       const plugin = row.key.slice(0, row.key.indexOf('.'))
       const field = row.key.slice(plugin.length + 1)
+      const isHere = overlayValue(overlay, plugin, field) !== undefined
+      const sharedValue = isHere ? overlayValue(shared, plugin, field) : undefined
 
       return {
         key: row.key,
@@ -369,12 +374,17 @@ const loadMods = async ($: EngineInterface) => {
         value: Array.isArray(row.value) ? [...row.value] : (row.value as ModSetting['value']),
         ...(row.options ? { options: [...row.options] } : {}),
         isLocked: row.isLocked,
-        isHere: overlayValue(overlay, plugin, field) !== undefined,
+        isHere,
+        ...(sharedValue !== undefined ? { shared: sharedValue as ModSetting['value'] } : {}),
       }
     })
 
   await update($, mods, () => ({ settings, machine }))
 }
+
+// What every other computer has for a setting this one keeps apart.
+const sharedText = (setting: ModSetting) =>
+  setting.shared === undefined ? 'the default' : setting.shared === true ? 'on' : setting.shared === false ? 'off' : String(setting.shared)
 
 // Writes the field's value into the machine file, or takes it out (undefined), leaving no empty object behind.
 const writeOverlay = async ($: EngineInterface, file: string, setting: ModSetting, value: ModSetting['value'] | undefined) => {
@@ -418,6 +428,7 @@ const setMod = async ($: EngineInterface, setting: ModSetting, value: ModSetting
     $.ui.toast(`Could not change ${setting.label}: ${String(error).split('\n')[0] ?? ''}`)
   } finally {
     await loadMods($)
+    await update($, modsSaves, count => count + 1)
   }
 }
 
@@ -819,6 +830,7 @@ export const register: Register = on => {
     const currentTab = await read($, tab)
     const modsShown = await read($, mods)
     const scope = await read($, modsScope)
+    const saves = await read($, modsSaves)
 
     const showTab = (id: string) => {
       void update($, tab, () => id)
@@ -868,13 +880,25 @@ export const register: Register = on => {
         )
       }
 
+      // The field keeps what was typed until it is drawn anew: a key per save draws the saved value
+      // again, even when it did not change. A number that does not read as one is not saved.
+      const save = (typed: string) => {
+        if (setting.kind !== 'number') {
+          void setMod($, setting, typed)
+        } else if (typed.trim() !== '' && Number.isFinite(Number(typed))) {
+          void setMod($, setting, Number(typed))
+        } else {
+          void update($, modsSaves, count => count + 1)
+        }
+      }
+
       return (
         <Input
-          key={`set-${setting.key}`}
+          key={`set-${setting.key}-${saves}`}
           label={`${truncate(title, Math.floor(width / 2))} `}
           value={String(setting.value)}
           submitLabel="save"
-          onSubmit={(typed: string) => void setMod($, setting, setting.kind === 'number' ? Number(typed) : typed)}
+          onSubmit={save}
         />
       )
     }
@@ -908,7 +932,12 @@ export const register: Register = on => {
                 {foldLine(key, `${plugin} (${settings.length})`, isOpen)}
                 {isOpen && (
                   <Box flexDirection="column" paddingLeft={2}>
-                    {settings.map(settingRow)}
+                    {settings.map(setting => (
+                      <Box key={`row-${setting.key}`} flexDirection="column">
+                        {settingRow(setting)}
+                        {setting.isHere && <Text dimColor>{truncate(`  used here instead of all computers' value: ${sharedText(setting)}`, width - 4)}</Text>}
+                      </Box>
+                    ))}
                   </Box>
                 )}
               </Box>

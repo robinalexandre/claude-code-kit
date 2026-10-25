@@ -1,5 +1,5 @@
 #!/bin/bash
-# Do-not-disturb profiles for the kit's panes (history, PRs & CI, reminders, handoffs): what each
+# Do-not-disturb profiles for the kit's panes (history, dev activity, reminders, handoffs): what each
 # profile hides or keeps, and the rules that turn one on by themselves.
 #   dnd.sh active [DIR]                the profile on now for a session in DIR, as JSON; a part kept
 #                                      `only` some names also lists them in `keep`, as the panes
@@ -307,7 +307,7 @@ edit() {
 
   mode_of() { profiles | jq -r --arg p "$profile" --arg part "$1" '.profiles[$p][$part].mode // "show"'; }
   picked() { profiles | jq -e --arg p "$profile" --arg part "$1" --arg n "$2" '.profiles[$p][$part].only // [] | index($n) != null' > /dev/null; }
-  title() { case "$1" in history) echo History ;; prs) echo "PRs & CI" ;; reminders) echo Reminders ;; handoffs) echo Handoffs ;; esac; }
+  title() { case "$1" in history) echo History ;; prs) echo "Dev activity" ;; reminders) echo Reminders ;; handoffs) echo Handoffs ;; esac; }
 
   draw() {
     {

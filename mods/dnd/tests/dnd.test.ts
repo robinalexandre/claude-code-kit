@@ -354,6 +354,7 @@ test('a change for this computer only is kept in its machine file, and one for a
     settings: { theme: 'dark', pluginConfigs: { 'recent-prompts@inline': { options: { questions: false } } } },
   })
   expect(await pane.find({ key: 'set-recent-prompts.questions', text: /\(this computer\)$/ })).toBeDefined()
+  expect(await pane.find({ text: "  used here instead of all computers' value: the default" })).toBeDefined()
 
   await pane.press({ key: 'scope-all' })
   await pane.press({ key: 'set-recent-prompts.questions' })
@@ -363,6 +364,37 @@ test('a change for this computer only is kept in its machine file, and one for a
     ['recent-prompts.questions', true],
   ])
   expect(JSON.parse(files['~/.claude-sync/machines/mac.json'] ?? '')).toEqual({ settings: { theme: 'dark' } })
+})
+
+test('a number saved with Enter stays in its field, the same value again included; one that is not a number is not saved', async ($, on) => {
+  const files: Files = {}
+  const sets: unknown[] = []
+  let days = 30
+  answer(on, { active: OFF, profiles: {}, rules: [] }, [], undefined, files)
+  on('config.list', () => ({ value: [{ ...HISTORY_ROW, key: 'pr-pane.issueDays', label: 'Issues active in the last (days)', kind: 'number', value: days, provider: { plugin: 'pr-pane', tier: 'user' } }] as never }))
+  on('config.set', ($, e) => {
+    sets.push([e.key, e.value])
+    days = e.value as number
+
+    return { value: e.value }
+  })
+
+  const pane = await openMods($)
+  const value = async (key: string) => ((await pane.find({ type: 'Input', key })) as { props?: { value?: string } } | undefined)?.props?.value
+
+  expect(await value('set-pr-pane.issueDays-0')).toBe('30')
+
+  await pane.input({ key: 'set-pr-pane.issueDays-0', text: '30', kind: 'submit' })
+
+  expect(sets).toEqual([['pr-pane.issueDays', 30]])
+  // Drawn anew, so what was typed gives way to the saved value.
+  expect(await value('set-pr-pane.issueDays-0')).toBeUndefined()
+  expect(await value('set-pr-pane.issueDays-1')).toBe('30')
+
+  await pane.input({ key: 'set-pr-pane.issueDays-1', text: 'soon', kind: 'submit' })
+
+  expect(sets).toHaveLength(1)
+  expect(await value('set-pr-pane.issueDays-2')).toBe('30')
 })
 
 test('without a private sync, the Mods tab says changes stay on this computer', async ($, on) => {

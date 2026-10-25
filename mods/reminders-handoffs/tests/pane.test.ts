@@ -478,7 +478,7 @@ test('the band button joins the shared row of the mods beneath, in key order', a
           key: 'band-buttons',
           flexDirection: 'row',
           children: [
-            Box({ key: 'band-2-prs', children: Button({ key: 'prs', label: 'PRs & CI', onPress: () => undefined }) }),
+            Box({ key: 'band-2-prs', children: Button({ key: 'prs', label: 'Dev activity', onPress: () => undefined }) }),
             Box({ key: 'band-1-history', children: Button({ key: 'history', label: 'history', onPress: () => undefined }) }),
           ],
         }),
