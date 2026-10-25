@@ -147,6 +147,8 @@ def main() -> int:
         return rows
 
     pr.fetch_all = fetch_all
+    # The paces below are the usual ones, whatever powers the computer running the test.
+    pr.on_battery = lambda: False
     pr.auto_track = lambda entries, hosts=pr.HOSTS: ([], [])
     looked: list[str] = []
 

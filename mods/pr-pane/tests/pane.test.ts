@@ -1387,6 +1387,36 @@ test('with the pane closed the band asks pr-watch every five minutes and follows
   expect(autoCalls.length).toBe(2)
 })
 
+test('in low power mode the pane says so and asks pr-watch five times less often', async ($, on) => {
+  const clock = mock.clock(on)
+  const autoCalls: string[][] = []
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
+  on('process.run', ($, e) => {
+    if (e.argv.includes('--auto')) {
+      autoCalls.push(e.argv.slice(2))
+    }
+
+    return ran(0, e.argv[2] === 'status' ? JSON.stringify({ live: false, prs: [row('1', {})], lowPower: true, errors: [] }) : '')
+  })
+  on('ui.render', () => Fragment({}))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+
+  await $.command.run(RUN)
+  const pane = await mountPane($, 'terminal')
+  await clock.advance(0)
+  const first = autoCalls.length
+
+  expect(await pane.find({ text: / · low power$/ })).toBeDefined()
+
+  await clock.advance(2 * 60_000)
+
+  expect(autoCalls.length).toBe(first)
+
+  await clock.advance(8 * 60_000)
+
+  expect(autoCalls.length).toBe(first + 1)
+})
+
 test('without pr-watch the band has no Dev activity button', async ($, on) => {
   const clock = mock.clock(on)
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))

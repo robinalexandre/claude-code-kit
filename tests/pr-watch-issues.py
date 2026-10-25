@@ -175,6 +175,19 @@ def main() -> int:
     pane({"runsPerRepo": 2})
     check("the pane's count wins", [one["url"] for one in pr.shown_runs(runs)] == ["1", "2", "3"])
 
+    # 7. Low power mode: every pace five times slower, on battery by default.
+    battery = [False]
+    pr.on_battery = lambda: battery[0]
+    pane({})
+    check("on mains, the usual paces", pr.cache_minutes()["running"] == 1.0)
+    battery[0] = True
+    check("on battery, five times slower by default", pr.cache_minutes() == {"running": 5.0, "runs": 25.0, "prs": 50.0, "lists": 75.0})
+    pane({"lowPower": "off"})
+    check("off, the usual paces even on battery", pr.cache_minutes()["prs"] == 10.0)
+    battery[0] = False
+    pane({"lowPower": "on", "minutesPrs": 4})
+    check("on, slower even on mains, from the pane's own paces", pr.cache_minutes()["prs"] == 20.0)
+
     server.shutdown()
     print(f"{len(failures)} failed" if failures else "all passed")
     return 1 if failures else 0

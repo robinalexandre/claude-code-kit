@@ -99,6 +99,8 @@ export type PrSnapshot = {
   issues?: IssueRow[]
   recent?: RecentPr[]
   errors: string[]
+  /** pr-watch's low power mode is on now: every automatic refresh is slower. */
+  lowPower?: boolean
   isLive: boolean
   at: string
   /** Per host (`github`, `ado`): the shared snapshot shown; absent from a pr-watch that shares nothing. */

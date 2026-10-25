@@ -68,7 +68,9 @@ What is looked up, reported and listed follows the PR pane's settings (the Confi
 pr-pane, kept in Claude Code's settings.json), else the same keys in config.json: `openPrs`,
 `parked` (the tracked PRs, open or parked), `recent` (the merged and closed ones), `reviews`,
 `runsPerRepo` (0 to 20 pipeline runs per repo, 20 by default), `issues` and `issueDays`. What is
-turned off is neither fetched nor reported, and its records stay as they were.
+turned off is neither fetched nor reported, and its records stay as they were. `lowPower` (`off`,
+`on`, or `on battery` by default: while on battery or in the system's low power mode) makes the
+automatic refresh five times slower; `status` says it as `lowPower`.
 
 Shared snapshot: what `status --auto` or `--live` fetched is shared through the config sync's GitHub
 repo, on its own branch (`pr-cache`, one commit replaced each time, so it never grows), one section per
@@ -1421,7 +1423,7 @@ def config_value(key: str, default: object) -> object:
 
 
 SETTINGS = {"openPrs": True, "parked": True, "recent": True, "reviews": True, "runsPerRepo": BUILDS_PER_PLACE,
-            "issues": True, "issueDays": ISSUE_DAYS}
+            "issues": True, "issueDays": ISSUE_DAYS, "lowPower": "on battery"}
 
 
 def pane_settings() -> dict:
@@ -1492,6 +1494,41 @@ def _epoch(stamp: str) -> float:
 
 
 PANE_MINUTES = {"running": "minutesRunning", "runs": "minutesRuns", "prs": "minutesPrs", "lists": "minutesLists"}
+LOW_POWER_FACTOR = 5
+
+
+def on_battery() -> bool:
+    """Whether this computer runs on its battery or in its low power (battery saver) mode; False when
+    it cannot tell."""
+    try:
+        if sys.platform == "darwin":
+            settings = subprocess.run(["pmset", "-g"], capture_output=True, text=True, timeout=5).stdout
+            battery = subprocess.run(["pmset", "-g", "batt"], capture_output=True, text=True, timeout=5).stdout
+            return bool(re.search(r"lowpowermode\s+1", settings)) or "'Battery Power'" in battery
+        if sys.platform == "win32":
+            import ctypes
+
+            class PowerStatus(ctypes.Structure):
+                _fields_ = [("ACLineStatus", ctypes.c_ubyte), ("BatteryFlag", ctypes.c_ubyte),
+                            ("BatteryLifePercent", ctypes.c_ubyte), ("SystemStatusFlag", ctypes.c_ubyte),
+                            ("BatteryLifeTime", ctypes.c_ulong), ("BatteryFullLifeTime", ctypes.c_ulong)]
+
+            status = PowerStatus()
+            if not ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(status)):  # type: ignore[attr-defined]
+                return False
+            return status.ACLineStatus == 0 or status.SystemStatusFlag == 1
+        supplies = list(Path("/sys/class/power_supply").glob("*"))
+        mains = [supply for supply in supplies if (supply / "type").read_text().strip() == "Mains"]
+        return bool(mains) and all((supply / "online").read_text().strip() == "0" for supply in mains)
+    except (OSError, ValueError, subprocess.SubprocessError, AttributeError):
+        return False
+
+
+def low_power() -> bool:
+    """`lowPower`: `on`, `off`, or `on battery` (the default: while on battery or in low power mode),
+    the automatic refresh then LOW_POWER_FACTOR times slower."""
+    chosen = str(setting("lowPower"))
+    return chosen == "on" or (chosen == "on battery" and on_battery())
 
 
 def cache_minutes() -> dict[str, float]:
@@ -1502,12 +1539,13 @@ def cache_minutes() -> dict[str, float]:
     given = {"prs": given["idle"], **given} if "idle" in given else given
     chosen = pane_settings()
     given = {**given, **{part: chosen[key] for part, key in PANE_MINUTES.items() if key in chosen}}
+    factor = LOW_POWER_FACTOR if low_power() else 1
     minutes = {}
     for part, default in CACHE_MINUTES.items():
         try:
-            minutes[part] = max(0.0, float(given.get(part, default)))
+            minutes[part] = max(0.0, float(given.get(part, default))) * factor
         except (TypeError, ValueError):
-            minutes[part] = default
+            minutes[part] = default * factor
     return minutes
 
 
@@ -2116,7 +2154,7 @@ def status(mode: str) -> None:
     shares = {host: {"at": section.get("at", ""), "by": section.get("by", "")} for host, section in sections.items()}
     print(json.dumps({"live": mode != "cached", "fetched": fetched_hosts, "sections": shares, "prs": merge_order(prs),
                       "reviews": reviews, "builds": builds, "issues": issues, "recent": recent,
-                      "errors": grouped_errors(errors)},
+                      "lowPower": low_power(), "errors": grouped_errors(errors)},
                      ensure_ascii=False))
 
 
