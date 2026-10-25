@@ -272,8 +272,17 @@ def main() -> int:
     (watch / "config.json").write_text(json.dumps({"azureOrgs": ["org"], "cacheMinutes": {"running": 5}}))
     age("github", 3)
     asked.clear()
+    looked.clear()
     status(pr, "auto")
-    check("cacheMinutes in config.json is followed", "github" not in asked)
+    check("cacheMinutes in config.json is followed", asked == [] and looked == [])
+    # The pane's setting wins over config.json.
+    (root / "claude").mkdir(exist_ok=True)
+    (root / "claude" / "settings.json").write_text(json.dumps({"pluginConfigs": {"pr-pane@inline": {"options": {"minutesRunning": 2}}}}))
+    age("github", 3)
+    looked.clear()
+    status(pr, "auto")
+    check("the pane's minutes win over config.json", looked == [f"running runs {run}"])
+    (root / "claude" / "settings.json").unlink()
 
     # 7. Turned off: nothing goes to GitHub.
     os.environ["PR_WATCH_SHARED"] = "off"

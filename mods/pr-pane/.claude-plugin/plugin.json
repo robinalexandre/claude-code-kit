@@ -1,6 +1,6 @@
 {
   "name": "pr-pane",
-  "version": "0.11.2",
+  "version": "0.12.0",
   "description": "A pane listing the PRs pr-watch tracks: status, CI, votes and what each one waits for, plus your pipeline runs and the issues you follow; open one in the browser, refresh them live.",
   "types": "./types/index.d.ts",
   "author": {
@@ -47,6 +47,30 @@
       "title": "GitHub issues I follow",
       "description": "The issues you opened, commented on, were mentioned or assigned in, or subscribed to in your repos. Off, pr-watch stops looking them up.",
       "default": true
+    },
+    "minutesRunning": {
+      "type": "number",
+      "title": "Refresh runs and CIs in progress every (minutes)",
+      "description": "While the pane is open, the pipeline runs and PR CIs in progress are read again, alone, this often. The refresh button reads everything at once.",
+      "default": 1
+    },
+    "minutesRuns": {
+      "type": "number",
+      "title": "Look for new pipeline runs every (minutes)",
+      "description": "How often each repo's runs are listed again to find new ones. An ended run is never read again.",
+      "default": 5
+    },
+    "minutesPrs": {
+      "type": "number",
+      "title": "Refresh every PR every (minutes)",
+      "description": "How often every tracked PR is read again: comments, votes, status.",
+      "default": 10
+    },
+    "minutesLists": {
+      "type": "number",
+      "title": "Refresh reviews, new PRs and issues every (minutes)",
+      "description": "How often the review requests, your new PRs to track and the issues you follow are looked up again.",
+      "default": 15
     },
     "issueDays": {
       "type": "number",

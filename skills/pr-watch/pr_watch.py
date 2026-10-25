@@ -1484,12 +1484,24 @@ def _epoch(stamp: str) -> float:
         return 0.0
 
 
+PANE_MINUTES = {"running": "minutesRunning", "runs": "minutesRuns", "prs": "minutesPrs", "lists": "minutesLists"}
+
+
 def cache_minutes() -> dict[str, float]:
-    """`cacheMinutes` in config.json, over CACHE_MINUTES; `idle`, from older setups, stands for `prs`."""
+    """The pane's settings (`minutesRunning`…), else `cacheMinutes` in config.json, over CACHE_MINUTES;
+    `idle`, from older setups, stands for `prs`."""
     given = config_value("cacheMinutes", {})
     given = given if isinstance(given, dict) else {}
     given = {"prs": given["idle"], **given} if "idle" in given else given
-    return {part: float(given.get(part, default)) for part, default in CACHE_MINUTES.items()}
+    chosen = pane_settings()
+    given = {**given, **{part: chosen[key] for part, key in PANE_MINUTES.items() if key in chosen}}
+    minutes = {}
+    for part, default in CACHE_MINUTES.items():
+        try:
+            minutes[part] = max(0.0, float(given.get(part, default)))
+        except (TypeError, ValueError):
+            minutes[part] = default
+    return minutes
 
 
 _SHARED: dict = {}
