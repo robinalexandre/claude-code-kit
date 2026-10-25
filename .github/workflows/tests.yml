@@ -49,6 +49,8 @@ jobs:
           bash tests/kit-answers.sh
       - name: Email guard
         run: bash tests/git-identity-guard.sh
+      - name: Reply marker check
+        run: bash tests/wave-check.sh
       - name: Install in a sandbox
         run: |
           bash tests/install-sandbox.sh --auto

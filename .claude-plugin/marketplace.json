@@ -198,7 +198,7 @@
     {
       "name": "wave-check-hook",
       "description": "A warning whenever a reply doesn't start with your marker emoji (the hook form of wave-check, for setups without mods).",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "category": "productivity",
       "source": ".",
       "strict": false,
