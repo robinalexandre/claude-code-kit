@@ -256,8 +256,9 @@ export const register: Register = on => {
     const hasDnd = (await read($, dndActive)) !== null
     const width = Math.max(30, e.props.bodyColumns - 2)
 
-    // Opened by another mod's button (dnd's), the settings are read on the first draw.
-    if (shown === null && !loadAsked) {
+    // Read on the first draw after a load or reload: opened by another mod's button (dnd's), or kept
+    // open while a mod brought new settings.
+    if (!loadAsked) {
       loadAsked = true
       void loadMods($)
     }

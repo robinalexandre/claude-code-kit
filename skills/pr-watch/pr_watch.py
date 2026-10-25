@@ -124,6 +124,7 @@ BUILD_HOURS = float(os.environ.get("PR_WATCH_BUILD_HOURS", "24"))
 ISSUE_DAYS = 30
 CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "pr-watch"
 SHARED_LOCAL = CACHE_DIR / "shared.json"
+POWER = CACHE_DIR / "power.json"
 SHARED_BRANCH = "pr-cache"
 SHARED_PATH = "pr-watch/snapshot.json"
 GITHUB_API = os.environ.get("PR_WATCH_GITHUB_API", "https://api.github.com")
@@ -1528,7 +1529,16 @@ def low_power() -> bool:
     """`lowPower`: `on`, `off`, or `on battery` (the default: while on battery or in low power mode),
     the automatic refresh then LOW_POWER_FACTOR times slower."""
     chosen = str(setting("lowPower"))
-    return chosen == "on" or (chosen == "on battery" and on_battery())
+    is_low = chosen == "on" or (chosen == "on battery" and on_battery())
+    # The status line says it from this file (and checks the battery itself where that is cheap).
+    try:
+        if POWER.exists() and json.loads(POWER.read_text(encoding="utf-8")) == {"setting": chosen, "lowPower": is_low}:
+            return is_low
+        POWER.parent.mkdir(parents=True, exist_ok=True)
+        POWER.write_text(json.dumps({"setting": chosen, "lowPower": is_low}), encoding="utf-8")
+    except (OSError, ValueError):
+        pass
+    return is_low
 
 
 def cache_minutes() -> dict[str, float]:

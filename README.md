@@ -142,7 +142,7 @@ Mods change Claude Code's own interface. They install as plugins like the other 
 
 ### Status line
 
-[statusline-command.sh](statusline-command.sh): folder, git branch (and worktree), model, context used, effort level, the 5-hour rate limit with its reset time, the learn level (💡 brief, with the learn mod) and the do-not-disturb profile on (🔕 work · session, with the dnd mod, only while one is on: for this session, this computer, everywhere, or by a rule, with its end), colour-coded.
+[statusline-command.sh](statusline-command.sh): folder, git branch (and worktree), model, context used, effort level, the 5-hour rate limit with its reset time, the learn level (💡 brief, with the learn mod) and the do-not-disturb profile on (🔕 work · session, with the dnd mod, only while one is on: for this session, this computer, everywhere, or by a rule, with its end) and 🔋 low power while pr-watch's low power mode slows the dev activity pane, colour-coded.
 
 ### Sync engine
 

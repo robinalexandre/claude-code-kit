@@ -85,6 +85,28 @@ if [ -n "$session_id" ] && [ -f "$dnd_file" ]; then
   [ -n "$dnd" ] && dnd_str=$(printf '🔕 \033[35m%s\033[0m' "$dnd")
 fi
 
+# pr-watch's low power mode, from what it last wrote: on, or on battery and the computer on its
+# battery or in its low power mode, checked here on macOS and Linux, else as pr-watch last saw it
+power_file="${XDG_CACHE_HOME:-$HOME/.cache}/pr-watch/power.json"
+if [ -f "$power_file" ]; then
+  power_setting=$(jq -r '.setting // empty' "$power_file" 2>/dev/null | tr -d '\r')
+  power_low=$(jq -r '.lowPower // false' "$power_file" 2>/dev/null | tr -d '\r')
+  if [ "$power_setting" = "on battery" ]; then
+    if command -v pmset >/dev/null 2>&1; then
+      power_low=false
+      pmset -g batt 2>/dev/null | grep -q "'Battery Power'" && power_low=true
+      pmset -g 2>/dev/null | grep -Eq 'lowpowermode[[:space:]]+1' && power_low=true
+    elif [ -d /sys/class/power_supply ]; then
+      for supply in /sys/class/power_supply/*; do
+        [ "$(cat "$supply/type" 2>/dev/null)" = Mains ] || continue
+        if [ "$(cat "$supply/online" 2>/dev/null)" = 0 ]; then power_low=true; else power_low=false; fi
+      done
+    fi
+  fi
+  [ "$power_setting" = off ] && power_low=false
+  [ "$power_low" = true ] && power_str=$(printf '🔋 \033[33mlow power\033[0m')
+fi
+
 # Git branch (skip optional lock, non-fatal); detached HEAD falls back to the short SHA
 branch=$(git -C "$cwd" --no-optional-locks branch --show-current 2>/dev/null)
 [ -z "$branch" ] && branch=$(git -C "$cwd" --no-optional-locks rev-parse --short HEAD 2>/dev/null)
@@ -108,6 +130,7 @@ out=""
 [ -n "$rate_str" ]  && out="$out $rate_str"
 [ -n "$learn_str" ] && out="$out $learn_str"
 [ -n "$dnd_str" ]   && out="$out $dnd_str"
+[ -n "$power_str" ] && out="$out $power_str"
 
 # Trim leading space
 out="${out# }"

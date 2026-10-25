@@ -1,6 +1,6 @@
 {
   "name": "configuration",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "The Configuration pane of the kit's panes (a button on the band, /configuration): every mod's settings, for all computers or this one, with the value the other computers use; the Do not disturb pane opens from it when dnd is installed.",
   "types": "./types/index.d.ts",
   "author": {
