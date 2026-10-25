@@ -256,19 +256,19 @@ def test_another_agents_material_is_curated_with_its_own_report(tmp_path: Path):
         return proposals_json(
             {
                 "action": "create",
-                "name": "waha-quotes",
-                "title": "WAHA quotes need the message id",
+                "name": "deploy-region",
+                "title": "The deploy script needs the region flag",
                 "type": "fact",
                 "trust": "agent",
-                "topics": ["whatsapp"],
+                "topics": ["deploy"],
                 "sources": ["nightly-review"],
-                "body": "A reply quotes a message by its id, never by its body.",
+                "body": "The deploy script fails without --region, whatever the default says.",
             }
         )
 
     report = curate_material(
         "Nightly review",
-        "- WAHA quotes need the id. token ghp_abcdefghijklmnop",
+        "- The deploy needs --region. token ghp_abcdefghijklmnop",
         DAY,
         notes,
         runner,
@@ -277,13 +277,44 @@ def test_another_agents_material_is_curated_with_its_own_report(tmp_path: Path):
     system, material = calls[0]
     assert 'another agent of the user wrote about its own work ("nightly-review")' in system
     assert "transcripts of one day" not in system
-    assert "## nightly-review\n\n- WAHA quotes need the id." in material
+    assert "## nightly-review\n\n- The deploy needs --region." in material
     assert "ghp_abcdefghijklmnop" not in material
-    assert report.created == ["waha-quotes: WAHA quotes need the message id"]
-    note = load_note(notes / "waha-quotes.md")
+    assert report.created == ["deploy-region: The deploy script needs the region flag"]
+    note = load_note(notes / "deploy-region.md")
     assert note.trust == "agent" and "session:nightly-review" in note.source
     assert (notes / ".curator" / "2026-10-22-nightly-review.md").exists()
     assert not (notes / ".curator" / "2026-10-22.md").exists()
+
+
+def test_another_agent_never_changes_a_note_of_the_users_word(tmp_path: Path):
+    notes = tmp_path / "knowledge"
+    notes.mkdir()
+    mine = "---\nname: backups\ntitle: Backups\ntype: decision\ntrust: user\n---\n\nNightly.\n"
+    (notes / "backups.md").write_text(mine)
+    theirs = "---\nname: cache\ntitle: Cache\ntype: fact\ntrust: agent\n---\n\nIt helps.\n"
+    (notes / "cache.md").write_text(theirs)
+
+    def runner(system: str, material: str) -> str:
+        return proposals_json(
+            {"action": "merge", "name": "backups", "title": "Backups", "body": "Do X."},
+            {"action": "merge", "name": "backups", "title": "Keep 30 days", "body": "Prune."},
+            {"action": "merge", "name": "cache", "title": "Cache", "body": "Warm it."},
+            {"action": "create", "name": "said", "title": "Said", "trust": "user", "body": "Hi."},
+        )
+
+    report = curate_material("Nightly review", "- lessons", DAY, notes, runner)
+
+    assert (notes / "backups.md").read_text() == mine
+    assert sorted(report.created) == [
+        "backups-2026-10-22: Backups",
+        "keep-30-days: Keep 30 days",
+        "said: Said",
+    ]
+    for name in ("backups-2026-10-22", "keep-30-days"):
+        note = load_note(notes / f"{name}.md")
+        assert note.trust == "agent" and "backups" in note.links
+    assert load_note(notes / "said.md").trust == "agent"
+    assert report.merged == ["cache: Cache"] and "Warm it." in (notes / "cache.md").read_text()
 
 
 def test_parse_proposals_tolerates_prose_and_fences():

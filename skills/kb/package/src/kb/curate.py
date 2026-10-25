@@ -38,7 +38,7 @@ DAY_MATERIAL = """the transcripts of one day of coding sessions between the user
 assistant (Claude Code), reduced to prompts and replies"""
 OTHER_MATERIAL = """what another agent of the user wrote about its own work ("NAME"): what \
 went wrong, why, and what it learned. It is that agent's reading, not the user's word: \
-trust "agent" unless it quotes a decision the user made"""
+trust "agent", always"""
 SYSTEM_PROMPT = """You are the curator of a personal knowledge base. You receive MATERIAL, \
 plus the catalog of the notes that already exist. Decide what deserves to be remembered \
 for months, and write it as notes.
@@ -254,12 +254,22 @@ def curate_material(
     readonly_roots: list[Path] | None = None,
 ) -> Report:
     """Curate a document another agent of the user wrote about its own work, ``name`` saying
-    which (it becomes the notes' source and the report's name, next to the day's)."""
+    which (it becomes the notes' source and the report's name, next to the day's). Its notes
+    are the agent's word, never the user's: trust "agent", and a note of trust "user" is
+    never changed; what would complete it becomes a new note linked to it."""
     label = slugify(name, 40)
     intro = OTHER_MATERIAL.replace("NAME", label)
     report_name = f"{day.isoformat()}-{label}"
     return _curate(
-        [(label, clean(text))], intro, day, notes_root, runner, max_new, readonly_roots, report_name
+        [(label, clean(text))],
+        intro,
+        day,
+        notes_root,
+        runner,
+        max_new,
+        readonly_roots,
+        report_name,
+        agent_only=True,
     )
 
 
@@ -272,6 +282,7 @@ def _curate(
     max_new: int,
     readonly_roots: list[Path] | None,
     report_name: str,
+    agent_only: bool = False,
 ) -> Report:
     report = Report(day)
     notes_root.mkdir(parents=True, exist_ok=True)
@@ -297,6 +308,8 @@ def _curate(
             report.errors.append(str(exc)[:300])
     report.proposals = len(proposals)
     proposals = _redirect_readonly_merges(proposals, existing, readonly)
+    if agent_only:
+        proposals = _redirect_user_merges(proposals, existing, day)
     creates = [p for p in proposals if p.get("action") != "merge"]
     if len(creates) > max_new:
         report.batches += 1
@@ -314,7 +327,7 @@ def _curate(
     known |= {slugify(str(p.get("name") or p.get("title") or "")) for p in proposals}
     for item in proposals:
         item["links"] = [x for x in _list(item.get("links")) if slugify(str(x)) in known]
-    _apply(proposals, existing, notes_root, day, max_new, report)
+    _apply(proposals, existing, notes_root, day, max_new, report, agent_only)
     report_dir = notes_root / REPORT_DIR
     report_dir.mkdir(exist_ok=True)
     (report_dir / f"{report_name}.md").write_text(report.markdown(), encoding="utf-8")
@@ -360,6 +373,28 @@ def _redirect_readonly_merges(
             item["action"] = "create"
             item["name"] = str(item.get("title") or name)
             item["links"] = [*_list(item.get("links")), name]
+        out.append(item)
+    return out
+
+
+def _redirect_user_merges(
+    proposals: list[dict[str, Any]], existing: dict[str, Note], day: date
+) -> list[dict[str, Any]]:
+    """What another agent would add to a note of the user's word becomes a new note linked
+    to it, under a name no note has: the user's note stays theirs alone."""
+    taken = set(existing)
+    out = []
+    for item in proposals:
+        name = slugify(str(item.get("name") or item.get("title") or ""))
+        if name in existing and existing[name].trust == "user":
+            item = dict(item)
+            new = slugify(str(item.get("title") or ""))
+            n = 1
+            while new in taken or new in RESERVED:
+                n += 1
+                new = f"{slugify(name, 40)}-{day.isoformat()}" + (f"-{n}" if n > 2 else "")
+            taken.add(new)
+            item.update(action="create", name=new, links=[*_list(item.get("links")), name])
         out.append(item)
     return out
 
@@ -418,6 +453,7 @@ def _apply(
     day: date,
     max_new: int,
     report: Report,
+    agent_only: bool = False,
 ) -> None:
     created = 0
     seen: set[str] = set()
@@ -444,6 +480,9 @@ def _apply(
             s for s in (str(x).strip() for x in _list(item.get("sources"))) if SOURCE.match(s)
         ]
         valid_until = _date(item.get("valid_until"))
+        if agent_only and name in existing and existing[name].trust == "user":
+            report.dropped.append(f"{name}: a note of the user's word, never changed by an agent")
+            continue
         if action == "merge" and name in existing:
             _merge(existing[name], body, links, topics, valid_until, sources, day)
             report.merged.append(f"{name}: {title}")
@@ -460,7 +499,9 @@ def _apply(
             title=title,
             body=body,
             type=str(item.get("type") or "fact") if item.get("type") in TYPES else "fact",
-            trust=str(item.get("trust")) if item.get("trust") in TRUSTS else "agent",
+            trust=str(item.get("trust"))
+            if item.get("trust") in TRUSTS and not agent_only
+            else "agent",
             source=", ".join(["curator", *(f"session:{s}" for s in sources)]),
             topics=topics[:3],
             created=day.isoformat(),
