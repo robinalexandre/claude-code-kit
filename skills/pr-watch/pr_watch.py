@@ -10,8 +10,9 @@
     pr_watch.py status [--auto|--live]  the same as JSON, with what each PR waits for, from the records
                                         and the shared snapshot (below); each PR's `changes` start with
                                         its unread ones
-                                        (--auto: each host whose share is older than `cacheMinutes` is
-                                        fetched again and shared; --live: every host this computer
+                                        (--auto: each part of a host's share older than its
+                                        `cacheMinutes` is fetched again and shared; --live: everything
+                                        on every host this computer
                                         reaches, fetched now and shared. Both record only the user's PRs
                                         they start tracking: the PRs' changes stay for `check`)
     pr_watch.py open URL                open a PR or a build in the default browser
@@ -73,9 +74,11 @@ Shared snapshot: what `status --auto` or `--live` fetched is shared through the 
 repo, on its own branch (`pr-cache`, one commit replaced each time, so it never grows), one section per
 host (`github`, `ado`) with when and by which computer. Every `status` first asks for it with one
 conditional request (a 304 costs nothing against the rate limit), so a computer reads what another one
-fetched instead of asking the hosts again; a host is fetched again only once its section is older than
-`cacheMinutes` in config.json (`{"running": 2, "idle": 10}` by default: a CI or a run in progress, or
-not), and only by a computer that reaches it (one that did not is left alone for 30 minutes).
+fetched instead of asking the hosts again. Each part of a section is fetched again once it is older than
+its `cacheMinutes` in config.json (`{"running": 1, "runs": 5, "prs": 10, "lists": 15}` by default: the
+runs in progress and the PRs whose CI runs, alone; a look for new runs; every PR; the review requests,
+new PRs of the user and followed issues), and only by a computer that reaches the host (one that did
+not is left alone for 30 minutes).
 PR_WATCH_SHARED=off (or `"sharedCache": false` in config.json) keeps everything on this computer;
 PR_WATCH_SHARED=owner/repo shares through another repo.
 """
@@ -123,7 +126,11 @@ SHARED_BRANCH = "pr-cache"
 SHARED_PATH = "pr-watch/snapshot.json"
 GITHUB_API = os.environ.get("PR_WATCH_GITHUB_API", "https://api.github.com")
 HOSTS = ("github", "ado")
-CACHE_MINUTES = {"running": 2.0, "idle": 10.0}
+# How old each part of a host's share may get on `status --auto`: the runs and the PRs' CI in
+# progress, the look for new runs, every tracked PR, then the lists (review requests, the user's new
+# PRs, followed issues).
+CACHE_MINUTES = {"running": 1.0, "runs": 5.0, "prs": 10.0, "lists": 15.0}
+KINDS = ("runs", "prs", "lists")
 UNREACHABLE_MINUTES = 30
 PUSH_DENIED_HOURS = 6
 ADO_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"
@@ -819,13 +826,15 @@ def _recent_enough(stamp: str) -> bool:
     return (datetime.now(timezone.utc) - ended).total_seconds() <= BUILD_HOURS * 3600
 
 
-def fetch_builds(entries: list[tuple[Path, dict]], hosts: tuple[str, ...] = HOSTS) -> tuple[list[dict], list[str]]:
+def fetch_builds(entries: list[tuple[Path, dict]], hosts: tuple[str, ...] = HOSTS,
+                 only: list[str] | None = None) -> tuple[list[dict], list[str]]:
     """The user's pipeline runs (by hand, or from their pushes outside a PR), running ones first
     (newest queued first), then those ended in the last BUILD_HOURS hours (newest first): (rows, errors).
 
     Asked in the Azure DevOps projects and GitHub repos of the tracked and recent PRs, the GitHub
     repos the user pushed to lately, plus `azureProjects` (`org/project`) and `githubRepos`
-    (`owner/repo`) in config.json. Only on `hosts`; none when the user shows none (`runsPerRepo` 0).
+    (`owner/repo`) in config.json. Only on `hosts`, and when `only` is given, only in the places of
+    those run URLs; none when the user shows none (`runsPerRepo` 0).
     """
     if runs_per_repo() == 0:
         return [], []
@@ -835,7 +844,10 @@ def fetch_builds(entries: list[tuple[Path, dict]], hosts: tuple[str, ...] = HOST
             projects.add(f"{match['org'] or match['org2']}/{urllib.parse.unquote(match['project'])}")
         elif match := GITHUB_URL.match(entry["url"]):
             repos.add(f"{match['owner']}/{match['repo']}")
-    if "github" in hosts:
+    if only is not None:
+        projects = {_build_place(url) for url in only if ADO_BUILD_URL.match(url)}
+        repos = {_build_place(url) for url in only if GITHUB_RUN_URL.match(url)}
+    elif "github" in hosts:
         try:
             repos |= github_pushed_repos()
         except (WatchError, KeyError, TypeError):
@@ -1473,11 +1485,11 @@ def _epoch(stamp: str) -> float:
 
 
 def cache_minutes() -> dict[str, float]:
-    """`cacheMinutes` in config.json: how old a host's share may get before it is fetched again,
-    while a CI or a run is in progress there (`running`) and otherwise (`idle`)."""
+    """`cacheMinutes` in config.json, over CACHE_MINUTES; `idle`, from older setups, stands for `prs`."""
     given = config_value("cacheMinutes", {})
     given = given if isinstance(given, dict) else {}
-    return {state: float(given.get(state, default)) for state, default in CACHE_MINUTES.items()}
+    given = {"prs": given["idle"], **given} if "idle" in given else given
+    return {part: float(given.get(part, default)) for part, default in CACHE_MINUTES.items()}
 
 
 _SHARED: dict = {}
@@ -1495,13 +1507,23 @@ def shared_local() -> dict:
     return _SHARED
 
 
+KIND_OF = {"builds": ("runs", "running"), "reviews": ("lists",), "issues": ("lists",)}
+
+
+def fetched_at(section: dict, kinds: tuple[str, ...]) -> str:
+    """When one of these parts of a host's share was last fetched (the latest); a share from an
+    older pr-watch was fetched all at once."""
+    stamps = [(section.get("kinds") or {}).get(kind) or section.get("at", "") for kind in kinds]
+    return max(stamps, key=_epoch)
+
+
 def shared_rows(name: str, stored: dict) -> list[dict]:
     """The review requests or runs (`name`) to show: per host, the newer of what this computer
     recorded (`stored`, with its `checked`) and what the shared snapshot holds."""
     sections, rows = shared_local()["sections"], []
     for host in HOSTS:
         section = sections.get(host)
-        if section and _epoch(section.get("at", "")) > _epoch(stored.get("checked", "")):
+        if section and _epoch(fetched_at(section, KIND_OF[name])) > _epoch(stored.get("checked", "")):
             rows += section.get(name, [])
         else:
             rows += [row for row in stored.get(name, []) if host_of(row["url"]) == host]
@@ -1626,48 +1648,70 @@ def host_used(host: str, entries: list[tuple[Path, dict]]) -> bool:
     return bool(config("azureOrgs") or config("azureProjects")) or any(host_of(url) == "ado" for url in urls)
 
 
-def _section_running(section: dict) -> bool:
-    return any(ci_summary(pr["seen"].get("checks", {})).startswith("CI running") for pr in section.get("prs", {}).values()) \
-        or any(build["status"] in BUILD_RUNNING and not build.get("stale") for build in section.get("builds", []))
+def _ci_running(pr: dict) -> bool:
+    return ci_summary(pr["seen"].get("checks", {})).startswith("CI running")
 
 
-def hosts_due(mode: str, entries: list[tuple[Path, dict]]) -> list[str]:
-    """The hosts this `status` fetches: none from the cache, every one in use when live; on `auto`,
-    those whose share is older than `cacheMinutes` or misses a PR tracked since, except a host this
-    computer could not reach in the last UNREACHABLE_MINUTES."""
+def _running_runs(section: dict) -> list[str]:
+    return [build["url"] for build in section.get("builds", []) if build["status"] in BUILD_RUNNING and not build.get("stale")]
+
+
+def parts_due(mode: str, entries: list[tuple[Path, dict]]) -> dict[str, set[str]]:
+    """What this `status` fetches, per host: nothing from the cache, every part of every host in use
+    when live (the refresh button). On `auto`, each part of a host's share once it is older than its
+    `cacheMinutes`: `runs` (a look for new pipeline runs), `prs` (every tracked PR), `lists` (review
+    requests, the user's new PRs, followed issues), and in between `running` (only the runs in
+    progress and the PRs whose CI runs). A PR tracked since the share was made brings the PRs in. A
+    host this computer could not reach in the last UNREACHABLE_MINUTES is left alone."""
     if mode == "cached":
-        return []
+        return {}
     hosts = [host for host in HOSTS if host_used(host, entries)]
     if mode == "live":
-        return hosts
-    local, minutes, now, due = shared_local(), cache_minutes(), time.time(), []
+        return {host: set(KINDS) for host in hosts}
+    local, minutes, now, due = shared_local(), cache_minutes(), time.time(), {}
     for host in hosts:
         if now - _epoch(local.get("unreachable", {}).get(host, "")) < UNREACHABLE_MINUTES * 60:
             continue
         section = local["sections"].get(host)
         if not section:
-            due.append(host)
+            due[host] = set(KINDS)
             continue
-        at = _epoch(section.get("at", ""))
-        limit = minutes["running" if _section_running(section) else "idle"] * 60
-        added = any(host_of(entry["url"]) == host and entry["url"] not in section.get("prs", {})
-                    and _epoch(entry.get("added", "")) > at for _, entry in entries)
-        if added or now - at >= limit:
-            due.append(host)
+
+        def older(kinds: tuple[str, ...], part: str) -> bool:
+            return now - _epoch(fetched_at(section, kinds)) >= minutes[part] * 60
+
+        parts = {kind for kind in KINDS if older((kind,), kind)}
+        if any(host_of(entry["url"]) == host and entry["url"] not in section.get("prs", {})
+               and _epoch(entry.get("added", "")) > _epoch(section.get("at", "")) for _, entry in entries):
+            parts.add("prs")
+        running = _running_runs(section) or any(_ci_running(pr) for pr in section.get("prs", {}).values())
+        if running and not {"runs", "prs"} <= parts and older(("running", "runs", "prs"), "running"):
+            parts.add("running")
+        if parts:
+            due[host] = parts
     return due
 
 
-def fetch_section(host: str, entries: list[tuple[Path, dict]]) -> tuple[dict | None, list[str]]:
-    """Everything on one host now, as its shared section, or None when the host did not answer this
-    computer (every lookup failed); the errors."""
+def fetch_section(host: str, entries: list[tuple[Path, dict]], parts: set[str] = set(KINDS),
+                  before: dict | None = None) -> tuple[dict | None, list[str]]:
+    """The `parts` of one host's share fetched now, over what it held `before`, or None when the host
+    did not answer this computer (every lookup failed); the errors."""
+    before = before or {}
     mine = [(path, entry) for path, entry in watched(entries) if host_of(entry["url"]) == host]
-    # The five lookups at once: each waits on the host far more than it computes.
+    if "prs" not in parts:
+        mine = [(path, entry) for path, entry in mine if "running" in parts
+                and _ci_running((before.get("prs") or {}).get(entry["url"]) or entry)]
+    only = None if "runs" in parts else _running_runs(before) if "running" in parts else []
+    lists = "lists" in parts
+    nothing: Callable[[], tuple[list, list]] = lambda: ([], [])
+    # The lookups at once: each waits on the host far more than it computes.
     with ThreadPoolExecutor(max_workers=5) as pool:
-        tracking = pool.submit(auto_track, entries, (host,))
+        tracking = pool.submit(auto_track, entries, (host,)) if lists else pool.submit(nothing)
         fetching = pool.submit(fetch_all, mine)
-        asking = pool.submit(fetch_review_requests, entries, (host,))
-        listing = pool.submit(fetch_builds, entries, (host,))
-        following = pool.submit(fetch_issues, (host,))
+        asking = pool.submit(fetch_review_requests, entries, (host,)) if lists else pool.submit(nothing)
+        listing = pool.submit(fetch_builds, entries, (host,), **({"only": only} if only else {})) if only != [] \
+            else pool.submit(nothing)
+        following = pool.submit(fetch_issues, (host,)) if lists else pool.submit(nothing)
         (_, errors), fetched = tracking.result(), fetching.result()
         (reviews, review_errors), (builds, build_errors) = asking.result(), listing.result()
         issues, issue_errors = following.result()
@@ -1677,20 +1721,34 @@ def fetch_section(host: str, entries: list[tuple[Path, dict]]) -> tuple[dict | N
         or any(not build.get("stale") for build in builds)
     if not answered:
         return None, errors
-    prs = {entry["url"]: {"seen": now, "me": me} for _, entry, now, me, _ in fetched if now is not None}
-    return {"at": _now_seconds(), "by": _machine(), "prs": prs, "reviews": reviews, "builds": builds,
-            "issues": issues}, errors
+    at = _now_seconds()
+    # Every PR read again replaces the share's; the PRs whose CI runs, read alone, update theirs.
+    prs = {**({} if "prs" in parts else before.get("prs") or {}),
+           **{entry["url"]: {"seen": now, "me": me, "at": at} for _, entry, now, me, _ in fetched if now is not None}}
+    section = {**before, "at": at, "by": _machine(), "prs": prs,
+               "kinds": {**(before.get("kinds") or {}), **{part: at for part in parts}}}
+    if only is None:
+        section["builds"] = builds
+    elif only:
+        # The runs in progress, read again; the other places' runs stay as they were.
+        places = {_build_place(url) for url in only}
+        section["builds"] = order_builds(builds + [row for row in before.get("builds", [])
+                                                   if _build_place(row["url"]) not in places])
+    if lists:
+        section.update(reviews=reviews, issues=issues)
+    return section, errors
 
 
 def refresh_shared(mode: str, entries: list[tuple[Path, dict]]) -> tuple[list[str], list[str]]:
-    """Reads the shared snapshot, fetches the hosts due (see hosts_due) and shares what they gave:
+    """Reads the shared snapshot, fetches what is due on each host (see parts_due) and shares it:
     (the hosts fetched, errors). Saved on this computer either way."""
     shared_pull()
     local, errors, fetched = shared_local(), [], []
-    due = hosts_due(mode, entries)
+    due = parts_due(mode, entries)
     if due:
         with ThreadPoolExecutor(max_workers=len(due)) as pool:
-            results = list(pool.map(lambda host: (host, *fetch_section(host, entries)), due))
+            results = list(pool.map(lambda host: (host, *fetch_section(host, entries, due[host], local["sections"].get(host))),
+                                    due))
         for host, section, found_errors in results:
             shared = local["sections"].get(host) or {}
             if section is None:
@@ -1972,7 +2030,7 @@ def waiting_for(seen: dict) -> str:
 def status(mode: str) -> None:
     """JSON for a pane or a script, from the records and the shared snapshot, each PR, review
     request and run as the newer of the two shows it; `mode` (`cached`, `auto`, `live`) says which
-    hosts are fetched first (see hosts_due). Records nothing but the PRs it starts tracking."""
+    hosts are fetched first (see parts_due). Records nothing but the PRs it starts tracking."""
     entries = load_entries()
     fetched_hosts, errors = refresh_shared(mode, entries)
     sections, off = shared_local()["sections"], turned_off()
@@ -1985,7 +2043,8 @@ def status(mode: str) -> None:
     for _, entry in watched(entries):
         section = sections.get(host_of(entry["url"])) or {}
         shared = (section.get("prs") or {}).get(entry["url"])
-        is_newer = shared is not None and _epoch(section.get("at", "")) > _epoch(entry.get("checked", ""))
+        read_at = (shared or {}).get("at") or section.get("at", "")
+        is_newer = shared is not None and _epoch(read_at) > _epoch(entry.get("checked", ""))
         now, me = (shared["seen"], shared.get("me", "")) if is_newer else (None, "")
         seen = now or entry["seen"]
         match = ADO_URL.match(entry["url"]) or GITHUB_URL.match(entry["url"])
@@ -2014,7 +2073,7 @@ def status(mode: str) -> None:
             "ack": ack_of(entry["url"], _pr_alert(seen, news), acks),
             "changes": news,
             "updated": seen.get("updated", ""),
-            "checked": section["at"][:16] + "Z" if now else entry.get("checked", ""),
+            "checked": read_at[:16] + "Z" if now else entry.get("checked", ""),
         })
     recent = []
     for entry in done_entries() if setting("recent") else []:

@@ -9,7 +9,8 @@ const COMMAND = 'prs'
 const LIVE_TIMEOUT_MS = 180_000
 const RELOAD_EVERY_MS = 5 * 60_000
 // How often an open pane asks pr-watch again: it reads the shared snapshot (a 304 when nothing
-// changed) and fetches a host only once its share is older than pr-watch's `cacheMinutes`.
+// changed) and fetches each part of a host's share once it is older than pr-watch's `cacheMinutes`:
+// the runs and CIs in progress every minute, new runs, PRs and lists less often. Refresh reads all.
 const IDLE_EVERY_MS = 2 * 60_000
 const WHILE_RUNNING_EVERY_MS = 60_000
 const CLOSED_EVERY_MS = 5 * 60_000

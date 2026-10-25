@@ -148,8 +148,20 @@ def main() -> int:
 
     pr.fetch_all = fetch_all
     pr.auto_track = lambda entries, hosts=pr.HOSTS: ([], [])
-    pr.fetch_review_requests = lambda entries, hosts=pr.HOSTS: ([], [])
-    pr.fetch_builds = lambda entries, hosts=pr.HOSTS: ([], [])
+    looked: list[str] = []
+
+    def fetch_review_requests(entries, hosts=pr.HOSTS):
+        looked.append("lists")
+        return [], []
+
+    runs: list[dict] = []
+
+    def fetch_builds(entries, hosts=pr.HOSTS, only=None):
+        looked.append("runs" if only is None else f"running runs {' '.join(only)}")
+        return [row for row in runs if pr.host_of(row["url"]) in hosts], []
+
+    pr.fetch_review_requests = fetch_review_requests
+    pr.fetch_builds = fetch_builds
     pr.fetch_issues = lambda hosts=pr.HOSTS: ([], [])
     failures: list[str] = []
 
@@ -198,30 +210,65 @@ def main() -> int:
     check("the mac now shows the ado PR the pc fetched", titles(answer)[ADO_PR] == "ado fresh")
 
     def age(host: str, minutes: float) -> None:
-        """Makes the host's share that old, here and on the branch."""
+        """Makes the host's share, every part of it, that old, here and on the branch."""
         local = pr.shared_local()
-        local["sections"][host]["at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - minutes * 60))
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - minutes * 60))
+        section = local["sections"][host]
+        section["at"] = stamp
+        section["kinds"] = {kind: stamp for kind in section.get("kinds", {})}
+        for one in section.get("prs", {}).values():
+            one["at"] = stamp
         pr.save(pr.SHARED_LOCAL, local)
         FakeGitHub.commits[FakeGitHub.head] = json.dumps({"version": 1, "sections": local["sections"]})
         pr._SHARED.clear()
 
-    # 5. A github share past the idle time is fetched again by any computer reaching github: the PC
-    # here, as if the Mac were off.
+    # 5. Each part of a share gets old at its own pace, and any computer reaching the host fetches
+    # it again: the PC here, as if the Mac were off. Past 6 minutes, only the look for new runs.
     computer(pr, root, "windows")
+    age("github", 6)
+    asked.clear()
+    looked.clear()
+    answer = status(pr, "auto")
+    check("past 6 minutes, only new runs are looked for", asked == [] and looked == ["runs"])
+    check("and shared as the pc's", answer["sections"]["github"]["by"] == "windows")
+    # Past 11, the PRs too; the lists wait for 15.
     age("github", 11)
     asked.clear()
-    answer = status(pr, "auto")
-    check("a stale github share is fetched again by the pc", asked == ["github"])
-    check("and shared as the pc's", answer["sections"]["github"]["by"] == "windows")
+    looked.clear()
+    status(pr, "auto")
+    check("past 11 minutes, the PRs are read again, not the lists", asked == ["github"] and looked == ["runs"])
+    age("github", 16)
+    looked.clear()
+    status(pr, "auto")
+    check("past 16 minutes, the lists too", "lists" in looked)
 
-    # 6. While a CI runs, the share gets old after `running` minutes (2 by default), not `idle`.
+    # 6. While a CI runs, only the PRs whose CI runs are read again, after `running` minutes (1 by default).
     states["github"] = "running"
     asked.clear()
     status(pr, "live")
     age("github", 3)
     asked.clear()
+    looked.clear()
     status(pr, "auto")
     check("a share with a CI running is fetched again after 3 minutes", "github" in asked)
+    check("and only what runs", looked == [])
+    asked.clear()
+    looked.clear()
+    status(pr, "live")
+    check("the refresh button reads everything, on every host", sorted(asked) == ["ado", "github"]
+          and sorted(looked) == ["lists", "lists", "runs", "runs"])
+
+    # A run in progress: after a minute, only its repo's runs are read again, the PRs left alone.
+    states["github"] = "passed"
+    run = "https://github.com/owner/app/actions/runs/7"
+    runs.append({"url": run, "repo": "app", "pipeline": "Deploy", "number": "7", "branch": "main",
+                 "status": "running", "queued": "2026-01-01T10:00Z", "started": "", "ended": ""})
+    status(pr, "live")
+    age("github", 2)
+    asked.clear()
+    looked.clear()
+    status(pr, "auto")
+    check("a run in progress is read again alone", asked == [] and looked == [f"running runs {run}"])
     (watch / "config.json").write_text(json.dumps({"azureOrgs": ["org"], "cacheMinutes": {"running": 5}}))
     age("github", 3)
     asked.clear()

@@ -51,8 +51,9 @@ minutes() {
   case "$answer" in '' | *[!0-9.]* | *.*.*) answer=$3 ;; esac
   printf '%s' "$answer"
 }
-running=$(minutes running "  minutes, while a CI or a pipeline run is in progress:" 2)
-idle=$(minutes idle "  minutes, otherwise:" 10)
+running=$(minutes running "  minutes, for the pipeline runs and PR CIs in progress:" 1)
+idle=$(jq -r '.cacheMinutes.idle // 10' "$conf" 2> /dev/null || echo 10)
+idle=$(minutes prs "  minutes, for every PR (new runs every 5, review requests and issues every 15):" "$idle")
 shared=true
 ask pr-watch.sharedCache "Share what this computer fetches with your other computers?" y || shared=false
 
@@ -62,7 +63,7 @@ jq --indent 2 --arg g "$github" --arg o "$orgs" --arg p "$projects" --arg b "$bo
   --argjson r "$running" --argjson i "$idle" --argjson s "$shared" '
   def items: split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(. != ""));
   .githubRepos = ($g | items) | .azureOrgs = ($o | items) | .azureProjects = ($p | items)
-  | .bots = ($b | items) | .autoTrack = $t | .cacheMinutes = {running: $r, idle: $i} | .sharedCache = $s' \
+  | .bots = ($b | items) | .autoTrack = $t | .cacheMinutes = ((.cacheMinutes // {}) | del(.idle)) + {running: $r, prs: $i} | .sharedCache = $s' \
   "$conf" > "$conf.tmp" && mv "$conf.tmp" "$conf"
 echo "  Saved in $conf. Ask Claude \"watch this PR\" with a link, or \"check my PRs\"."
 kit_setup_mark pr-watch done
