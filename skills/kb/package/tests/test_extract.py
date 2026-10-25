@@ -115,7 +115,7 @@ def test_read_session_outside_dev_root_uses_last_folders(tmp_path: Path):
     assert session is not None and session.repo == "dev"
 
 
-def test_config_sync_log_keeps_meaningful_files_only(tmp_path: Path, monkeypatch):
+def test_config_sync_log_keeps_meaningful_files_only(tmp_path: Path):
     import shutil
     import subprocess
 
@@ -156,7 +156,6 @@ def test_config_sync_log_keeps_meaningful_files_only(tmp_path: Path, monkeypatch
     git("add", "-A")
     git("commit", "-q", "-m", "chore(sync): the assistant remembers a fact")
 
-    monkeypatch.delenv("KB_SYNC_FOLDERS", raising=False)
     text = config_sync_log(DAY, repo)
     assert "added reminders/2026-10-22-call-lea.md" in text
     assert "added repos/github.com/someone/my-app/CLAUDE.md" in text
@@ -164,7 +163,7 @@ def test_config_sync_log_keeps_meaningful_files_only(tmp_path: Path, monkeypatch
     assert "assistant/memory.md" not in text
     assert "pr-watch" not in text
 
-    monkeypatch.setenv("KB_SYNC_FOLDERS", "notes-box, assistant/")
+    (repo / "kb.json").write_text(json.dumps({"syncFolders": ["notes-box", "/assistant/"]}))
     text = config_sync_log(DAY, repo)
     assert "added assistant/memory.md" in text
     assert "the assistant remembers a fact" in text

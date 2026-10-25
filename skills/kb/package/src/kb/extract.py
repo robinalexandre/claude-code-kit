@@ -25,8 +25,9 @@ MAX_MESSAGE_CHARS = 3000
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 SYNC_LOG = "config-sync.md"
 # Folders of the config sync whose changes mean something happened to the user: reminders
-# left or closed, handoffs, notes, config, every repo's agent docs, plus KB_SYNC_FOLDERS (an
-# assistant's own folder). State files, PR-watch snapshots and inventories are machine noise.
+# left or closed, handoffs, notes, config, every repo's agent docs, plus the "syncFolders" of
+# kb.json in the sync repo (an assistant's own folder), the same for every computer. State files,
+# PR-watch snapshots and inventories are machine noise.
 SYNC_FOLDERS = ("reminders/", "handoffs/", "knowledge/", "memory", "mcp/")
 SYNC_FILES = re.compile(
     r"^(claude/(CLAUDE\.md|skills/[^/]+/SKILL\.md)"
@@ -120,6 +121,16 @@ def extract_day(
     return DaySummary(day, sessions, raw_total, written, out_dir)
 
 
+def shared_sync_folders(sync_dir: Path) -> tuple[str, ...]:
+    try:
+        listed = json.loads((sync_dir / "kb.json").read_text(encoding="utf-8")).get("syncFolders")
+    except (OSError, ValueError, AttributeError):
+        return ()
+    if not isinstance(listed, list):
+        return ()
+    return tuple(f.strip("/") + "/" for f in listed if isinstance(f, str) and f.strip("/"))
+
+
 def config_sync_log(day: date, sync_dir: Path) -> str:
     """What the config sync repo recorded that day, as a reader would want it: time,
     computer, change and file, for the folders that carry meaning."""
@@ -148,8 +159,7 @@ def config_sync_log(day: date, sync_dir: Path) -> str:
         )
     except (OSError, subprocess.TimeoutExpired):
         return ""
-    extra = re.split(r"[\s,;:]+", os.environ.get("KB_SYNC_FOLDERS", ""))
-    folders = SYNC_FOLDERS + tuple(f.rstrip("/") + "/" for f in extra if f.strip("/"))
+    folders = SYNC_FOLDERS + shared_sync_folders(sync_dir)
     lines: list[str] = []
     stamp = ""
     for raw in proc.stdout.splitlines():

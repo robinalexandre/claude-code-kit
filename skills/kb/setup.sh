@@ -23,7 +23,7 @@ python_bin() {
 venv_bin() {
   if [ -x "$VENV/bin/$1" ]; then printf '%s' "$VENV/bin/$1"; else printf '%s' "$VENV/Scripts/$1.exe"; fi
 }
-setting() { sed -n "s/^$1=//p" "$ENVFILE" 2> /dev/null | head -1 | tr -d '\r"'; }
+setting() { sed -n "s/^$1=//p" "$ENVFILE" 2> /dev/null | head -1 | tr -d '\r'; }
 plugin_version() {
   jq -r '.plugins[] | select(.name == "kb") | .version // empty' "$SK/../../.claude-plugin/marketplace.json" 2> /dev/null || true
 }
@@ -65,14 +65,22 @@ if ask kb.embed "Semantic search in any language (downloads a 500 MB model once,
 fi
 curate=off
 model=$(setting KB_CURATE_MODEL)
-folders=$(setting KB_SYNC_FOLDERS)
+SHARED="$HOME/.claude-sync/kb.json"
 if ask kb.curate "Curate your Claude Code transcripts into notes every morning (daily-sync, your Claude login)?" y; then
   curate=on
   model=$(reply kb.curateModel "Claude model for the curation (sonnet, haiku, opus):" "${model:-sonnet}")
   if [ -d "$HOME/.claude-sync/.git" ]; then
     echo "  The curation also reads what changed in your config sync: reminders, handoffs, notes, memory,"
     echo "  CLAUDE.md and skills, and every repo's CLAUDE.md and AGENTS.md."
-    folders=$(reply kb.syncFolders "Other folders of the config sync to read, such as an assistant's own (space-separated, empty for none):" "$folders")
+    current=$(jq -r '(.syncFolders // []) | join(" ")' "$SHARED" 2> /dev/null || true)
+    folders=$(reply kb.syncFolders "Other folders of the config sync to read, such as an assistant's own (space-separated, empty for none; one list for all your computers):" "$current")
+    if [ "$folders" != "$current" ]; then
+      old='{}'
+      [ -f "$SHARED" ] && old=$(cat "$SHARED")
+      printf '%s' "$old" | jq --arg f "$folders" '.syncFolders = ($f | [splits("[ ,]+")] | map(select(. != "")))' > "$SHARED.tmp"
+      mv "$SHARED.tmp" "$SHARED"
+      echo "  Saved in $SHARED: the sync takes it to your other computers."
+    fi
   fi
 fi
 
@@ -84,7 +92,6 @@ mkdir -p "$notes"
   printf 'KB_EMBED=%s\n' "$embed"
   printf 'KB_CURATE=%s\n' "$curate"
   [ -n "$model" ] && printf 'KB_CURATE_MODEL=%s\n' "$model"
-  if [ -n "$folders" ]; then printf 'KB_SYNC_FOLDERS="%s"\n' "$folders"; fi
 } > "$ENVFILE"
 echo "  Indexing ${notes}…"
 KB_NOTES=$notes KB_EMBED=$embed "$(venv_bin kb)" index || echo "  The first index failed; the next session start tries again."
