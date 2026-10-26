@@ -20,6 +20,7 @@ const scope = atom({ plugin: 'configuration', key: 'scope' } as const, 'all')
 const saves = atom({ plugin: 'configuration', key: 'saves' } as const, 0)
 const unfolded = atom({ plugin: 'configuration', key: 'unfolded' } as const, {})
 const power = atom({ plugin: 'configuration', key: 'power' } as const, null, { shape: 'low-power/1' })
+const syncPause = atom({ plugin: 'configuration', key: 'syncPause' } as const, null)
 
 // Set by dnd once it has read what is on: dnd is installed. Read under dnd's shape.
 const dndActive = atom({ plugin: 'dnd', key: 'active' } as const, null, { shape: 'dnd-active/1' })
@@ -203,9 +204,86 @@ const setMod = async ($: EngineInterface, setting: ModSetting, value: ModSetting
   }
 }
 
+// The private sync's pause: `sync.sh pause` stops every sync on this computer until `resume`.
+const syncDir = async ($: EngineInterface) => `${await home($)}/.claude-sync`
+
+const loadSync = async ($: EngineInterface, error?: string) => {
+  const sync = await syncDir($)
+
+  if (!(await $.fs.exists(`${sync}/sync.sh`))) {
+    return
+  }
+
+  const since = await $.fs.read(`${sync}/.state/paused`).then(
+    text => text.trim(),
+    () => undefined,
+  )
+
+  await update($, syncPause, () => ({ isPaused: since !== undefined, since: since ?? '', ...(error ? { error } : {}) }))
+}
+
+// On Windows, Claude Code's own PATH has Git's cmd folder (git) but not bash: Git Bash is found
+// from the variable Claude Code reads for it, then from git's own install folder.
+let bashFound: string | undefined
+
+const runs = async ($: EngineInterface, argv: string[]) => {
+  try {
+    return (await $.process.run(argv, { timeoutMs: 10_000 })).exitCode === 0
+  } catch {
+    return false
+  }
+}
+
+const bash = async ($: EngineInterface) => {
+  if (bashFound !== undefined) {
+    return bashFound
+  }
+
+  const fromGit = async () => {
+    const execPath = await $.process.run(['git', '--exec-path'], { timeoutMs: 10_000 }).catch(() => undefined)
+    const root = slashed(execPath?.stdout.trim() ?? '').replace(/\/(mingw64|clangarm64|mingw32)\/.*$/, '')
+
+    return execPath?.exitCode === 0 && root !== '' ? `${root}/bin/bash.exe` : ''
+  }
+  const candidates = [
+    async () => slashed((await $.env.get('CLAUDE_CODE_GIT_BASH_PATH')) ?? ''),
+    async () => 'bash',
+    fromGit,
+    async () => `${slashed((await $.env.get('ProgramFiles')) ?? 'C:/Program Files')}/Git/bin/bash.exe`,
+  ]
+
+  for (const candidate of candidates) {
+    const path = await candidate()
+
+    if (path !== '' && (await runs($, [path, '-c', 'exit 0']))) {
+      bashFound = path
+
+      return path
+    }
+  }
+
+  throw new Error('Git Bash not found: set CLAUDE_CODE_GIT_BASH_PATH to bash.exe')
+}
+
+const setSync = async ($: EngineInterface, verb: 'pause' | 'resume') => {
+  let error: string | undefined
+
+  try {
+    const result = await $.process.run([await bash($), `${await syncDir($)}/sync.sh`, verb], { timeoutMs: 30_000 })
+
+    if (result.exitCode !== 0) {
+      error = (result.stderr.trim() || result.stdout.trim() || `exit ${result.exitCode}`).split('\n')[0]
+    }
+  } catch (caught) {
+    error = String(caught).split('\n')[0] ?? ''
+  }
+
+  await loadSync($, error)
+}
+
 const openPane = async ($: EngineInterface) => {
   await $.ui.open({ id: PANE, title: TITLE, columns: 64 })
-  await loadMods($)
+  await Promise.all([loadMods($), loadSync($)])
 }
 
 // Low power mode, for every part of the kit that fetches by itself: `on`, `off`, or `on battery`
@@ -368,6 +446,7 @@ export const register: Register = (on, options) => {
     const saved = await read($, saves)
     const open = await read($, unfolded)
     const hasDnd = (await read($, dndActive)) !== null
+    const sync = await read($, syncPause)
     const width = Math.max(30, e.props.bodyColumns - 2)
 
     // Read on the first draw after a load or reload: opened by another mod's button (dnd's), or kept
@@ -375,6 +454,7 @@ export const register: Register = (on, options) => {
     if (!loadAsked) {
       loadAsked = true
       void loadMods($)
+      void loadSync($)
     }
 
     // One setting: a press flips a toggle or moves a choice on; a text or a number is typed.
@@ -448,10 +528,23 @@ export const register: Register = (on, options) => {
       </Box>
     )
 
+    const syncRow = sync !== null && (
+      <Box key="sync" flexDirection="column" marginBottom={1}>
+        <Box flexDirection="row" gap={2}>
+          <Text {...(sync.isPaused ? { color: 'yellow' } : { dimColor: true })}>
+            {truncate(sync.isPaused ? `Config sync paused since ${sync.since}` : 'Config sync on', width - 10)}
+          </Text>
+          <Button key={sync.isPaused ? 'sync-resume' : 'sync-pause'} label={sync.isPaused ? 'Resume' : 'Pause'} onPress={() => void setSync($, sync.isPaused ? 'resume' : 'pause')} />
+        </Box>
+        {sync.error !== undefined && <Text color="red">{truncate(`Could not change the sync: ${sync.error}`, width - 2)}</Text>}
+      </Box>
+    )
+
     if (shown === null) {
       return (
         <Box flexDirection="column">
           {header}
+          {syncRow}
           <Text dimColor>Loading…</Text>
         </Box>
       )
@@ -462,6 +555,7 @@ export const register: Register = (on, options) => {
     return (
       <Box flexDirection="column">
         {header}
+        {syncRow}
         {shown.machine !== '' ? (
           <Box flexDirection="row" gap={1}>
             <Text>Changes apply to</Text>

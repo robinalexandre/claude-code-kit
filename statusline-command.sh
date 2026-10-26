@@ -107,6 +107,9 @@ if [ -f "$power_file" ]; then
   [ "$power_low" = true ] && power_str=$(printf '🔋 \033[33mlow power\033[0m')
 fi
 
+# The private sync paused on this computer (sync.sh pause): shown last, until sync.sh resume
+[ -f "${SYNC_DIR:-$HOME/.claude-sync}/.state/paused" ] && sync_str=$(printf '⏸️  \033[33msync paused\033[0m')
+
 # Git branch (skip optional lock, non-fatal); detached HEAD falls back to the short SHA
 branch=$(git -C "$cwd" --no-optional-locks branch --show-current 2>/dev/null)
 [ -z "$branch" ] && branch=$(git -C "$cwd" --no-optional-locks rev-parse --short HEAD 2>/dev/null)
@@ -131,6 +134,7 @@ out=""
 [ -n "$learn_str" ] && out="$out $learn_str"
 [ -n "$dnd_str" ]   && out="$out $dnd_str"
 [ -n "$power_str" ] && out="$out $power_str"
+[ -n "$sync_str" ]  && out="$out $sync_str"
 
 # Trim leading space
 out="${out# }"

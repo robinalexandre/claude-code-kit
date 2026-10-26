@@ -22,6 +22,12 @@ export type ModsData = { settings: ModSetting[]; machine: string }
 /** Low power mode: what the user chose, and whether it slows the kit now. */
 export type LowPower = { setting: string; isLow: boolean }
 
+/**
+ * The private sync on this computer: whether it is paused, since when and why (`.state/paused`, as
+ * `sync.sh pause` writes it); `error`, what the last pause or resume said when it failed.
+ */
+export type SyncPause = { isPaused: boolean; since: string; error?: string }
+
 /** What dnd shares under the shape `dnd-active/1`; only whether it is set is read here. */
 export type DndActiveSeen = Record<string, unknown>
 
@@ -41,6 +47,8 @@ declare module 'claude-code' {
        * `off`, `on battery`) and whether it is on now. null before the first check.
        */
       power: Shaped<LowPower | null>
+      /** The private sync's pause; null without a private sync or before it is read. */
+      syncPause: SyncPause | null
     }
     dnd: {
       active: Shaped<DndActiveSeen | null>

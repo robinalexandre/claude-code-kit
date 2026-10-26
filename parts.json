@@ -31,7 +31,7 @@
       "name": "statusline",
       "kind": "statusline",
       "group": "base",
-      "what": "A status line with folder, branch, model, context used, effort and rate limit.",
+      "what": "A status line with folder, branch, model, context used, effort and rate limit, and a sign when the config sync is paused.",
       "why": "You see when the context fills up or a limit comes, before it bites.",
       "when": "Always on, under the prompt.",
       "who": "Anyone."
@@ -67,7 +67,7 @@
         "reminders-handoffs",
         "dnd"
       ],
-      "what": "The Configuration pane: every mod's settings (what the history keeps, what the dev activity pane shows and watches…), for all computers or this one, with what the others use.",
+      "what": "The Configuration pane: every mod's settings (what the history keeps, what the dev activity pane shows and watches…), for all computers or this one, with what the others use; it also pauses and resumes the config sync on this computer.",
       "why": "Each pane set the way you want from one place, without editing settings files.",
       "when": "The Configuration button above the prompt, or /configuration.",
       "who": "Anyone with one of the kit's panes: they bring it with them."

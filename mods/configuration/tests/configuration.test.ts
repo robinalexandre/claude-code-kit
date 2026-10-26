@@ -218,4 +218,62 @@ test('without a private sync, the pane says changes stay on this computer', asyn
 
   expect(await pane.find({ key: 'scope-here' })).toBeUndefined()
   expect(await pane.find({ text: /no private sync/ })).toBeDefined()
+  expect(await pane.find({ key: 'sync-pause' })).toBeUndefined()
+})
+
+// sync.sh as the engine runs it: pause writes .state/paused, resume takes it out.
+const answerSync = (on: On, files: Files, calls: string[][], fail = '') => {
+  on('process.run', ($, e) => {
+    calls.push([...e.argv])
+    const [, script, verb] = e.argv
+    const isSync = at(script ?? '') === '~/.claude-sync/sync.sh'
+
+    if (isSync && fail !== '') {
+      return { value: { exitCode: 1, stdout: '', stderr: fail, isStdoutTruncated: false, isStderrTruncated: false } }
+    }
+
+    if (isSync && verb === 'pause') {
+      files['~/.claude-sync/.state/paused'] = '2026-10-27 09:12 \n'
+    } else if (isSync && verb === 'resume') {
+      delete files['~/.claude-sync/.state/paused']
+    }
+
+    return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+}
+
+test('the pane pauses and resumes the private sync on this computer', async ($, on) => {
+  const files: Files = { '~/.claude-sync/sync.sh': '#!/bin/bash\n' }
+  const calls: string[][] = []
+  answer(on, files)
+  answerRows(on, files, [])
+  answerSync(on, files, calls)
+
+  const pane = await openPane($)
+
+  expect(await pane.find({ text: 'Config sync on' })).toBeDefined()
+
+  await pane.press({ key: 'sync-pause' })
+
+  expect(calls.at(-1)?.slice(1).map(at)).toEqual(['~/.claude-sync/sync.sh', 'pause'])
+  expect(await pane.find({ text: 'Config sync paused since 2026-10-27 09:12' })).toBeDefined()
+
+  await pane.press({ key: 'sync-resume' })
+
+  expect(calls.at(-1)?.slice(1).map(at)).toEqual(['~/.claude-sync/sync.sh', 'resume'])
+  expect(files['~/.claude-sync/.state/paused']).toBeUndefined()
+  expect(await pane.find({ key: 'sync-pause' })).toBeDefined()
+})
+
+test('a pause that fails says why and leaves the sync as it was', async ($, on) => {
+  const files: Files = { '~/.claude-sync/sync.sh': '#!/bin/bash\n' }
+  answer(on, files)
+  answerRows(on, files, [])
+  answerSync(on, files, [], 'permission denied')
+
+  const pane = await openPane($)
+  await pane.press({ key: 'sync-pause' })
+
+  expect(await pane.find({ text: 'Could not change the sync: permission denied' })).toBeDefined()
+  expect(await pane.find({ key: 'sync-pause' })).toBeDefined()
 })

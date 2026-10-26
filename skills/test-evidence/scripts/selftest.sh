@@ -18,13 +18,19 @@ check() { if eval "$2"; then pass "$1"; else fail "$1"; fi; }
 
 bash "$SK/capture.sh" doctor | sed 's/^/     /'
 
+# The fake secrets are put together at run time: written whole, the config sync's own secret
+# masking would replace them in this file with __SECRET__, and the redact checks would test nothing.
+bearer=abcdefgh
+pw=hunter
+tk=s3cr
+jwt=eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0
 printf '%s\n' \
   'GET https://api.example.com/items?id=4&code=abc123&sig=Zm9v HTTP/1.1' \
-  'Authorization: Bearer abcdefgh12345678' \
+  "Authorization: Bearer ${bearer}12345678" \
   'Cookie: session=abcdef' \
-  '{"access_token":"s3cr3t","name":"Alice","mail":"alice@example.com","password": "hunter2"}' \
+  '{"access_token":"'"${tk}3t"'","name":"Alice","mail":"alice@example.com","password": "'"${pw}2"'"}' \
   'AccountName=a;AccountKey=QUJDREVGR0g=;EndpointSuffix=core.windows.net' \
-  'token in a log: eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.c2lnbmF0dXJl' > "$T/net.txt"
+  "token in a log: $jwt.c2lnbmF0dXJl" > "$T/net.txt"
 bash "$SK/redact.sh" "$T/net.txt" "$T/red.txt"
 check "redact masks secrets" "! grep -q -E 'abc123|Zm9v|abcdefgh12345678|session=|s3cr3t|hunter2|QUJDREVGR0g|eyJhbGci' '$T/red.txt'"
 check "redact keeps the rest" "grep -q 'id=4' '$T/red.txt' && grep -q Alice '$T/red.txt' && grep -q alice@example.com '$T/red.txt'"
@@ -86,6 +92,7 @@ case "$method $url" in
 esac
 printf 200
 EOF
+chmod +x "$T/fake-curl"
 printf 'x' > "$T/03-new.png"
 out=$(FAKE_CURL_LOG="$T/curl.log" CURL="$T/fake-curl" AZURE_DEVOPS_PAT=x ADO_ORG_URL=https://dev.azure.com/org ADO_PROJECT=proj ADO_REPO=repo \
   bash "$SK/attach.sh" ado 7 "$T/01-shot.png" "$T/03-new.png" 2>&1)
