@@ -250,12 +250,14 @@ def fill_any($loc):
   (if (.mcpServers | type) == "object" then .mcpServers |= with_entries(.key as $k | .value |= fill($loc | at("mcpServers") | at($k))) else . end)
   | fill_settings($loc);
 def text_redact: split("\n") | map(redact_str) | join("\n");
+def secret_lines: split("\n") | map(select(redact_str != .));
 # Puts back each line whose redaction matches a line of $loc, in order when
 # several lines of $loc redact the same way. Fails rather than drop a line of
-# $loc that holds a secret.
+# $loc that holds a secret while a placeholder is left unfilled: the other
+# computer edited around that secret. With none left, it removed the line.
 def text_fill($loc):
-  ($loc | split("\n")) as $ll
-  | (reduce ($ll[] | {key: redact_str, value: .} | select(.key != .value)) as $e ({}; .[$e.key] += [$e.value])) as $m
+  ($loc | secret_lines) as $ll
+  | (reduce ($ll[] | {key: redact_str, value: .}) as $e ({}; .[$e.key] += [$e.value])) as $m
   | (reduce (split("\n")[]) as $l ({out: [], used: {}};
       if ($l | contains("__SECRET__")) and $m[$l] != null then
         (.used[$l] // 0) as $i
@@ -263,7 +265,8 @@ def text_fill($loc):
         | .used[$l] = $i + 1
       else .out += [$l] end)
     | .out) as $out
-  | if any($ll[]; redact_str != . and (. as $s | $out | index([$s])) == null) then error("a secret line would be lost")
+  | if any($ll[]; . as $s | $out | index([$s]) == null) and any($out[]; contains("__SECRET__"))
+    then error("a secret line would be lost")
     else $out | join("\n") end;
 def servers($p): (if $p == "" then .mcpServers else ((.projects // {})[$p] // {}).mcpServers end) // {};
 def without($names): with_entries(select(.key as $k | any($names[]; . == $k) | not));
@@ -367,6 +370,9 @@ mirror() {
       fi
     fi
     cmp -s "$src/$f" "$dst/$f" && continue
+    # The same JSON written another way: pushing it would undo the other computer's form.
+    [ "$mode" = capture ] && [ -f "$dst/$f" ] && is_json "$src/$f" && is_json "$dst/$f" &&
+      [ "$(jq -S . "$src/$f")" = "$(jq -S . "$dst/$f")" ] && continue
     mkdir -p "$(dirname "$dst/$f")" && cp -p "$src/$f" "$dst/$f" && CHANGED=$((CHANGED + 1))
   done <<< "$want"
   while IFS= read -r f; do
@@ -676,13 +682,16 @@ capture_file() {
 }
 
 # write_local SHARED LOCAL: puts SHARED in place, with this machine's secrets.
-# Returns 3 when that would lose one of them.
+# Returns 3 when that would lose one of them; a secret line the other computer
+# removed goes, with a copy of LOCAL in .state/trash.
 write_local() {
+  local filled="" rel
   if is_json "$1" && is_json "$2"; then
     jq --arg h "$HOME_FWD" --slurpfile loc "$2" "$JQ_LIB fill_any(\$loc[0] | unrender(\$h)) | render(\$h)" "$1"
   elif is_json "$1"; then
     jq --arg h "$HOME_FWD" "$JQ_LIB render(\$h)" "$1"
   elif [ -f "$2" ] && is_text "$2" && is_text "$1"; then
+    filled=1
     jq -R -s -r -j --rawfile loc "$2" "$JQ_LIB text_fill(\$loc)" "$1" 2> /dev/null || return 3
   else
     cat "$1"
@@ -696,6 +705,13 @@ write_local() {
     else
       cmp -s "$2" "$STATE/out" && return 0
     fi
+  fi
+  if [ -n "$filled" ] && ! jq -n -e --rawfile loc "$2" --rawfile out "$STATE/out" \
+    "$JQ_LIB (\$out | split(\"\n\")) as \$o | all(\$loc | secret_lines[]; . as \$s | \$o | index([\$s]) != null)" > /dev/null; then
+    rel=${2#"$HOME"/}
+    rel="$STATE/trash/$(date +%Y%m%d-%H%M%S)/${rel#/}"
+    mkdir -p "$(dirname "$rel")" && cp "$2" "$rel" || return 1
+    warn "a line of $2 that looked like a secret was removed on another machine; the previous copy is in $rel"
   fi
   mkdir -p "$(dirname "$2")" && cp "$STATE/out" "$2" && CHANGED=$((CHANGED + 1)) && say "updated $2"
 }

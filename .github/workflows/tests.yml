@@ -71,7 +71,9 @@ jobs:
           bash tests/sync-crypt.sh
           bash tests/sync-crypt-memory.sh
       - name: The sync's secret masking
-        run: bash tests/sync-redact.sh
+        run: |
+          bash tests/sync-redact.sh
+          bash tests/sync-pingpong.sh
       - name: Mods
         working-directory: mods
         run: for m in */; do claude plugin test "${m%/}" || exit 1; done
