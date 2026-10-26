@@ -13,7 +13,7 @@ LIB="$HERE/../hooks/lib"
 . "$LIB/ask.sh"
 . "$LIB/kit.sh"
 SYNC="$HOME/.claude-sync"
-ENGINE=".gitattributes .gitignore README.md install.ps1 install.sh inventory.sh jq.sh json-merge.sh sync.sh"
+ENGINE=".gitattributes .gitignore README.md install.ps1 install.sh inventory.sh jq.sh json-merge.sh crypt-merge.sh sync.sh"
 MANIFEST="$SYNC/kit-engine.json"
 
 version() { jq -r '.plugins[] | select(.name == "config-sync") | .version // empty' "$HERE/../.claude-plugin/marketplace.json" 2> /dev/null; }

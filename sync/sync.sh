@@ -1012,7 +1012,7 @@ crypt() {
           echo "  $f: already encrypted"
           continue
         fi
-        printf '%s/** filter=git-crypt diff=git-crypt\n' "$f" >> .gitattributes
+        printf '%s/** filter=git-crypt diff=git-crypt merge=crypt\n' "$f" >> .gitattributes
         if [ -d "$f" ]; then
           git rm -r -q --cached -- "$f" > /dev/null 2>&1
           git add -- "$f"
@@ -1232,10 +1232,17 @@ timed() {
 has_remote_main() { git rev-parse -q --verify origin/main > /dev/null; }
 ahead() { ! has_remote_main || [ -n "$(git rev-list -1 origin/main..HEAD)" ]; }
 
-# JSON files merge by key and array item (json-merge.sh, see .gitattributes).
+# JSON files merge by key and array item (json-merge.sh, see .gitattributes), the files of the
+# encrypted folders decrypted first (crypt-merge.sh).
 git_setup() {
   local driver="bash \"$SYNC/json-merge.sh\" %O %A %B"
   [ "$(git config merge.json.driver)" = "$driver" ] || git config merge.json.driver "$driver"
+  driver="bash \"$SYNC/crypt-merge.sh\" %O %A %B %P"
+  [ "$(git config merge.crypt.driver)" = "$driver" ] || git config merge.crypt.driver "$driver"
+  if [ -f .gitattributes ] && grep -qE ' filter=git-crypt diff=git-crypt$' .gitattributes; then
+    awk '/ filter=git-crypt diff=git-crypt$/ { $0 = $0 " merge=crypt" } { print }' .gitattributes > "$TMP/attributes" &&
+      cp "$TMP/attributes" .gitattributes
+  fi
 }
 
 remote_sync() {

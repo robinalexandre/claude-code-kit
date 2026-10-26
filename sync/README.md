@@ -26,7 +26,7 @@ A repo's or folder's memory (the one Claude keeps for sessions started there) fo
 
 When the same non-JSON file (a `CLAUDE.md`, a memory, a skill…) differs on two computers the first time they meet, or was edited on both before syncing, neither copy is overwritten: the session-start warning lists it, and it stays out of the sync until you delete one of the two copies (the other one then wins) or make them match.
 
-**Merging:** JSON files merge by key and by list item (`json-merge.sh`), so commands approved on two computers at the same time all end up on both. When both changed the same value, the last one to sync wins.
+**Merging:** JSON files merge by key and by list item (`json-merge.sh`), so commands approved on two computers at the same time all end up on both. When both changed the same value, the last one to sync wins. Files of the encrypted folders merge the same way (`crypt-merge.sh` decrypts them, merges JSON by key and other text line by line, and encrypts the result); only the same line changed on both computers stops the sync.
 
 ## How it works
 

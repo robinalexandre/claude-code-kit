@@ -27,4 +27,7 @@ jq -n --slurpfile b "$base" --slurpfile o "$2" --slurpfile t "$3" '
       | [($o + ($t - $o))[] | . as $x
          | select((any($ba[]; . == $x) | not) or (any($o[]; . == $x) and any($t[]; . == $x)))]
     else $t end;
-  m3($b[0]; $o[0]; $t[0])' > "$2.merged" && mv "$2.merged" "$2"
+  m3($b[0]; $o[0]; $t[0])' > "$2.merged" && mv "$2.merged" "$2" || {
+  rm -f "$2.merged"
+  exit 1
+}
