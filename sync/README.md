@@ -141,6 +141,8 @@ Install the `handoff` skill from this kit (`skills/handoff`). At the end of a se
 ```sh
 bash ~/.claude-sync/sync.sh now      # sync right away
 bash ~/.claude-sync/sync.sh status   # computer, last commit, last error, encryption, log
+bash ~/.claude-sync/sync.sh pause    # no sync on this computer until resume (say why: pause <reason>)
+bash ~/.claude-sync/sync.sh resume
 bash ~/.claude-sync/sync.sh crypt    # encrypted folders: status | on <folder>… | export <key file> | unlock <key file>
 bash ~/.claude-sync/inventory.sh show   # what every computer runs
 ```

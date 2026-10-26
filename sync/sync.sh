@@ -7,6 +7,8 @@
 #   morning  the scheduled daily run: syncs, then runs each ~/.claude/skills/*/morning.sh
 #   poll     asks the remote whether main moved; syncs only when it did (panes call it every minute)
 #   status   shows this machine's sync state
+#   pause    stops every sync on this computer until resume (pause [why])
+#   resume   lets the syncs run again
 #   install  first run on a machine: backs up ~/.claude, then copies the repo's config into it
 #   init     first run ever: copies this machine's config into an empty repo
 #   crypt    encrypted folders (git-crypt): crypt status | on <folder>… | export <key file> | unlock <key file>
@@ -20,6 +22,23 @@ STATE="$SYNC/.state"
 case "${OSTYPE:-}" in msys* | cygwin*) RETRIES=${SYNC_RETRIES:-2} ;; *) RETRIES=${SYNC_RETRIES:-0} ;; esac
 RETRY_SEC=${SYNC_RETRY_SEC:-5}
 PENDING_MIN=15
+# Each run keeps its scratch files apart: two runs sharing one would write a file's content into
+# another file.
+TMP="$STATE/tmp/$$"
+# The lock holds the pid of the run that owns it, which a run can keep longer than a few minutes
+# (Windows, with its retries). It is taken over only once that run is gone, or after LOCK_MAX_MIN in
+# case its pid was reused; a lock without a pid (from an older sync.sh) after 3 minutes.
+LOCK_MAX_MIN=30
+
+lock_stale() {
+  local pid
+  pid=$(cat "$STATE/lock/pid" 2> /dev/null)
+  if [ -z "$pid" ]; then
+    [ -n "$(find "$STATE/lock" -maxdepth 0 -mmin +3 2> /dev/null)" ]
+  else
+    ! kill -0 "$pid" 2> /dev/null || [ -n "$(find "$STATE/lock" -maxdepth 0 -mmin +"$LOCK_MAX_MIN" 2> /dev/null)" ]
+  fi
+}
 
 spawn() {
   mkdir -p "$STATE"
@@ -36,7 +55,7 @@ tell() {
     key=$(cat "$STATE/error")
     msg="failed $((RETRIES + 1)) times in a row: $key"
   elif [ -f "$STATE/pending" ] && [ -n "$(find "$STATE/pending" -mmin +"$PENDING_MIN" 2> /dev/null)" ] &&
-    { [ ! -d "$STATE/lock" ] || [ -n "$(find "$STATE/lock" -maxdepth 0 -mmin +3 2> /dev/null)" ]; }; then
+    { [ ! -d "$STATE/lock" ] || lock_stale; }; then
     key=pending
     msg="has not finished a background sync for $PENDING_MIN minutes (Git Bash may have failed to start it); it keeps trying, see bash ~/.claude-sync/sync.sh status"
   else
@@ -48,6 +67,30 @@ tell() {
   msg=$(printf '%s' "⚠️ Claude config sync $msg" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr '\n\t' '  ')
   printf '{"systemMessage": "%s"}\n' "$msg"
 }
+
+# A paused computer neither pulls nor pushes until `resume`; SYNC_FORCE=1 runs one sync anyway.
+case "${1:-}" in
+  pause)
+    mkdir -p "$STATE"
+    printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M')" "${2:-}" > "$STATE/paused"
+    echo "sync paused on this computer: bash ~/.claude-sync/sync.sh resume to start again"
+    exit 0
+    ;;
+  resume)
+    rm -f "$STATE/paused"
+    echo "sync resumed on this computer"
+    exit 0
+    ;;
+  bg | start | poll | fresh | morning | run | now | install)
+    if [ -f "$STATE/paused" ] && [ -z "${SYNC_FORCE:-}" ]; then
+      case "$1" in
+        poll) echo "head $(git -C "$SYNC" rev-parse -q --verify refs/remotes/origin/main 2> /dev/null)" ;;
+        start | now) echo "Claude config sync is paused on this computer since $(cat "$STATE/paused") (bash ~/.claude-sync/sync.sh resume)" ;;
+      esac
+      exit 0
+    fi
+    ;;
+esac
 
 case "${1:-}" in
   bg)
@@ -356,9 +399,9 @@ mirror() {
           fail "could not read $src/$f"
           return 1
         }
-        if grep -q __SECRET__ "$STATE/view"; then
-          cmp -s "$STATE/view" "$dst/$f" && continue
-          mkdir -p "$(dirname "$dst/$f")" && cp "$STATE/view" "$dst/$f" && CHANGED=$((CHANGED + 1))
+        if grep -q __SECRET__ "$TMP/view"; then
+          cmp -s "$TMP/view" "$dst/$f" && continue
+          mkdir -p "$(dirname "$dst/$f")" && cp "$TMP/view" "$dst/$f" && CHANGED=$((CHANGED + 1))
           continue
         fi
       else
@@ -397,11 +440,11 @@ capture_settings() {
   [ -f settings.shared.json ] || echo '{}' > settings.shared.json
   jq --arg h "$HOME_FWD" --slurpfile m "$MCONF" --slurpfile old settings.shared.json \
     "$JQ_LIB del(.env.CLAUDE_DEV_ROOT) | if .env == {} then del(.env) else . end | unrender(\$h) | unmerge(\$m[0].settings // {}; \$old[0]) | redact_settings" \
-    "$CLAUDE/settings.json" > "$STATE/shared.json" || {
+    "$CLAUDE/settings.json" > "$TMP/shared.json" || {
     fail "~/.claude/settings.json is not valid JSON"
     return 1
   }
-  replace_json settings.shared.json "$STATE/shared.json"
+  replace_json settings.shared.json "$TMP/shared.json"
 }
 
 apply_settings() {
@@ -409,12 +452,12 @@ apply_settings() {
   jq empty "$CLAUDE/settings.json" > /dev/null 2>&1 && loc="$CLAUDE/settings.json"
   jq -n --arg h "$HOME_FWD" --arg dev "$DEV_DIR" --slurpfile s settings.shared.json --slurpfile m "$MCONF" --slurpfile loc "$loc" \
     "$JQ_LIB \$s[0] | merge(\$m[0].settings // {}) | fill_any(\$loc[0] | unrender(\$h)) | render(\$h) | .env.CLAUDE_DEV_ROOT = \$dev" \
-    > "$STATE/settings.json" || {
+    > "$TMP/settings.json" || {
     fail "could not build settings.json"
     return 1
   }
   mkdir -p "$CLAUDE"
-  replace_json "$CLAUDE/settings.json" "$STATE/settings.json"
+  replace_json "$CLAUDE/settings.json" "$TMP/settings.json"
 }
 
 # MCP servers. Those for all projects are in mcp/, a project's own ones in
@@ -443,7 +486,7 @@ write_mcp() {
   [ -d "$2" ] || [ "$(jq length "$1")" -gt 0 ] || return 0
   mkdir -p "$2"
   for name in $(jq -r 'keys[]' "$1"); do
-    jq --arg k "$name" '.[$k]' "$1" > "$STATE/server.json" && replace_json "$2/$name.json" "$STATE/server.json"
+    jq --arg k "$name" '.[$k]' "$1" > "$TMP/server.json" && replace_json "$2/$name.json" "$TMP/server.json"
   done
   for f in "$2"/*.json; do
     [ -f "$f" ] || continue
@@ -459,21 +502,21 @@ capture_mcp() {
   local dir=$1 seen=$2
   [ -f "$CLAUDE_JSON" ] || return 0
   [ -f "$seen" ] || { mkdir -p "$(dirname "$seen")" && echo '{}' > "$seen"; }
-  local_mcp "${3:-}" > "$STATE/mcp-local.json" || {
+  local_mcp "${3:-}" > "$TMP/mcp-local.json" || {
     fail "~/.claude.json is not valid JSON"
     return 1
   }
-  shared_mcp "$dir" > "$STATE/mcp-old.json" &&
-    jq -n --slurpfile cur "$STATE/mcp-local.json" --slurpfile old "$STATE/mcp-old.json" --slurpfile seen "$seen" '
+  shared_mcp "$dir" > "$TMP/mcp-old.json" &&
+    jq -n --slurpfile cur "$TMP/mcp-local.json" --slurpfile old "$TMP/mcp-old.json" --slurpfile seen "$seen" '
       $cur[0] as $c | $seen[0] as $s
       | reduce ($c | keys_unsorted[]) as $k ($old[0]; if $s[$k] != $c[$k] then .[$k] = $c[$k] else . end)
       | reduce ($s | keys_unsorted[]) as $k (.; if $c | has($k) then . else del(.[$k]) end)' \
-      > "$STATE/mcp-new.json" || {
+      > "$TMP/mcp-new.json" || {
     fail "could not read the synced MCP servers in ~/.claude-sync/$dir"
     return 1
   }
-  write_mcp "$STATE/mcp-new.json" "$dir"
-  mv "$STATE/mcp-local.json" "$seen"
+  write_mcp "$TMP/mcp-new.json" "$dir"
+  mv "$TMP/mcp-local.json" "$seen"
 }
 
 # Git Bash would rewrite /paths inside the JSON argument without MSYS2_ARG_CONV_EXCL.
@@ -496,12 +539,12 @@ apply_mcp() {
   [ -d "$dir" ] || return 0
   [ -n "$key" ] && scope=local
   [ -f "$seen" ] || { mkdir -p "$(dirname "$seen")" && echo '{}' > "$seen"; }
-  shared_mcp "$dir" > "$STATE/mcp-want.json" || {
+  shared_mcp "$dir" > "$TMP/mcp-want.json" || {
     fail "could not read the synced MCP servers in ~/.claude-sync/$dir"
     return 1
   }
   ops=$(claude_json | jq -c --arg h "$HOME_FWD" --argjson x "$MCP_EXCLUDE" --arg p "$key" \
-    --slurpfile want "$STATE/mcp-want.json" "$JQ_LIB"'
+    --slurpfile want "$TMP/mcp-want.json" "$JQ_LIB"'
       servers($p) as $loc
       | $want[0] | without($x) | to_entries[]
       | .key as $k
@@ -531,7 +574,7 @@ apply_mcp() {
       done <<< "$ops"
     fi
   fi
-  local_mcp "$key" | jq --slurpfile want "$STATE/mcp-want.json" --slurpfile seen "$seen" \
+  local_mcp "$key" | jq --slurpfile want "$TMP/mcp-want.json" --slurpfile seen "$seen" \
     "$JQ_LIB only(\$want[0] + \$seen[0])" > "$seen.tmp" && mv "$seen.tmp" "$seen"
 }
 
@@ -638,14 +681,14 @@ view() {
   ! is_cipher "$1" || return 2
   [ "$(wc -c < "$1")" -le $((MAX_FILE_KB * 1024)) ] || return 2
   if is_json "$1"; then
-    jq --arg h "$HOME_FWD" "$JQ_LIB unrender(\$h) | redact_any" "$1" > "$STATE/view" 2> /dev/null || return 2
+    jq --arg h "$HOME_FWD" "$JQ_LIB unrender(\$h) | redact_any" "$1" > "$TMP/view" 2> /dev/null || return 2
   elif LC_ALL=C grep -aiqE -e "$BROAD_RE" -- "$1"; then
     is_text "$1" && iconv -f UTF-8 -t UTF-8 "$1" > /dev/null 2>&1 &&
-      jq -R -s -r -j "$JQ_LIB text_redact" "$1" > "$STATE/view" 2> /dev/null || return 2
+      jq -R -s -r -j "$JQ_LIB text_redact" "$1" > "$TMP/view" 2> /dev/null || return 2
   else
-    cp "$1" "$STATE/view" || return 1
+    cp "$1" "$TMP/view" || return 1
   fi
-  ! grep -qE "$SECRET_RE" "$STATE/view" || return 2
+  ! grep -qE "$SECRET_RE" "$TMP/view" || return 2
 }
 
 # capture_file LOCAL SHARED SEEN
@@ -675,10 +718,10 @@ capture_file() {
     return 1
   }
   rm -f "$kept"
-  [ -f "$3" ] && cmp -s "$STATE/view" "$3" && return 0
+  [ -f "$3" ] && cmp -s "$TMP/view" "$3" && return 0
   mkdir -p "$(dirname "$2")" "$(dirname "$3")"
-  cmp -s "$STATE/view" "$2" || { cp "$STATE/view" "$2" && CHANGED=$((CHANGED + 1)); }
-  cp "$STATE/view" "$3"
+  cmp -s "$TMP/view" "$2" || { cp "$TMP/view" "$2" && CHANGED=$((CHANGED + 1)); }
+  cp "$TMP/view" "$3"
 }
 
 # write_local SHARED LOCAL: puts SHARED in place, with this machine's secrets.
@@ -695,25 +738,25 @@ write_local() {
     jq -R -s -r -j --rawfile loc "$2" "$JQ_LIB text_fill(\$loc)" "$1" 2> /dev/null || return 3
   else
     cat "$1"
-  fi > "$STATE/out" || {
+  fi > "$TMP/out" || {
     fail "could not apply ~/.claude-sync/$1 to $2"
     return 1
   }
   if [ -f "$2" ]; then
     if is_json "$2"; then
-      [ "$(jq -S . "$2")" = "$(jq -S . "$STATE/out")" ] && return 0
+      [ "$(jq -S . "$2")" = "$(jq -S . "$TMP/out")" ] && return 0
     else
-      cmp -s "$2" "$STATE/out" && return 0
+      cmp -s "$2" "$TMP/out" && return 0
     fi
   fi
-  if [ -n "$filled" ] && ! jq -n -e --rawfile loc "$2" --rawfile out "$STATE/out" \
+  if [ -n "$filled" ] && ! jq -n -e --rawfile loc "$2" --rawfile out "$TMP/out" \
     "$JQ_LIB (\$out | split(\"\n\")) as \$o | all(\$loc | secret_lines[]; . as \$s | \$o | index([\$s]) != null)" > /dev/null; then
     rel=${2#"$HOME"/}
     rel="$STATE/trash/$(date +%Y%m%d-%H%M%S)/${rel#/}"
     mkdir -p "$(dirname "$rel")" && cp "$2" "$rel" || return 1
     warn "a line of $2 that looked like a secret was removed on another machine; the previous copy is in $rel"
   fi
-  mkdir -p "$(dirname "$2")" && cp "$STATE/out" "$2" && CHANGED=$((CHANGED + 1)) && say "updated $2"
+  mkdir -p "$(dirname "$2")" && cp "$TMP/out" "$2" && CHANGED=$((CHANGED + 1)) && say "updated $2"
 }
 
 # apply_file SHARED LOCAL SEEN
@@ -730,10 +773,10 @@ apply_file() {
       return 0
     }
     [ -f "$3" ] && base=$3
-    if ! cmp -s "$STATE/view" "$1" && ! cmp -s "$STATE/view" "$base"; then
-      if is_json "$1" && jq empty "$STATE/view" > /dev/null 2>&1; then
-        cp "$1" "$STATE/merged" && bash "$SYNC/json-merge.sh" "$base" "$STATE/merged" "$STATE/view" &&
-          replace_json "$1" "$STATE/merged"
+    if ! cmp -s "$TMP/view" "$1" && ! cmp -s "$TMP/view" "$base"; then
+      if is_json "$1" && jq empty "$TMP/view" > /dev/null 2>&1; then
+        cp "$1" "$TMP/merged" && bash "$SYNC/json-merge.sh" "$base" "$TMP/merged" "$TMP/view" &&
+          replace_json "$1" "$TMP/merged"
       else
         KEPT="$KEPT $2"
         mkdir -p "$(dirname "$conflict")" && touch "$conflict"
@@ -1066,8 +1109,8 @@ local_of() {
 # holds COMMIT REPO_PATH LOCAL: whether LOCAL is what the repo had at COMMIT
 # (both missing counts).
 holds() {
-  local was="$STATE/was"
-  case "$2" in *.json) was="$STATE/was.json" ;; esac
+  local was="$TMP/was"
+  case "$2" in *.json) was="$TMP/was.json" ;; esac
   if ! git cat-file -e "$1:$2" 2> /dev/null; then
     [ ! -e "$3" ]
     return
@@ -1075,9 +1118,9 @@ holds() {
   [ -f "$3" ] && view "$3" || return 1
   blob "$1" "$2" > "$was" || return 1
   if is_json "$was"; then
-    [ "$(jq -S . "$STATE/view")" = "$(jq -S . "$was")" ]
+    [ "$(jq -S . "$TMP/view")" = "$(jq -S . "$was")" ]
   else
-    cmp -s "$STATE/view" "$was"
+    cmp -s "$TMP/view" "$was"
   fi
 }
 
@@ -1100,8 +1143,8 @@ pull_in() {
       fi
     fi
     if git cat-file -e "$2:$path" 2> /dev/null; then
-      mkdir -p "$(dirname "$STATE/in/$path")" && blob "$2" "$path" > "$STATE/in/$path" || return 1
-      write_local "$STATE/in/$path" "$LROOT/$LREL"
+      mkdir -p "$(dirname "$TMP/in/$path")" && blob "$2" "$path" > "$TMP/in/$path" || return 1
+      write_local "$TMP/in/$path" "$LROOT/$LREL"
       case $? in 0) ;; 3) both="$both $path" ;; *) return 1 ;; esac
     else
       mkdir -p "$(dirname "$trash/$path")" && mv "$LROOT/$LREL" "$trash/$path" && CHANGED=$((CHANGED + 1))
@@ -1109,7 +1152,7 @@ pull_in() {
       say "removed $LROOT/$LREL (copy in $trash)"
     fi
   done < <(git -c core.quotepath=off diff --name-only --no-renames "$1" "$2" -- claude memory)
-  rm -rf "$STATE/in"
+  rm -rf "$TMP/in"
   find "$STATE/trash" -mindepth 1 -maxdepth 1 -mtime +30 -exec rm -rf {} + 2> /dev/null
   [ -z "$both" ] || warn "changed both here and in the repo, this machine's version was kept:$both"
   return 0
@@ -1255,17 +1298,36 @@ crypt_recommit() {
 }
 
 lock() {
-  local tries=${1:-0}
+  local tries=${1:-0} pid
   while ! mkdir "$STATE/lock" 2> /dev/null; do
-    if [ -n "$(find "$STATE/lock" -maxdepth 0 -mmin +3 2> /dev/null)" ]; then
-      rm -rf "$STATE/lock"
+    if lock_stale; then
+      pid=$(cat "$STATE/lock/pid" 2> /dev/null)
+      # Moved aside first, so of the runs that found it stale only one takes it over, and never a
+      # lock another run made in between.
+      if mv "$STATE/lock" "$STATE/lock.$$" 2> /dev/null; then
+        if [ "$(cat "$STATE/lock.$$/pid" 2> /dev/null)" = "$pid" ]; then
+          rm -rf "$STATE/lock.$$"
+        else
+          [ -e "$STATE/lock" ] || mv "$STATE/lock.$$" "$STATE/lock"
+        fi
+      fi
       continue
     fi
     [ "$tries" -gt 0 ] || return 1
     tries=$((tries - 1))
     sleep 1
   done
-  trap 'rm -rf "$STATE/lock"' EXIT
+  echo $$ > "$STATE/lock/pid"
+  trap unlock EXIT
+  find "$STATE/tmp" -mindepth 1 -maxdepth 1 -mmin +$((LOCK_MAX_MIN * 2)) -exec rm -rf {} + 2> /dev/null
+  rm -rf "$TMP" && mkdir -p "$TMP"
+}
+
+# unlock: leaves a lock another run took over to that run.
+unlock() {
+  rm -rf "$TMP"
+  [ "$(cat "$STATE/lock/pid" 2> /dev/null)" = "$$" ] && rm -rf "$STATE/lock"
+  return 0
 }
 
 run() {
@@ -1302,7 +1364,7 @@ morning() {
   local f
   lock 60 || return 0
   sync_retry force
-  rm -rf "$STATE/lock"
+  unlock
   {
     for f in "$CLAUDE"/skills/*/morning.sh; do printf '%s\n' "$f"; done
     plugin_mornings
