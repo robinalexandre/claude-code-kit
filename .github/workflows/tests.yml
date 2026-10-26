@@ -43,6 +43,7 @@ jobs:
       - name: Reminders, handoffs, inventory and the sync's install
         run: |
           bash tests/reminders.sh
+          bash tests/reminders-encrypted.sh
           bash tests/handoff.sh
           bash tests/inventory.sh
           bash tests/sync-install.sh

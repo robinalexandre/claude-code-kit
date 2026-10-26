@@ -13,6 +13,7 @@
 #   reminders.sh restore ID      puts a past reminder back, with its dates and repeat days
 #   reminders.sh notify [TEXT]   sends TEXT to the desktop and the phone (to test)
 #   reminders.sh agents          the assistants that run tasks by themselves, and their folders
+#   reminders.sh encrypted       "encrypted" when the sync repo encrypts the reminders (git-crypt), else "clear"
 # A repeating reminder has `every: friday` (days in English, comma-separated, or `day` or
 # `weekday`) and shows on those days from `on` until `until`, at the time of day `on` gives, else
 # at REMINDERS_AT (09:00, when the morning sync notifies). Closing one moves it to past/ with a
@@ -319,9 +320,23 @@ phone() {
     curl -fsS -m 10 -H 'Content-Type: application/json' --data-binary @- "${url%/*}" > /dev/null 2>&1
 }
 
+# notify TITLE TEXT [PHONE_TEXT]: PHONE_TEXT, when given, goes to the phone instead of TEXT.
 notify() {
   desktop "$1" "$2"
-  phone "$1" "$2"
+  phone "$1" "${3:-$2}"
+}
+
+# phone_text N: with "ntfy_detail": "count" in reminders.json, the phone gets only how many
+# reminders are due: what goes to an ntfy server travels and stays there in clear.
+phone_text() {
+  [ "$(conf ntfy_detail)" = count ] || return 0
+  if [ "$1" -gt 1 ]; then printf '%d reminders due' "$1"; else printf '1 reminder due'; fi
+}
+
+# encrypted: whether the sync repo encrypts the reminders folder (sync.sh crypt). Then only
+# what holds the key can read them: a cloud routine reading the repo from GitHub cannot.
+encrypted() {
+  git -C "$ROOT" check-attr filter -- "$(basename "$DIR")/x.md" 2> /dev/null | grep -q ': git-crypt$'
 }
 
 # summary FILE...: "title" for one reminder, "title (+N more)" for several.
@@ -390,7 +405,7 @@ start() {
   [ $# -gt 0 ] || return 0
   today=$(date +%Y-%m-%d)
   if [ "$(cat "$STATE/session-notified" 2> /dev/null)" != "$today" ]; then
-    notify "Reminder" "$(summary "$@")"
+    notify "Reminder" "$(summary "$@")" "$(phone_text $#)"
     echo "$today" > "$STATE/session-notified"
   fi
   show SessionStart "$SID" "$CWD"
@@ -410,7 +425,7 @@ after_sync() {
   while IFS= read -r f; do set -- "$@" "$f"; done < <(unseen "$sid" "$cwd")
   [ $# -gt 0 ] || return 0
   touch "$STATE/pending-$sid"
-  notify "Reminder" "$(summary "$@")"
+  notify "Reminder" "$(summary "$@")" "$(phone_text $#)"
   date +%Y-%m-%d > "$STATE/session-notified"
 }
 
@@ -426,7 +441,7 @@ morning() {
   set --
   while IFS= read -r f; do set -- "$@" "$f"; done < <(due)
   [ $# -gt 0 ] || return 0
-  notify "Reminder" "$(summary "$@")"
+  notify "Reminder" "$(summary "$@")" "$(phone_text $#)"
 }
 
 done_() {
@@ -475,8 +490,9 @@ case "${1:-}" in
   restore) restore "${2:-}" ;;
   notify) notify "Reminder" "${2:-Test from the reminders skill}" ;;
   agents) agents | while IFS=$'\t' read -r name dir; do printf '%s\t%s\n' "$name" "$ROOT/$dir"; done ;;
+  encrypted) if encrypted; then echo encrypted; else echo clear; fi ;;
   *)
-    echo "usage: reminders.sh start|prompt|morning|due [DIR]|list|json [DIR]|done ID|stop ID|delete ID|restore ID|notify [TEXT]|agents" >&2
+    echo "usage: reminders.sh start|prompt|morning|due [DIR]|list|json [DIR]|done ID|stop ID|delete ID|restore ID|notify [TEXT]|agents|encrypted" >&2
     exit 2
     ;;
 esac
