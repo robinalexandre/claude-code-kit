@@ -193,11 +193,12 @@ def unrender($h): walk(if type == "string" then split($h) | join("__HOME__") els
 def secret_name: test("key|token|secret|pass|pwd|auth|cred|cookie|session|private"; "i");
 # Masking fails closed: a value after a secret-looking name is replaced unless
 # it is plainly not one — a reference ($VAR, <x>, {{x}}, %x%), a function call,
-# an ENV_VAR_NAME, a shell default (${X_TOKEN:-}), or a YAML/HTTP keyword. The
-# name may end an identifier after `_` or a camelCase hump (db_password,
-# accessToken), never mid-word.
+# a type annotation (_TOKEN: list[str] = [], secret: str = ""), an ENV_VAR_NAME,
+# a shell default (${X_TOKEN:-}), or a YAML/HTTP keyword. The name may end an
+# identifier after `_` or a camelCase hump (db_password, accessToken), never
+# mid-word.
 def ref: "(?:\\$|<[^>\\s]+>|\\{\\{|%\\w+%)";
-def not_value: "(?!" + ref + ")(?!-?\\})(?![A-Za-z_][A-Za-z0-9_.]*\\()(?![A-Z][A-Z0-9]*_[A-Z0-9_]*(?![A-Za-z0-9]))(?!(?i:write|read|none|no-check|true|false|null|required|optional)(?![^\\s\"\\x27,;)]))";
+def not_value: "(?!" + ref + ")(?!-?\\})(?![A-Za-z_][A-Za-z0-9_.]*[(\\[])(?![A-Za-z_][A-Za-z0-9_.]* +=(?!=))(?![A-Z][A-Z0-9]*_[A-Z0-9_]*(?![A-Za-z0-9]))(?!(?i:write|read|none|no-check|true|false|null|required|optional)(?![^\\s\"\\x27,;)]))";
 def redact_str:
   gsub("sk-ant-[A-Za-z0-9_-]{20,}|xkeysib-[A-Za-z0-9-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]+|(sk|pk|rk)_(live|test)_[A-Za-z0-9]{16,}|xox[abprs]-[A-Za-z0-9-]{10,}|AIza[A-Za-z0-9_-]{30,}"; "__SECRET__")
   | gsub("(?<p>[A-Za-z][A-Za-z0-9+.-]*://[^/\\s:@]+:)(?!\\$\\{?\\w+\\}?@|<[^>]+>@|\\{\\{)[^@\\s/]+@"; "\(.p)__SECRET__@")
@@ -316,7 +317,8 @@ files_in() {
 # under DST match SRC. Capturing replaces secrets (view); applying puts this
 # machine's own values back (write_local).
 mirror() {
-  local mode=$1 src=$2 dst=$3 want have gone f count rc special
+  local mode=$1 src=$2 dst=$3 want have gone f count rc special cipher=""
+  [ "$mode" = capture ] && crypt_folders | grep -qxF -- "$dst" && cipher=1
   want=$(files_in "$src" "$4")
   have=$(files_in "$dst" "$4")
   gone=$(LC_ALL=C comm -13 <(printf '%s\n' "$want") <(printf '%s\n' "$have") | grep -v '^$')
@@ -336,6 +338,7 @@ mirror() {
   fi
   while IFS= read -r f; do
     [ -n "$f" ] || continue
+    [ -n "$cipher" ] && is_cipher "$src/$f" && continue
     if grep -qxF -- "$f" <<< "$special"; then
       if [ "$mode" = capture ]; then
         view "$src/$f"
@@ -626,6 +629,7 @@ is_text() { LC_ALL=C grep -qI . "$1" 2> /dev/null; }
 # may hold one but can't be redacted (not valid JSON or UTF-8 text). Never
 # falls back to the raw file.
 view() {
+  ! is_cipher "$1" || return 2
   [ "$(wc -c < "$1")" -le $((MAX_FILE_KB * 1024)) ] || return 2
   if is_json "$1"; then
     jq --arg h "$HOME_FWD" "$JQ_LIB unrender(\$h) | redact_any" "$1" > "$STATE/view" 2> /dev/null || return 2
@@ -650,6 +654,7 @@ capture_file() {
     fi
     return 0
   fi
+  is_cipher "$1" && return 0
   # The first time here, apply_file decides between this file and the shared one.
   [ ! -f "$3" ] && [ -f "$2" ] && return 0
   view "$1"
@@ -699,8 +704,8 @@ write_local() {
 apply_file() {
   local base=/dev/null conflict="$STATE/conflict/${3#"$STATE"/}"
   [ -f "$1" ] || return 0
-  [ -f "$3" ] && [ -f "$2" ] && cmp -s "$1" "$3" && return 0
-  if [ -f "$2" ]; then
+  [ -f "$3" ] && [ -f "$2" ] && ! is_cipher "$2" && cmp -s "$1" "$3" && return 0
+  if [ -f "$2" ] && ! is_cipher "$2"; then
     # This machine's file changed too since the last sync (or this is the
     # first sync here): JSON merges both sides; other files that differ stay
     # apart, and out of the sync, until one of them is deleted.
@@ -766,7 +771,7 @@ apply_repos() {
     [ -f "repos/$id/root" ] || continue
     while IFS= read -r f; do
       seen="$STATE/repo-seen/$id/$f"
-      [ -f "$seen" ] && [ -f "$r/$f" ] && cmp -s "repos/$id/$f" "$seen" && continue
+      [ -f "$seen" ] && [ -f "$r/$f" ] && ! is_cipher "$r/$f" && cmp -s "repos/$id/$f" "$seen" && continue
       tracked "$r" "$f" && continue
       apply_file "repos/$id/$f" "$r/$f" "$seen" || return 1
     done < <(cd "repos/$id" && find . \( -path ./mcp -o -path ./root \) -prune -o -type f -print | sed 's#^\./##')
@@ -787,7 +792,7 @@ apply_folders() {
   [ -d folders ] || return 0
   while IFS= read -r f; do
     seen="$STATE/folder-seen/$f"
-    [ -f "$seen" ] && [ -f "$DEV_DIR/$f" ] && cmp -s "folders/$f" "$seen" && continue
+    [ -f "$seen" ] && [ -f "$DEV_DIR/$f" ] && ! is_cipher "$DEV_DIR/$f" && cmp -s "folders/$f" "$seen" && continue
     case "$f" in
       .claude/*) owner=. ;;
       */.claude/*) owner=${f%%/.claude/*} ;;
@@ -843,7 +848,7 @@ apply_memory() {
   m=$(memory_dir "$2")
   while IFS= read -r f; do
     seen="$STATE/seen/$1/$f"
-    [ -f "$seen" ] && [ -f "$m/$f" ] && cmp -s "$1/$f" "$seen" && continue
+    [ -f "$seen" ] && [ -f "$m/$f" ] && ! is_cipher "$m/$f" && cmp -s "$1/$f" "$seen" && continue
     apply_file "$1/$f" "$m/$f" "$seen" || return 1
   done < <(flat_files "$1")
 }
@@ -893,6 +898,23 @@ crypt_locked() { crypt_on && ! crypt_unlocked; }
 crypt_skip() { ! crypt_unlocked && crypt_known | grep -qxF -- "$1"; }
 crypt_told() {
   printf 'has encrypted folders (%s) locked on this computer: they are left alone here until you run bash ~/.claude-sync/sync.sh crypt unlock <key file>' "$(crypt_folders | tr '\n' ' ' | sed 's/ $//')"
+}
+# is_cipher FILE: whether FILE holds git-crypt ciphertext instead of its content: never shared,
+# never committed (git-crypt would encrypt it a second time), and replaced by the clear version.
+is_cipher() { [ -f "$1" ] && [ "$(LC_ALL=C head -c 10 "$1" | LC_ALL=C tr -d '\0')" = GITCRYPT ]; }
+# blob REV PATH: the file at REV as a checkout writes it, so decrypted where this computer has the
+# key. A plain git show gives the ciphertext of an encrypted folder.
+blob() { git cat-file --filters "$1:$2"; }
+# crypt_checkout: decrypts what git-crypt unlock left as ciphertext, or deleted, when its own
+# checkout stopped partway (Windows, out of processes). Unlock wants a clean tree, so these files
+# hold nothing but what is committed.
+crypt_checkout() {
+  local f left=()
+  crypt_on || return 0
+  while IFS= read -r f; do
+    { [ ! -e "$f" ] || is_cipher "$f"; } && left+=("$f")
+  done < <(git -c core.quotepath=off ls-files -- $(crypt_folders))
+  [ ${#left[@]} -eq 0 ] || git checkout -- "${left[@]}"
 }
 
 crypt() {
@@ -970,7 +992,8 @@ crypt() {
         echo "another sync is running; try again in a moment"
         return 1
       }
-      git-crypt unlock "$1" || return 1
+      git-crypt unlock "$1" || crypt_unlocked || return 1
+      crypt_checkout || return 1
       echo "unlocked: the encrypted folders now sync on this computer too"
       sync_once force
       ;;
@@ -1034,7 +1057,7 @@ holds() {
     return
   fi
   [ -f "$3" ] && view "$3" || return 1
-  git show "$1:$2" > "$was" || return 1
+  blob "$1" "$2" > "$was" || return 1
   if is_json "$was"; then
     [ "$(jq -S . "$STATE/view")" = "$(jq -S . "$was")" ]
   else
@@ -1053,13 +1076,15 @@ pull_in() {
   [ "$(git rev-parse "$1")" = "$(git rev-parse "$2")" ] && return 0
   while IFS= read -r path; do
     [ -n "$path" ] && local_of "$path" || continue
-    holds "$2" "$path" "$LROOT/$LREL" && continue
-    if ! holds "$1" "$path" "$LROOT/$LREL"; then
-      both="$both $path"
-      continue
+    if ! is_cipher "$LROOT/$LREL"; then
+      holds "$2" "$path" "$LROOT/$LREL" && continue
+      if ! holds "$1" "$path" "$LROOT/$LREL"; then
+        both="$both $path"
+        continue
+      fi
     fi
     if git cat-file -e "$2:$path" 2> /dev/null; then
-      mkdir -p "$(dirname "$STATE/in/$path")" && git show "$2:$path" > "$STATE/in/$path" || return 1
+      mkdir -p "$(dirname "$STATE/in/$path")" && blob "$2" "$path" > "$STATE/in/$path" || return 1
       write_local "$STATE/in/$path" "$LROOT/$LREL"
       case $? in 0) ;; 3) both="$both $path" ;; *) return 1 ;; esac
     else
@@ -1083,6 +1108,17 @@ catch_up() {
   pull_in "$base" HEAD
 }
 
+# heal_memory: puts back in clear the memory files that hold ciphertext here (left by an older
+# engine, or while this computer had no key). The repo and folder memories heal in apply_memories.
+heal_memory() {
+  local f
+  [ -d "$MEMORY" ] && ! crypt_skip memory || return 0
+  while IFS= read -r f; do
+    is_cipher "$MEMORY/$f" && [ -f "memory/$f" ] && ! is_cipher "memory/$f" || continue
+    write_local "memory/$f" "$MEMORY/$f" || return 1
+  done < <(files_in "$MEMORY" .)
+}
+
 # What needs the claude CLI, a repo or a folder on this machine, so it is
 # checked on every run.
 apply_local() {
@@ -1103,6 +1139,13 @@ commit() {
     while IFS= read -r f; do [ -n "$f" ] && excl+=(":(exclude)$f"); done < <(crypt_known)
   fi
   git add -A -- . ${excl[@]+"${excl[@]}"}
+  if crypt_on && crypt_unlocked; then
+    while IFS= read -r f; do
+      is_cipher "$f" || continue
+      git reset -q -- "$f"
+      warn "left $f out of the commit: it holds ciphertext, it would be encrypted twice (git -C ~/.claude-sync checkout -- \"$f\")"
+    done < <(git -c core.quotepath=off diff --cached --name-only --diff-filter=AM -- $(crypt_folders))
+  fi
   git diff --cached --quiet && return 0
   if git diff --cached -U0 | grep -E '^\+' | grep -qE "$SECRET_RE"; then
     git reset -q
@@ -1277,6 +1320,7 @@ sync_once() {
   [ "${1:-}" = force ] && MCP_NOW=1 SCAN_NOW=1
   git_setup
   catch_up || return 1
+  heal_memory || return 1
   capture || return 1
   commit || return 1
   remote_sync "${1:-}" || return 1

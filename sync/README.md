@@ -123,14 +123,14 @@ On every computer, the next session starts with the last sync error, if there wa
 The repo is private, but its personal folders (your memory, your knowledge notes, an assistant's files) are readable by anyone who gets into your git account. `sync.sh crypt` encrypts them with [git-crypt](https://github.com/AGWA/git-crypt): a git filter that encrypts at commit and decrypts at checkout, with a key that never goes in the repo. On your disk and for Claude nothing changes; on the host those files are ciphertext.
 
 ```sh
-brew install git-crypt            # apt install git-crypt; Windows: a release from github.com/AGWA/git-crypt
+brew install git-crypt            # apt install git-crypt; Windows: scoop install git-crypt, or a release from github.com/AGWA/git-crypt
 bash ~/.claude-sync/sync.sh crypt on memory memory-repos memory-folders knowledge
 bash ~/.claude-sync/sync.sh crypt export ~/claude-sync.key    # keep it in your password manager, never in the repo
 bash ~/.claude-sync/sync.sh crypt unlock ~/claude-sync.key    # once, on each other computer
 bash ~/.claude-sync/sync.sh crypt status
 ```
 
-The config-sync setup offers it on the first computer, and asks for the key file on the next ones. The encrypted folders are listed at the end of `.gitattributes`, after a marker line the engine's updates keep. A computer without the key (or without git-crypt) is *locked*: it sees ciphertext there, so the sync leaves those folders alone (nothing applied to `~/.claude`, nothing added from there, which git would commit in clear) and the session starts with a line saying so. Earlier commits still hold the files in clear: rewrite the history if that matters to you. A program that reads the repo through the host's API (not through git) has to encrypt and decrypt the format itself; the key file gives it everything it needs.
+The config-sync setup offers it on the first computer, and asks for the key file on the next ones. The encrypted folders are listed at the end of `.gitattributes`, after a marker line the engine's updates keep. A computer without the key (or without git-crypt) is *locked*: it sees ciphertext there, so the sync leaves those folders alone (nothing applied to `~/.claude`, nothing added from there, which git would commit in clear) and the session starts with a line saying so. A file that holds ciphertext instead of its content (an older engine wrote it in your memory, or git-crypt's checkout stopped partway) is never shared nor committed, which would encrypt it twice, and gets its clear version back once the computer is unlocked. Earlier commits still hold the files in clear: rewrite the history if that matters to you. A program that reads the repo through the host's API (not through git) has to encrypt and decrypt the format itself; the key file gives it everything it needs.
 
 ## Handoff
 

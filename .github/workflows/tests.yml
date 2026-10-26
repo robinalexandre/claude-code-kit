@@ -67,7 +67,11 @@ jobs:
       - name: The sync's minute poll
         run: bash tests/sync-poll.sh
       - name: The sync's encrypted folders
-        run: bash tests/sync-crypt.sh
+        run: |
+          bash tests/sync-crypt.sh
+          bash tests/sync-crypt-memory.sh
+      - name: The sync's secret masking
+        run: bash tests/sync-redact.sh
       - name: Mods
         working-directory: mods
         run: for m in */; do claude plugin test "${m%/}" || exit 1; done

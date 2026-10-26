@@ -477,7 +477,7 @@
     {
       "name": "ci-review",
       "description": "An AI review step on CI that checks each PR/MR against the proof it carries (GitHub Actions, GitLab CI).",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "category": "development",
       "source": ".",
       "strict": false,
@@ -499,7 +499,7 @@
     {
       "name": "config-sync",
       "description": "Keeps your Claude Code config the same on all your computers through a private git repo of your own (any host); sets it up at the first session and keeps the engine current. Each computer also records what it runs (system, Claude Code, plugins, kits) for the others to see.",
-      "version": "1.7.2",
+      "version": "1.7.3",
       "category": "productivity",
       "source": ".",
       "strict": false,

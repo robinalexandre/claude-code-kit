@@ -8,7 +8,7 @@ on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
 
-# id-token: the action trades it for its GitHub App token, and Bedrock or Vertex sign in with it.
+# The id-token permission lets the action trade it for its GitHub App token, and Bedrock or Vertex sign in with it.
 permissions:
   contents: read
   pull-requests: write
