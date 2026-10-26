@@ -2084,11 +2084,15 @@ def waiting_for(seen: dict) -> str:
     votes = set(seen["votes"].values())
     target = seen.get("target", "")
     ci = ci_summary(checks)
+    required = [c for c in checks.values() if c["required"] is not False]
+    approved = bool(votes & {"approved", "approved with suggestions"})
+    expired = any(c["state"] == "expired" for c in required)
     if seen.get("conflicts"):
         return "a conflict fix"
-    if any(c["state"] == "expired" and c["required"] is not False for c in checks.values()):
+    # The target branch moving expires a passed build: queuing it again only matters once approved.
+    if expired and approved:
         return "CI to be queued again"
-    if ci.startswith("CI failed"):
+    if any(c["state"] in {"failed", "broken"} for c in required):
         return "a CI fix"
     if votes & {"rejected", "waiting for author", "changes requested"}:
         return "changes from us"
@@ -2096,8 +2100,8 @@ def waiting_for(seen: dict) -> str:
         return f"the PR into {target} to merge first"
     if ci.startswith("CI running"):
         return "CI"
-    if not votes & {"approved", "approved with suggestions"}:
-        return "a review"
+    if not approved:
+        return "a review, then CI queued again" if expired else "a review"
     return "the merge"
 
 

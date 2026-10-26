@@ -1169,6 +1169,25 @@ test('opening a PR with a new comment reads it: pr-watch clears it, the pane kee
   expect(await bandColor(band)).toBeUndefined()
 })
 
+test("a bot's comment leaves the PR waiting: only a person's comment needs the user", async ($, on) => {
+  mock.clock(on)
+  const prs = [
+    row('4', { waiting: 'a review', changes: ['new comment by review-bot (bot) on api.ts: add docs'] }),
+    row('5', { waiting: 'a review', changes: ['new comment by review-bot (bot): looks fine'] }),
+  ]
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
+  on('process.run', () => ran(0, JSON.stringify({ live: false, prs, errors: [] })))
+  on('ui.render', () => Fragment({}))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+
+  await $.command.run(RUN)
+  const band = await $.ui.mount({ plugin: 'pr-pane', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
+  const pane = await mountPane($, 'terminal')
+
+  expect(await bandColor(band)).toBeUndefined()
+  expect(await pane.find({ key: 'attention' })).toBeUndefined()
+})
+
 const issue = (number: string, fields: Record<string, unknown>) => ({
   url: `https://github.com/o/app/issues/${number}`,
   repo: 'app',

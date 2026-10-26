@@ -903,10 +903,15 @@ const setParked = ($: EngineInterface, pr: PrRow, isParked: boolean) =>
   quickly($, pr.url, [isParked ? 'park' : 'unpark', pr.url], { pr: one => ({ ...one, parked: isParked }) },
     `${isParked ? 'Parked' : 'Unparked'} ${pr.repo} #${pr.number}`, `Could not ${isParked ? 'park' : 'unpark'} #${pr.number}`)
 
-// What the user has to act on: a failing or expired CI, a conflict, a rejection, or a new comment
-// since the last check.
+// pr-watch marks the authors listed as `bots` in its config: "new comment by <author> (bot)[ on <file>]: <text>".
+const isBotComment = (change: string) => /^new comment by [^:]* \(bot\)(?: on |:)/.test(change)
+
+// What the user has to act on: a failing CI, an expired one on an approved PR, a conflict, a rejection,
+// or a new comment from a person since the last check.
 const needsAttention = (pr: PrRow) =>
-  NEEDS_US.has(pr.waiting) || pr.conflicts === true || pr.changes.some(change => change.startsWith('new comment'))
+  NEEDS_US.has(pr.waiting) ||
+  pr.conflicts === true ||
+  pr.changes.some(change => change.startsWith('new comment') && !isBotComment(change))
 
 const canMerge = (pr: PrRow) => pr.waiting === 'the merge' && pr.conflicts !== true
 
