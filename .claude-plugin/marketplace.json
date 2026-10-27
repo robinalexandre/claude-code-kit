@@ -42,7 +42,7 @@
     {
       "name": "statusline",
       "description": "A status line with folder, branch, model, context used, effort and rate limit, and a sign when the config sync is paused (asks once to set it in your settings).",
-      "version": "1.4.0",
+      "version": "1.4.1",
       "category": "productivity",
       "source": ".",
       "strict": false,
