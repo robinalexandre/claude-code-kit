@@ -104,7 +104,12 @@ check "session-registry: declined, no longer offered" '[ -z "$(run_event session
 
 out=$(run_event config-sync SessionStart)
 check "config-sync: offers to set up the sync" '[[ "$out" == *"config-sync plugin is installed but not set up"* && "$out" == *"sync/setup.sh"* ]]'
-out=$(run_event daily-sync SessionStart)
+# Task Scheduler and crontab belong to the user, not to $HOME: stubs keep this computer's own daily sync out.
+mkdir -p "$SB/bin"
+printf '#!/bin/sh\nexit 0\n' > "$SB/bin/powershell.exe"
+cp "$SB/bin/powershell.exe" "$SB/bin/crontab"
+chmod +x "$SB/bin/powershell.exe" "$SB/bin/crontab"
+out=$(PATH="$SB/bin:$PATH" run_event daily-sync SessionStart)
 check "daily-sync: offers its setup" '[[ "$out" == *"daily-sync plugin is installed but not set up"* ]]'
 out=$(run_event drift-check-hook UserPromptSubmit)
 check "drift-check-hook: idle with no marker" '[ -z "$out" ]'

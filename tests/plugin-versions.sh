@@ -4,6 +4,8 @@
 #   tests/plugin-versions.sh [BASE]    BASE: a git ref, default origin/main; compares with the working tree
 # Works on macOS, Linux and Windows (Git Bash).
 set -u
+# Git Bash would rewrite git's REF:PATH arguments as a Windows path list.
+export MSYS2_ARG_CONV_EXCL='*'
 KIT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$KIT"
 . hooks/lib/jq.sh
