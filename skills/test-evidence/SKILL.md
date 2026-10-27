@@ -95,7 +95,15 @@ In `comment.md`, embed images and GIFs with `![login](URL:02-flow.gif)` and link
 
 Azure DevOps only takes png, gif, jpg, jpeg, docx, pptx, xlsx, txt, pdf, zip, gz, mov, mp4 and csv attachments: attach a markdown report or a log as `.txt` (the script refuses other extensions before uploading anything). It keeps one attachment per file name on a PR and refuses a second upload of it, so the script reuses a file already attached under that name: give a changed file a new name (`09-network-v2.txt`) to attach the new version.
 
-**GitHub PR**: there is no API to upload images to a comment. Give the user the folder and the comment text to paste, and let them drag the files in.
+**GitHub PR**: there is no API to upload images to a comment, but the PR page's comment box does it, and a browser tool can feed it:
+
+1. Open the PR in a new tab of the user's logged-in browser and find the comment box's file input (`take_snapshot`, or `find`).
+2. Pass the approved files to that input: `upload_file` with chrome-devtools, `file_upload` with Claude in Chrome. Never click the input; that opens the system file picker, which no tool can drive.
+3. Wait a few seconds, then read the comment box (`evaluate_script` or `javascript_tool`): GitHub has replaced each file with `<img … alt="<file name>" src="https://github.com/user-attachments/assets/…">`. Keep those links and empty the box, so no draft is left behind.
+4. Write `comment.md` with each image under the step it proves, then post it with `gh pr comment <PR> --body-file comment.md` (the links work in any comment on that repo).
+5. Open the posted comment and check that every image loads; close the tab.
+
+With no browser tool available, give the user the folder and the comment text, and let them drag the files in.
 
 Prefix any command with `DRY_RUN=1` to see the requests without sending them. A 404 on Azure DevOps usually means the PR belongs to another repo: run from that repo. If an upload fails (401, 403, 413 too large, 429 rate limited), report the HTTP code and message as they are and don't retry in a loop.
 
