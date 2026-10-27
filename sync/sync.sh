@@ -1245,6 +1245,35 @@ git_setup() {
   fi
 }
 
+# pr-watch deletes its records on purpose: an active one when its PR ends (moved to done/) or is no
+# longer watched, a done/ one once it is old. The other computer may have rewritten the same record
+# meanwhile, and git then stops on a modify/delete conflict the JSON merge driver never sees. There
+# the deletion wins for an active record (bringing it back would watch the PR twice), and the record
+# left is kept in done/ (the next prune drops it if it is old). Any other conflict still stops the
+# rebase.
+rebase_resolve() {
+  local f stages rounds=0
+  while [ -d "$(git rev-parse --git-path rebase-merge)" ] || [ -d "$(git rev-parse --git-path rebase-apply)" ]; do
+    rounds=$((rounds + 1))
+    [ "$rounds" -le 200 ] || return 1
+    f=$(git diff --name-only --diff-filter=U)
+    [ -n "$f" ] || return 1
+    while IFS= read -r f; do
+      case "$f" in pr-watch/*) ;; *) return 1 ;; esac
+      stages=$(git ls-files -u -- "$f" | awk '{ printf "%s", $3 }')
+      case "$stages" in 12 | 13) ;; *) return 1 ;; esac
+      if [[ $f == pr-watch/done/* ]] && [ -e "$f" ]; then
+        git add -- "$f" || return 1
+      else
+        git rm -q -- "$f" > /dev/null || return 1
+      fi
+    done < <(git diff --name-only --diff-filter=U)
+    GIT_EDITOR=true git rebase --continue > /dev/null 2>&1 ||
+      [ -n "$(git diff --name-only --diff-filter=U)" ] || return 1
+  done
+  [ "$rounds" -gt 0 ]
+}
+
 remote_sync() {
   local before came
   git remote get-url origin > /dev/null 2>&1 || {
@@ -1262,7 +1291,7 @@ remote_sync() {
   touch "$STATE/fetched"
   if has_remote_main; then
     before=$(git rev-parse HEAD)
-    if ! git rebase -q origin/main > /dev/null 2>&1; then
+    if ! git rebase -q origin/main > /dev/null 2>&1 && ! rebase_resolve; then
       git rebase --abort > /dev/null 2>&1
       fail "the same file changed here and on another machine. To fix: in ~/.claude-sync run git rebase origin/main, resolve, git rebase --continue, then bash sync.sh install"
       return 1

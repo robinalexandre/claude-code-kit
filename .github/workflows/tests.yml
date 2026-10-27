@@ -76,6 +76,8 @@ jobs:
         run: |
           bash tests/sync-redact.sh
           bash tests/sync-pingpong.sh
+      - name: The sync's pr-watch conflicts
+        run: bash tests/sync-prwatch-conflict.sh
       - name: Mods
         working-directory: mods
         run: for m in */; do claude plugin test "${m%/}" || exit 1; done

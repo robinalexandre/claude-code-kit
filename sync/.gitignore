@@ -4,3 +4,6 @@
 !repos/**
 !folders/**
 .DS_Store
+# Half-written files (written to <file>.tmp, then moved): a sync between the two commits them.
+*.tmp
+*.stackdump
