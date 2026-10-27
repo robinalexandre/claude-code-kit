@@ -203,7 +203,11 @@ pre_push() {
   fi
   while read -r lref lsha rref rsha; do
     [ "$lsha" = "$zero" ] && continue
-    if [ "$rsha" != "$zero" ]; then
+    # Commits already on the remote (another branch, e.g. after a rebase onto develop)
+    # are not this push's to vet.
+    if [ "$rsha" != "$zero" ] && git remote | grep -qx "$remote"; then
+      range="$lsha --not $rsha --remotes=$remote"
+    elif [ "$rsha" != "$zero" ]; then
       range="$rsha..$lsha"
     elif git remote | grep -qx "$remote"; then
       range="$lsha --not --remotes=$remote"

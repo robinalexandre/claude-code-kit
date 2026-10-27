@@ -107,6 +107,21 @@ else
   echo "FAIL pre-push: $(cat "$T/err")"
   fails=$((fails + 1))
 fi
+# A branch rebased onto a teammate's work already on the remote: their commits aren't this push's.
+git -C "$T/p" checkout -q -b feat
+git -C "$T/p" -c user.email=me@home.example commit -q --allow-empty -m mine
+git -C "$T/p" push -q origin feat 2> /dev/null
+git -C "$T/p" checkout -q -b develop main
+git -C "$T/p" -c user.name=Mate -c user.email=mate@team.example commit -q --no-verify --allow-empty -m teammate
+git -C "$T/p" push -q --no-verify origin develop
+git -C "$T/p" checkout -q feat
+git -C "$T/p" -c user.email=me@home.example rebase -q develop
+if git -C "$T/p" push -q --force origin feat 2> "$T/err"; then
+  echo "ok   pre-push passes a branch rebased onto the remote's commits"
+else
+  echo "FAIL pre-push after a rebase: $(head -1 "$T/err")"
+  fails=$((fails + 1))
+fi
 bash "$G" git-hooks off > /dev/null
 [ -z "$(git config --global --get core.hooksPath)" ] && echo "ok   git-hooks off" || { echo "FAIL git-hooks off"; fails=$((fails + 1)); }
 
