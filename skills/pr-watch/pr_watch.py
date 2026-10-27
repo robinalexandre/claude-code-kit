@@ -37,7 +37,9 @@
     pr_watch.py unack URL               undo it
 
 Tracked PRs live in $PR_WATCH_DIR (default ~/.claude-sync/pr-watch), one JSON file per PR, so the
-config sync carries them to every computer. A merged, abandoned or closed PR is reported once, then
+config sync carries them to every computer. A command that records the user's choice (add, read,
+approve, remove, park, unpark, ack, ack-all, unack) starts that sync right away, in the background,
+when $PR_WATCH_DIR sits next to its sync.sh. A merged, abandoned or closed PR is reported once, then
 dropped. Supported: Azure DevOps (az login or AZURE_DEVOPS_PAT) and GitHub (GITHUB_TOKEN, gh, or
 anonymous for public repos).
 
@@ -2422,6 +2424,25 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
 
 
+USER_CHANGES = {"add", "read", "approve", "remove", "park", "unpark", "ack", "ack-all", "unack"}
+
+
+def push_change() -> None:
+    """Starts the config sync in the background (`sync.sh bg`, the one a reply starts), so what the
+    user just changed from a pane reaches the other computers within a minute rather than after the
+    next reply there. A sync with nothing new to send changes nothing."""
+    sync, bash = WATCH_DIR.parent / "sync.sh", shutil.which("bash")
+    if not sync.is_file() or not bash:
+        return
+    windows = os.name == "nt"
+    try:
+        subprocess.Popen([bash, str(sync), "bg"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=not windows,
+                         creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP if windows else 0)
+    except OSError:
+        pass
+
+
 def main(argv: list[str]) -> int:
     command, args = (argv[0], argv[1:]) if argv else ("", [])
     try:
@@ -2477,6 +2498,9 @@ def main(argv: list[str]) -> int:
         return 1
     finally:
         save_etags()
+        # Even after an error: ack-all and remove can fail on one URL after saving the others.
+        if command in USER_CHANGES:
+            push_change()
     return 0
 
 
