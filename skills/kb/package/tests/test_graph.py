@@ -155,6 +155,28 @@ def test_lint_kinds():
     assert last_dated(notes[1]) == date(2026, 10, 1)
 
 
+def test_lint_judges_memory_notes_by_their_own_rules(tmp_path):
+    mine, memory = tmp_path / "knowledge", tmp_path / "memory"
+    notes = [
+        parse_note("---\nname: kept\nlinks: [later]\n---\nB\n", mine / "kept.md"),
+        parse_note("---\nname: shared\n---\nB\n", mine / "shared.md"),
+        parse_note(
+            "---\nname: User profile\ndescription: Who\n---\nB\n", memory / "user_profile.md"
+        ),
+        parse_note("---\nname: lone\nlinks: [later]\n---\nB\n", memory / "a" / "lone.md"),
+        parse_note("---\nname: lone\n---\nB\n", memory / "b" / "lone.md"),
+        parse_note("---\nname: shared\n---\nB\n", memory / "shared.md"),
+    ]
+    assert notes[2].name == "user_profile" and notes[2].title == "Who"
+    findings = lint(notes, [], date(2026, 10, 28), writable=mine)
+    kinds = {(f.kind, f.name, Path(f.path).parent.name) for f in findings}
+    assert kinds == {
+        ("dangling", "kept", "knowledge"),
+        ("orphan", "shared", "knowledge"),
+        ("same-name", "shared", "memory"),
+    }
+
+
 def test_lint_command(base, capsys):
     code, out = run(capsys, "--json", "lint")
     assert code == 0

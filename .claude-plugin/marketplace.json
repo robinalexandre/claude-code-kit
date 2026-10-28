@@ -629,7 +629,7 @@
     {
       "name": "kb",
       "description": "A personal knowledge base: Markdown notes with links, curated every morning from your Claude Code sessions, recalled at session start and on each prompt; text, semantic and graph search; notes that read alike linked by themselves; a local page with the graph, hubs and health; a server for your other agents.",
-      "version": "1.6.1",
+      "version": "1.6.2",
       "category": "productivity",
       "source": ".",
       "strict": false,

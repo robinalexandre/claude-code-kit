@@ -331,7 +331,13 @@ def cmd_lint(args: argparse.Namespace) -> int:
     roots = [r for r in notes_roots(args) if r.exists()]
     notes = load_notes(roots)
     pairs = similar_pairs(open_index(args, with_embedder=False))
-    findings = lint(notes, pairs, date.today(), args.stale_days or STALE_DAYS)
+    findings = lint(
+        notes,
+        pairs,
+        date.today(),
+        args.stale_days or STALE_DAYS,
+        writable=roots[0] if roots else None,
+    )
     lines = []
     for kind in KINDS:
         found = [f for f in findings if f.kind == kind]
@@ -405,7 +411,8 @@ def cmd_site(args: argparse.Namespace) -> int:
     notes = load_notes(roots)
     pairs = similar_pairs(open_index(args, with_embedder=False))
     today = date.today()
-    data = site_data(notes, roots, pairs, lint(notes, pairs, today), today)
+    findings = lint(notes, pairs, today, writable=roots[0] if roots else None)
+    data = site_data(notes, roots, pairs, findings, today)
     out = site_path(args)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(render(data), encoding="utf-8")

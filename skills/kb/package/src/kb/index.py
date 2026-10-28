@@ -152,8 +152,10 @@ class Index:
             path = str(note.path.resolve())
             seen.add(path)
             digest = hashlib.sha256(note.raw.encode("utf-8", "replace")).hexdigest()
-            row = self.conn.execute("SELECT id, hash FROM notes WHERE path = ?", (path,)).fetchone()
-            if row and row["hash"] == digest:
+            row = self.conn.execute(
+                "SELECT id, hash, name FROM notes WHERE path = ?", (path,)
+            ).fetchone()
+            if row and row["hash"] == digest and row["name"] == note.name:
                 stats.unchanged += 1
                 continue
             if row:

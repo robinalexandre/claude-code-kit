@@ -128,6 +128,10 @@ def parse_note(text: str, path: Path | None = None) -> Note:
     meta, body = parse_front_matter(text)
     metadata = meta.get("metadata") if isinstance(meta.get("metadata"), dict) else {}
     name = _string(meta.get("name")) or (path.stem if path else "note")
+    memory_file = "description" in meta and "title" not in meta
+    if path is not None and memory_file and not NAME.match(name.lower()):
+        # Older Claude Code memory files name themselves with a sentence.
+        name = path.stem
     heading = HEADING.search(body)
     title = (
         _string(meta.get("title"))

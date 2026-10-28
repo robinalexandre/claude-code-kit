@@ -233,31 +233,42 @@ def lint(
     today: date,
     stale_days: int = STALE_DAYS,
     duplicate_min: float = DUPLICATE_MIN,
+    writable: Path | None = None,
 ) -> list[Finding]:
     """What a person would tidy: malformed notes, links to nothing, notes linked to nothing,
     projects and decisions that have not moved for months, notes that say the same thing.
-    A note with no link is an orphan only when no pair has it either."""
+    A note with no link is an orphan only when no pair has it either. Outside ``writable``
+    (Claude Code's memory, where a link may name a note not written yet and each project
+    has its own names) only staleness and near-duplicates count."""
     findings: list[Finding] = []
     names = {n.name for n in notes}
     linked_to = {link.lower() for n in notes for link in n.links}
     alike = {p.a for p in pairs} | {p.b for p in pairs}
+    root = writable.resolve() if writable is not None else None
 
     def path_key(note: Note) -> str:
         return str(note.path.resolve()) if note.path is not None else ""
 
-    seen: dict[str, Path] = {}
+    def owned(note: Note) -> bool:
+        return root is None or (note.path is not None and note.path.resolve().is_relative_to(root))
+
+    seen: dict[str, Note] = {}
     for note in notes:
         path = str(note.path)
-        for problem in note.problems():
-            findings.append(Finding("malformed", path, note.name, problem))
-        for link in note.links:
-            if link.lower() not in names:
-                findings.append(Finding("dangling", path, note.name, f"links to {link!r}"))
+        mine = owned(note)
         if note.name in seen and note.path is not None:
-            findings.append(Finding("same-name", path, note.name, f"also in {seen[note.name]}"))
+            first = seen[note.name]
+            if mine or owned(first):
+                findings.append(Finding("same-name", path, note.name, f"also in {first.path}"))
         elif note.path is not None:
-            seen[note.name] = note.path
-        if not note.links and note.name not in linked_to and path_key(note) not in alike:
+            seen[note.name] = note
+        if mine:
+            for problem in note.problems():
+                findings.append(Finding("malformed", path, note.name, problem))
+            for link in note.links:
+                if link.lower() not in names:
+                    findings.append(Finding("dangling", path, note.name, f"links to {link!r}"))
+        if mine and not note.links and note.name not in linked_to and path_key(note) not in alike:
             findings.append(
                 Finding("orphan", path, note.name, "no link in or out, and nothing reads like it")
             )
