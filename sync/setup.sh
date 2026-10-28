@@ -56,11 +56,13 @@ refresh() {
   have=$(jq -r '.version // "0"' "$MANIFEST")
   want=$(version)
   [ -n "$want" ] && newer "$want" "$have" || return 0
-  while IFS=$'\t' read -r f sha; do
-    [ "$(jq -r --arg f "$f" '.files[$f] // empty' "$MANIFEST")" = "$sha" ] || changed="$changed $f"
-  done <<< "$(hashes "$SYNC")"
+  # Once this version was offered, the engine's files are not hashed again at every session start.
+  [ "$(cat "$SYNC/.state/kit-engine-offered" 2> /dev/null)" = "$want" ] && return 0
+  changed=$(hashes "$SYNC" | jq -R -r --slurpfile m "$MANIFEST" \
+    'split("\t") | select(length == 2 and $m[0].files[.[0]] != .[1]) | .[0]' | tr '\n' ' ')
+  changed=${changed% }
+  [ -z "$changed" ] || changed=" $changed"
   if [ -n "$changed" ]; then
-    [ "$(cat "$SYNC/.state/kit-engine-offered" 2> /dev/null)" = "$want" ] && return 0
     mkdir -p "$SYNC/.state" && echo "$want" > "$SYNC/.state/kit-engine-offered"
     echo "claude-code-kit: version $want of the sync engine is out, but these files of ~/.claude-sync were changed by hand:$changed. Tell the user; on their yes, run: bash \"$(kit_path "$HERE/setup.sh")\" refresh --force"
     return 0

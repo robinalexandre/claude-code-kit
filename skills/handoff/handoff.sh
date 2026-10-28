@@ -20,16 +20,6 @@ elif command -v cygpath > /dev/null 2>&1; then
   jq() { command jq -b "$@"; }
 fi
 
-# frontmatter FILE KEY: prints KEY's value from FILE's YAML front matter.
-frontmatter() {
-  awk -v k="$2" '{ sub(/\r$/, "") }
-    NR == 1 && $0 != "---" { exit }
-    NR > 1 && $0 == "---" { exit }
-    NR > 1 { i = index($0, ":"); if (substr($0, 1, i - 1) == k) { v = substr($0, i + 1); sub(/^ +/, "", v); sub(/ +$/, "", v); print v; exit } }' "$1"
-}
-
-body() { awk '{ sub(/\r$/, "") } NR == 1 && $0 == "---" { fm = 1; next } fm && $0 == "---" { fm = 0; next } !fm' "$1"; }
-
 # set_field FILE KEY VALUE: sets KEY in FILE's front matter, added before its end if missing.
 set_field() {
   awk -v k="$2" -v v="$3" '{ sub(/\r$/, "") }
@@ -39,29 +29,63 @@ set_field() {
     { print }' "$1" > "$1.tmp" && mv "$1.tmp" "$1"
 }
 
-machine() { tr -d '[:space:]' < "$SYNC/.machine" 2> /dev/null; }
-
-one() {
-  local f=$1
-  jq -n --arg id "$(basename "$f" .md)" --arg state "$2" --arg title "$(frontmatter "$f" title)" \
-    --arg from "$(frontmatter "$f" from)" --arg date "$(frontmatter "$f" date)" \
-    --arg repo "$(frontmatter "$f" repo)" --arg branch "$(frontmatter "$f" branch)" \
-    --arg closed "$(frontmatter "$f" closed)" --arg here "$(machine)" --arg body "$(body "$f")" \
-    '{$id, $state, $title, $from, $date, $repo, $branch, $closed, $body}
-     | with_entries(select(.value != "" and .value != "none"))
-     | .isMine = ($from != "" and $from == $here)'
+# notes KIND FILE...: one line per FILE: KIND, its id, its front matter values (title from date repo
+# branch closed canceled) and its body as a JSON string, \037 between them, from one awk run. An
+# empty file has no line.
+notes() {
+  local kind=$1
+  shift
+  [ $# -gt 0 ] || return 0
+  awk -v kind="$kind" -v keys="title from date repo branch closed canceled" '
+    BEGIN { n = split(keys, k, " "); for (i = 1; i < 32; i++) ctl[sprintf("%c", i)] = sprintf("\\u%04x", i) }
+    function esc(s,   out, i, c) {
+      gsub(/\\/, "\\\\", s)
+      gsub(/"/, "\\\"", s)
+      if (s !~ /[[:cntrl:]]/) return s
+      out = ""
+      for (i = 1; i <= length(s); i++) { c = substr(s, i, 1); out = out ((c in ctl) ? ctl[c] : c) }
+      return out
+    }
+    function flush(   j, line, id, parts, m) {
+      if (file == "") return
+      m = split(file, parts, "/")
+      id = parts[m]
+      sub(/\.md$/, "", id)
+      line = kind "\037" id
+      for (j = 1; j <= n; j++) line = line "\037" v[k[j]]
+      sub(/\n+$/, "", body)
+      print line "\037\"" esc(body) "\""
+    }
+    FNR == 1 { flush(); file = FILENAME; split("", v); body = ""; fm = 0 }
+    { sub(/\r$/, "") }
+    FNR == 1 && $0 == "---" { fm = 1; next }
+    fm && $0 == "---" { fm = 0; next }
+    fm { i = index($0, ":"); key = substr($0, 1, i - 1)
+      if (i && !(key in v)) { val = substr($0, i + 1); sub(/^ +/, "", val); sub(/ +$/, "", val); v[key] = val }
+      next }
+    { body = body $0 "\n" }
+    END { flush() }' "$@"
 }
 
+# json: every note, open and done, as one JSON array (the reminders and handoffs pane), from one
+# awk and one jq run: one awk per field took a second per note on a slow Windows computer.
 json() {
-  local f
+  local f here=""
+  local -a open=() closed=()
   [ -d "$DONE" ] && find "$DONE" -maxdepth 1 -name '*.md' -mtime +"$DONE_DAYS" -exec rm -f {} + 2> /dev/null
+  [ -f "$SYNC/.machine" ] && read -r here < "$SYNC/.machine"
+  here=${here//[[:space:]]/}
+  for f in "$DIR"/*.md; do [ -f "$f" ] && open+=("$f"); done
+  for f in "$DONE"/*.md; do [ -f "$f" ] && closed+=("$f"); done
   {
-    for f in "$DIR"/*.md; do [ -f "$f" ] && one "$f" open; done
-    for f in "$DONE"/*.md; do
-      [ -f "$f" ] || continue
-      if [ "$(frontmatter "$f" canceled)" = yes ]; then one "$f" canceled; else one "$f" done; fi
-    done
-  } | jq -s .
+    notes open ${open[@]+"${open[@]}"}
+    notes done ${closed[@]+"${closed[@]}"}
+  } | jq -nR --arg here "$here" '[inputs | split("\u001f") as $r
+    | (if $r[0] == "open" then "open" elif $r[8] == "yes" then "canceled" else "done" end) as $state
+    | {id: $r[1], state: $state, title: $r[2], from: $r[3], date: $r[4], repo: $r[5], branch: $r[6],
+       closed: $r[7], body: ($r[9] | fromjson)}
+    | with_entries(select(.value != "" and .value != "none"))
+    | .isMine = ($r[3] != "" and $r[3] == $here)]'
 }
 
 note_file() {

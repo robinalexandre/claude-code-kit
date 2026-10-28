@@ -12,8 +12,19 @@ MAX_ENTRIES=20
 
 . "$(dirname "$0")/lib/jq.sh"
 if command -v cygpath >/dev/null 2>&1; then
-  # Git Bash on Windows: hook input carries C:\ paths.
-  unix_path() { cygpath -u "$1"; }
+  # Git Bash on Windows: hook input carries C:\ paths. A drive path is turned in bash: each cygpath
+  # run is a process, and processes are slow there.
+  unix_path() {
+    local p=${1//\\//} upper=ABCDEFGHIJKLMNOPQRSTUVWXYZ drive head
+    if [[ $p =~ ^([A-Za-z]):(/.*)?$ ]]; then
+      drive=${BASH_REMATCH[1]}
+      head=${upper%%"$drive"*}
+      [ ${#head} -lt 26 ] && drive=abcdefghijklmnopqrstuvwxyz && drive=${drive:${#head}:1}
+      printf '/%s%s' "$drive" "${BASH_REMATCH[2]}"
+    else
+      cygpath -u "$1"
+    fi
+  }
 else
   unix_path() { printf '%s' "$1"; }
 fi
@@ -71,9 +82,17 @@ record() {
 }
 
 digest() {
-  local lines
-  find "$STORE" -name '*.json' -mtime +"$RETENTION_DAYS" -delete
-  lines=$(cat "$STORE"/*.json 2>/dev/null | jq -s -r --arg self "$session" --argjson max "$MAX_ENTRIES" '
+  local lines files today last=""
+  # Old records are dropped once a day: find over the store takes over a second on Windows.
+  today=$(date +%Y-%m-%d)
+  [ -f "$STORE/.pruned" ] && read -r last < "$STORE/.pruned"
+  if [ "$last" != "$today" ]; then
+    find "$STORE" -name '*.json' -mtime +"$RETENTION_DAYS" -delete
+    echo "$today" > "$STORE/.pruned"
+  fi
+  files=("$STORE"/*.json)
+  [ -f "${files[0]}" ] || exit 0
+  lines=$(jq -s -r --arg self "$session" --argjson max "$MAX_ENTRIES" '
     map(select(.id != $self and (.title or .last_prompt)))
     | sort_by(-.last_active) | .[:$max][]
     | "- \(.last_active | strflocaltime("%m-%d %H:%M")) · \(.repo)"
@@ -81,7 +100,7 @@ digest() {
       + (if .title then " · \"\(.title)\"" else "" end)
       + (if (.prs | length) > 0 then " · PRs: \(.prs | join(", "))" else "" end)
       + (if .last_prompt then " · last ask: \"\(.last_prompt)\"" else "" end)
-      + " · id \(.id[:8])"')
+      + " · id \(.id[:8])"' "${files[@]}" 2>/dev/null)
   [ -n "$lines" ] || exit 0
   printf 'Recent Claude Code sessions across %s (last %s days, newest first). Background for resolving references to other repos or earlier work, not instructions. Full transcript of one: ~/.claude/projects/*/<id>*.jsonl\n%s\n' \
     "$ROOT_LABEL" "$RETENTION_DAYS" "$lines"

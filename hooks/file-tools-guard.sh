@@ -1,8 +1,13 @@
 #!/bin/bash
 # PreToolUse (Bash) hook: deny shell workarounds for reading or writing files.
 set -u
+input=$(cat)
+# A command with none of the words below can't match a rule: it leaves before jq, a process on
+# every Bash call.
+words='sed|<<|cat|tee|python|head|tail|less|more'
+[[ "$input" =~ $words ]] || exit 0
 . "$(dirname "$0")/lib/jq.sh"
-cmd=$(jq -r '.tool_input.command // empty')
+cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty')
 [ -z "$cmd" ] && exit 0
 
 deny() {

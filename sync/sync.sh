@@ -359,11 +359,36 @@ files_in() {
   done | LC_ALL=C sort
 }
 
+# hash_list DIR FILE...: "hash<TAB>file" for each FILE under DIR, from one git run per few hundred
+# files.
+hash_list() {
+  local dir=$1
+  shift
+  [ $# -gt 0 ] || return 0
+  paste <(cd "$dir" && printf '%s\0' "$@" | xargs -0 git hash-object --no-filters -- | tr -d '\r') <(printf '%s\n' "$@")
+}
+
+# changed_files SRC DST LIST: the files of LIST (one per line) whose bytes differ between SRC and
+# DST, or missing from DST, in LIST's order. One cmp per file was a process per synced file, which
+# made a sync last minutes on a slow Windows computer.
+changed_files() {
+  local src=$1 dst=$2 f
+  local -a all=() there=()
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    all+=("$f")
+    [ -f "$dst/$f" ] && there+=("$f")
+  done <<< "$3"
+  [ ${#all[@]} -gt 0 ] || return 0
+  awk -F'\t' 'FILENAME == ARGV[1] { d[$2] = $1; next } !($2 in d) || d[$2] != $1 { print $2 }' \
+    <(hash_list "$dst" ${there[@]+"${there[@]}"}) <(hash_list "$src" "${all[@]}")
+}
+
 # mirror capture|apply SRC DST "PATHS" [MAX_DELETES]: makes the synced files
 # under DST match SRC. Capturing replaces secrets (view); applying puts this
 # machine's own values back (write_local).
 mirror() {
-  local mode=$1 src=$2 dst=$3 want have gone f count rc special cipher=""
+  local mode=$1 src=$2 dst=$3 want have gone f count rc special cipher="" todo
   [ "$mode" = capture ] && crypt_folders | grep -qxF -- "$dst" && cipher=1
   want=$(files_in "$src" "$4")
   have=$(files_in "$dst" "$4")
@@ -382,10 +407,17 @@ mirror() {
   else
     special=$(cd "$src" && printf '%s\n' "$want" | grep . | tr '\n' '\0' | xargs -0 grep -l __SECRET__ -- 2> /dev/null)
   fi
+  # Only the files that may hold a secret and those whose bytes differ need a look: an unchanged
+  # file was skipped by cmp further down anyway.
+  todo=$(printf '%s\n' "$want" | SPECIAL=$special CHANGED_FILES=$(changed_files "$src" "$dst" "$want") awk '
+    BEGIN { n = split(ENVIRON["SPECIAL"], s, "\n"); for (i = 1; i <= n; i++) keep[s[i]] = 1
+      n = split(ENVIRON["CHANGED_FILES"], c, "\n"); for (i = 1; i <= n; i++) keep[c[i]] = 1 }
+    $0 != "" && ($0 in keep)')
+  special=$'\n'$special$'\n'
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     [ -n "$cipher" ] && is_cipher "$src/$f" && continue
-    if grep -qxF -- "$f" <<< "$special"; then
+    if [[ $special == *$'\n'"$f"$'\n'* ]]; then
       if [ "$mode" = capture ]; then
         view "$src/$f"
         rc=$?
@@ -417,7 +449,7 @@ mirror() {
     [ "$mode" = capture ] && [ -f "$dst/$f" ] && is_json "$src/$f" && is_json "$dst/$f" &&
       [ "$(jq -S . "$src/$f")" = "$(jq -S . "$dst/$f")" ] && continue
     mkdir -p "$(dirname "$dst/$f")" && cp -p "$src/$f" "$dst/$f" && CHANGED=$((CHANGED + 1))
-  done <<< "$want"
+  done <<< "$todo"
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     rm -f "$dst/$f" && CHANGED=$((CHANGED + 1))
@@ -662,7 +694,7 @@ folder_files() {
     -o -name AGENTS.md -o -name .mcp.json \) -type f -print -o -name .claude -type d -print 2> /dev/null |
     while IFS= read -r p; do
       [ "$p" = "$CLAUDE" ] && continue
-      in_repo "$(dirname "$p")" && continue
+      in_repo "${p%/*}" && continue
       if [ -d "$p" ]; then find "$p" -path "$p/worktrees" -prune -o -type f -print; else printf '%s\n' "$p"; fi
     done | while IFS= read -r p; do
       p=${p#"$DEV_DIR"/}
@@ -960,7 +992,14 @@ crypt_told() {
 }
 # is_cipher FILE: whether FILE holds git-crypt ciphertext instead of its content: never shared,
 # never committed (git-crypt would encrypt it a second time), and replaced by the clear version.
-is_cipher() { [ -f "$1" ] && [ "$(LC_ALL=C head -c 10 "$1" | LC_ALL=C tr -d '\0')" = GITCRYPT ]; }
+# git-crypt's files start with \0GITCRYPT\0, read here with bash alone: head and tr were three
+# processes for each file looked at, a third of a sync's time on a slow Windows computer.
+is_cipher() {
+  [ -f "$1" ] || return 1
+  local lead="" magic=""
+  { IFS= read -r -d '' -n 1 lead; IFS= read -r -d '' -n 9 magic; } < "$1" 2> /dev/null
+  [ -z "$lead" ] && [ "$magic" = GITCRYPT ]
+}
 # blob REV PATH: the file at REV as a checkout writes it, so decrypted where this computer has the
 # key. A plain git show gives the ciphertext of an encrypted folder.
 blob() { git cat-file --filters "$1:$2"; }

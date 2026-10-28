@@ -20,9 +20,33 @@ DEFAULT_NOTES = (SYNC if SYNC.is_dir() else Path.home() / ".claude") / "knowledg
 # Claude Code's own memory, as the config sync stores it, reads as notes too.
 MEMORY_FOLDERS = (SYNC / "memory", SYNC / "memory-repos", SYNC / "memory-folders")
 DEFAULT_DB = Path.home() / ".claude" / "kb" / "index.sqlite"
+SETTINGS = Path.home() / ".claude" / "kb" / "kb.env"
+
+
+def load_settings(path: Path | None = None) -> None:
+    """The KB_ settings setup wrote to kb.env, for the variables not already set.
+
+    Without them, a ``kb search`` run outside the hooks (by Claude, by hand) loads the
+    embedding model a computer set to ``KB_EMBED=none``: 40 s on a slow Windows computer.
+    The file is written for bash, so on Windows a ``/c/...`` path becomes ``C:/...``.
+    """
+    path = path or Path(os.environ.get("KB_ENV") or SETTINGS)
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for line in lines:
+        key, sep, value = line.strip().partition("=")
+        if not sep or not key.startswith("KB_") or key in os.environ:
+            continue
+        value = value.strip().strip("'\"")
+        if os.name == "nt" and len(value) > 2 and value[0] == "/" and value[2:3] in ("/", ""):
+            value = f"{value[1].upper()}:/{value[3:]}"
+        os.environ[key] = value
 
 
 def main(argv: list[str] | None = None) -> int:
+    load_settings()
     parser = build_parser()
     args = parser.parse_args(argv)
     if not hasattr(args, "func"):

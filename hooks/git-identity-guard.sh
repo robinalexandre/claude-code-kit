@@ -288,6 +288,8 @@ git_hooks() {
 hook() {
   local input cmd cwd
   input=$(cat)
+  # Most commands are no commit or push: they leave before jq, a process on every Bash call.
+  [[ "$input" =~ git.*(commit|push) ]] || exit 0
   cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty')
   [[ "$cmd" =~ git.*(commit|push) ]] || exit 0
   cwd=$(printf '%s' "$input" | jq -r '.cwd // empty')

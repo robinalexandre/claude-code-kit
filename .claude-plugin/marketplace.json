@@ -66,7 +66,7 @@
     {
       "name": "file-tools-guard",
       "description": "Blocks shell workarounds (cat, sed -i, heredocs) for reading and editing files, so Claude uses its own file tools.",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "category": "productivity",
       "source": ".",
       "strict": false,
@@ -118,7 +118,7 @@
     {
       "name": "recent-activity",
       "description": "A digest of your recent sessions across your dev folder at each session start, so Claude knows what you did lately in your other repos.",
-      "version": "1.1.2",
+      "version": "1.1.3",
       "category": "productivity",
       "source": ".",
       "strict": false,
@@ -359,7 +359,7 @@
     {
       "name": "git-identity-guard",
       "description": "Refuses a commit or push whose email isn't the one you chose for that host, or the one you used most in that repo; can check commits made outside Claude too.",
-      "version": "1.1.3",
+      "version": "1.1.4",
       "category": "development",
       "source": ".",
       "strict": false,
@@ -499,7 +499,7 @@
     {
       "name": "config-sync",
       "description": "Keeps your Claude Code config the same on all your computers through a private git repo of your own (any host); sets it up at the first session and keeps the engine current. Each computer also records what it runs (system, Claude Code, plugins, kits) for the others to see.",
-      "version": "1.8.1",
+      "version": "1.8.2",
       "category": "productivity",
       "source": ".",
       "strict": false,
@@ -523,7 +523,7 @@
     {
       "name": "handoff",
       "description": "Handoff notes between your computers: continue on the other one without explaining everything again.",
-      "version": "1.2.1",
+      "version": "1.2.2",
       "category": "productivity",
       "source": ".",
       "strict": false,
@@ -629,7 +629,7 @@
     {
       "name": "kb",
       "description": "A personal knowledge base: Markdown notes with links, curated every morning from your Claude Code sessions, recalled at session start and on each prompt; text, semantic and graph search; notes that read alike linked by themselves; a local page with the graph, hubs and health; a server for your other agents.",
-      "version": "1.6.0",
+      "version": "1.6.1",
       "category": "productivity",
       "source": ".",
       "strict": false,

@@ -91,3 +91,19 @@ def test_check_and_stats(base, capsys):
     assert code == 0 and "nothing to report" in out
     code, out = run(capsys, "--json", "stats")
     assert json.loads(out)["notes"] == 3
+
+
+def test_settings_file_fills_what_the_environment_leaves_unset(tmp_path, monkeypatch):
+    env = tmp_path / "kb.env"
+    env.write_text("# setup\nKB_EMBED=none\nKB_NOTES=/c/Users/me/knowledge\nKB_DB='x.sqlite'\nOTHER=1\n")
+    monkeypatch.setenv("KB_DB", "kept.sqlite")
+    for key in ("KB_EMBED", "KB_NOTES", "OTHER"):
+        monkeypatch.delenv(key, raising=False)
+    cli.load_settings(env)
+    assert cli.os.environ["KB_EMBED"] == "none"
+    assert cli.os.environ["KB_DB"] == "kept.sqlite"
+    assert "OTHER" not in cli.os.environ
+    expected = "C:/Users/me/knowledge" if cli.os.name == "nt" else "/c/Users/me/knowledge"
+    assert cli.os.environ["KB_NOTES"] == expected
+    for key in ("KB_EMBED", "KB_NOTES"):
+        monkeypatch.delenv(key)
