@@ -1330,8 +1330,7 @@ def dismissed() -> set[str]:
 
 
 def save_dismissed(urls: set[str]) -> None:
-    DISMISSED.parent.mkdir(parents=True, exist_ok=True)
-    DISMISSED.write_text("".join(f"{url}\n" for url in sorted(urls)), encoding="utf-8", newline="\n")
+    write_atomic(DISMISSED, "".join(f"{url}\n" for url in sorted(urls)))
 
 
 def auto_track(entries: list[tuple[Path, dict]], hosts: tuple[str, ...] = HOSTS) -> tuple[list[str], list[str]]:
@@ -1409,9 +1408,30 @@ def prune_done() -> None:
             path.unlink()
 
 
-def save(path: Path, entry: dict) -> None:
+def write_atomic(path: Path, text: str) -> None:
+    """Writes `text` to a temporary file, then moves it over `path`.
+
+    `write_text` empties the file before writing: when the write fails halfway (on Windows, git or
+    the config sync holding the file), the file stays empty, the sync commits it, and the acks or
+    PRs it held are gone on every computer. A failed move leaves the old content instead. The
+    temporary name ends in .tmp, which the sync never commits.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(entry, ensure_ascii=False, indent=1) + "\n", encoding="utf-8", newline="\n")
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(text, encoding="utf-8", newline="\n")
+    for attempt in range(10):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == 9:
+                tmp.unlink(missing_ok=True)
+                raise
+            time.sleep(0.2)
+
+
+def save(path: Path, entry: dict) -> None:
+    write_atomic(path, json.dumps(entry, ensure_ascii=False, indent=1) + "\n")
 
 
 def config(key: str) -> set[str]:
