@@ -224,7 +224,8 @@ one() {
     --arg where "$(frontmatter "$f" where)" --arg machine "$(frontmatter "$f" machine)" \
     --arg group "$(frontmatter "$f" group)" --arg done "$(frontmatter "$f" done)" \
     --arg closed "$(frontmatter "$f" closed)" --arg next "$(next_time "$f")" --arg body "$(body "$f")" \
-    '{$id, $state, $title, $on, $until, $every, $where, $machine, $group, $done, $closed, $next, $body}
+    --arg times "$(frontmatter "$f" times)" --arg digest "$(frontmatter "$f" digest)" \
+    '{$id, $state, $title, $on, $until, $every, $times, $digest, $where, $machine, $group, $done, $closed, $next, $body}
      | with_entries(select(.value != ""))'
 }
 

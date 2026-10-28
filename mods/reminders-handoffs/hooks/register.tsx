@@ -455,8 +455,35 @@ const dayText = (stamp: string) => {
 
 const isRepeating = (one: Reminder) => (one.every ?? '') !== ''
 
+// The times of day a repeating one runs: its `times`, else the time its `on` gives, else 09:00.
+const runTimes = (one: Reminder) =>
+  one.times
+    ? one.times.split(',').map(time => time.trim()).filter(time => time !== '')
+    : [(one.on ?? '').length > 10 ? (one.on ?? '').slice(11, 16) : '09:00']
+
+const isDigest = (one: Reminder) => ['yes', 'true'].includes((one.digest ?? '').toLowerCase())
+
+// An assistant's digest task takes in its other repeating tasks due at one of its times, in one
+// message: by task id, the digests it joins and at which times.
+const foldedInto = (all: Reminder[]) => {
+  const live = all.filter(one => one.agent && isRepeating(one) && one.state !== 'past' && one.state !== 'expired')
+  const joins = new Map<string, { id: string; title: string; at: string[] }[]>()
+
+  for (const digest of live.filter(isDigest)) {
+    for (const one of live.filter(other => other.agent === digest.agent && !isDigest(other))) {
+      const at = runTimes(one).filter(time => runTimes(digest).includes(time))
+
+      if (at.length > 0) {
+        joins.set(one.id, [...(joins.get(one.id) ?? []), { id: digest.id, title: digest.title, at }])
+      }
+    }
+  }
+
+  return joins
+}
+
 // What a reminder's line says about when: now, next time, since when it ended.
-const whenText = (one: Reminder) => {
+const whenText = (one: Reminder, withRepeat = true) => {
   if (one.state === 'past') {
     return one.closed ? `closed ${dayText(one.closed)}` : 'closed'
   }
@@ -465,7 +492,7 @@ const whenText = (one: Reminder) => {
     return one.until ? `ended ${dayText(one.until)}` : 'ended'
   }
 
-  const repeat = isRepeating(one) ? `every ${one.every}` : ''
+  const repeat = withRepeat && isRepeating(one) ? `every ${one.every}` : ''
 
   // Its repeat days are in its details: the line keeps room for the title beside three buttons.
   if (one.state === 'due') {
@@ -614,6 +641,7 @@ export const register: Register = on => {
     const picked = await read($, tab)
     const current = found.includes(picked) ? picked : (found[0] ?? picked)
     const shownReminders = view.reminders
+    const folded = foldedInto(shownReminders ?? [])
     const shownHandoffs = view.handoffs
     const trouble = (await read($, problems))[current] ?? ''
     const unfolded = await read($, openIds)
@@ -680,10 +708,11 @@ export const register: Register = on => {
 
     // The buttons' labels set what is left for the title; when that leaves too little, the line drops
     // its "when", which the details still show.
-    const row = (id: string, title: string, fullWhen: string, color: string, isStrong: boolean, isFaded: boolean, buttons: unknown[], labels: string[], details: () => unknown, closedBy: string) => {
+    // `whens` runs from the fullest line to the shortest: the row shows the first that fits.
+    const row = (id: string, title: string, whens: string[], color: string, isStrong: boolean, isFaded: boolean, buttons: unknown[], labels: string[], details: () => unknown, closedBy: string, indent = 0) => {
       const isOpen = unfolded[id] ?? false
-      const room = width - 6 - labels.reduce((sum, label) => sum + label.length + 3, 0)
-      const when = room - fullWhen.length - 3 >= Math.min(title.length, 12) ? fullWhen : ''
+      const room = width - 6 - indent - labels.reduce((sum, label) => sum + label.length + 3, 0)
+      const when = whens.find(text => text !== '' && room - text.length - 3 >= Math.min(title.length, 12)) ?? ''
       const titleWidth = Math.max(8, room - (when === '' ? 0 : when.length + 3))
 
       const toggle = () => void update($, openIds, all => ({ ...all, [id]: !isOpen }))
@@ -691,7 +720,7 @@ export const register: Register = on => {
 
       // The whole line folds and unfolds the row, not only its arrow.
       return (
-        <Box key={`row-${id}`} flexDirection="column" paddingLeft={2}>
+        <Box key={`row-${id}`} flexDirection="column" paddingLeft={2 + indent}>
           <Box flexDirection="row" justifyContent="space-between">
             {/* What folds lights up under the pointer; the buttons beside it do something else. */}
             <Box key={`line-${id}`} flexDirection="row" flexShrink={1} hover={LIT_BOX}>
@@ -745,7 +774,26 @@ export const register: Register = on => {
       labels: specs.map(([, label]) => label),
     })
 
-    const reminderRow = (one: Reminder, color: string, closedBy: string) => {
+    // A digest draws beneath it the tasks it folds in from the same rows (`among`), and those leave
+    // the rows' own list; a task under a digest names only the other digests it joins.
+    const reminderRow = (one: Reminder, color: string, closedBy: string, among: Reminder[] = [], under = ''): unknown => {
+      const joinsHere = folded.get(one.id) ?? []
+
+      if (under === '' && joinsHere.some(join => among.some(other => other.id === join.id))) {
+        return null
+      }
+
+      const nested = isDigest(one) ? among.filter(other => (folded.get(other.id) ?? []).some(join => join.id === one.id)) : []
+
+      if (nested.length > 0) {
+        return (
+          <Box key={`digest-${one.id}`} flexDirection="column">
+            {reminderRow(one, color, closedBy) as never}
+            {nested.map(other => reminderRow(other, color, closedBy, among, one.id)) as never}
+          </Box>
+        )
+      }
+
       const { buttons, labels } = buttonsFor(
         'reminders',
         one,
@@ -760,11 +808,26 @@ export const register: Register = on => {
             : [['pick', 'pick'], ['stop', isRepeating(one) ? 'stop' : one.state === 'expired' ? 'close' : 'cancel']]
       )
 
-      return row(one.id, one.title, whenText(one), color, one.state === 'due', one.state === 'past', buttons, labels, () =>
+      const joins = joinsHere.filter(join => join.id !== under)
+      const gathered = isDigest(one) && one.state !== 'past' ? (shownReminders ?? []).filter(other => (folded.get(other.id) ?? []).some(join => join.id === one.id)) : []
+      const link = joins.length > 0 ? `⤷ ${joins.map(join => join.title).join(', ')}` : gathered.length > 0 ? `digest of ${gathered.length}` : ''
+      const shortLink = joins.length > 1 ? `⤷ ${joins.length} digests` : link
+      // Short of room, the repeat goes first (its details give it), then the link's titles, then the day.
+      const whens = [
+        [whenText(one), link],
+        [whenText(one, false), link],
+        [whenText(one, false), shortLink],
+        [shortLink],
+        [whenText(one, false)],
+      ].map(parts => parts.filter(part => part !== '').join(' · '))
+
+      return row(one.id, one.title, whens, color, one.state === 'due', one.state === 'past', buttons, labels, () =>
         textLines(
           one.id,
           [
             one.agent ? `Run by ${one.agent} on its own` : '',
+            ...joinsHere.map(join => `Folded into: ${join.title} at ${join.at.join(', ')}`),
+            gathered.length > 0 ? `Gathers in one message: ${gathered.map(other => other.title).join(', ')}` : '',
             one.on ? `Starts: ${one.on}` : '',
             one.every ? `Repeats: every ${one.every}${one.next ? ` · next ${one.next}` : ''}${one.done ? ` · last done ${one.done}` : ''}` : '',
             one.until ? `Until: ${one.until}` : '',
@@ -775,7 +838,8 @@ export const register: Register = on => {
           ],
           one.body ?? ''
         ),
-        closedBy
+        closedBy,
+        under === '' ? 0 : 2
       )
     }
 
@@ -790,7 +854,7 @@ export const register: Register = on => {
         isOpenNote ? [['pick', 'pick'], ['cancel', 'cancel']] : [['restore', 'restore'], ['delete', 'delete']]
       )
 
-      return row(note.id, note.title, when, color, isOpenNote && note.isMine !== true, !isOpenNote, buttons, labels, () =>
+      return row(note.id, note.title, [when], color, isOpenNote && note.isMine !== true, !isOpenNote, buttons, labels, () =>
         textLines(
           note.id,
           [
@@ -872,7 +936,7 @@ export const register: Register = on => {
 
     // A section's rows, each group under a title that folds, even a lone one. Each row is told which
     // control folds its details back: its group's.
-    const grouped = <T extends { id: string },>(section: string, rows: T[], groupOf: (row: T) => string, draw: (row: T, closedBy: string) => unknown) => {
+    const grouped = <T extends { id: string },>(section: string, rows: T[], groupOf: (row: T) => string, draw: (row: T, closedBy: string, members: T[]) => unknown) => {
       const groups = byGroup(rows, groupOf)
 
       return groups.map(([name, members]) => {
@@ -887,7 +951,7 @@ export const register: Register = on => {
             {foldLine(fold, `group-${section}-${name}`, { sectionKeys: [key], ids: members.map(row => row.id) })}
             {isOpen && (
               <Box flexDirection="column">
-                {members.map(member => draw(member, `all-group-${section}-${name}`)) as never}
+                {members.map(member => draw(member, `all-group-${section}-${name}`, members)) as never}
                 {closingBar(`all-${section}`)}
               </Box>
             )}
@@ -897,7 +961,7 @@ export const register: Register = on => {
     }
 
     // Sections and groups start folded; what the user unfolds stays so for the session.
-    const section = <T extends { id: string },>(id: string, title: string, rows: T[], groupOf: (row: T) => string, draw: (row: T, closedBy: string) => unknown) => {
+    const section = <T extends { id: string },>(id: string, title: string, rows: T[], groupOf: (row: T) => string, draw: (row: T, closedBy: string, members: T[]) => unknown) => {
       const isOpen = sections[id] ?? false
       const fold = foldButton(id, `${isOpen ? '▾' : '▸'} ${title} (${rows.length})`, { bold: true }, () =>
         void update($, openSections, all => ({ ...all, [id]: !isOpen }))
@@ -931,8 +995,8 @@ export const register: Register = on => {
 
       return {
         drawn: [
-          section('now', 'Now', rowsOf('now').sort(byNext), reminderGroup, (one, closedBy) => reminderRow(one, 'yellow', closedBy)),
-          section('upcoming', 'Upcoming', rowsOf('upcoming').sort(byNext), reminderGroup, (one, closedBy) => reminderRow(one, 'cyan', closedBy)),
+          section('now', 'Now', rowsOf('now').sort(byNext), reminderGroup, (one, closedBy, members) => reminderRow(one, 'yellow', closedBy, members)),
+          section('upcoming', 'Upcoming', rowsOf('upcoming').sort(byNext), reminderGroup, (one, closedBy, members) => reminderRow(one, 'cyan', closedBy, members)),
           section('past', 'Past', rowsOf('past').sort(byClosed), reminderGroup, (one, closedBy) => reminderRow(one, 'gray', closedBy)),
         ],
         folds: ['now', 'upcoming', 'past'].map(part => foldsOf(part, rowsOf(part), reminderGroup)),

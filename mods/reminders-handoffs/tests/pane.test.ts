@@ -357,6 +357,58 @@ test("an assistant's task is filed under its name, with cancel only", async ($, 
   expect(calls).toContainEqual(['bash', REMINDERS, 'stop', 'max/tasks/plants'])
 })
 
+test("an assistant's digest shows the tasks due at its time, folded into its one message", async ($, on) => {
+  const assistant = { state: 'later', every: 'day', agent: 'Max', group: 'Max' }
+  const digest = { ...assistant, id: 'max/tasks/brief', title: 'Morning brief', on: '2026-11-02 09:00', digest: 'yes' }
+  const check = { ...assistant, id: 'max/tasks/check', title: 'Server check', on: '2026-11-02 09:00' }
+  const mail = { ...assistant, id: 'max/tasks/mail', title: 'Mail watch', on: '2026-11-02', times: '09:00, 13:00' }
+  const alone = { ...assistant, id: 'max/tasks/waves', title: 'Waves', on: '2026-11-02 18:00' }
+  answerBeneath(on, { reminders: [digest, check, mail, alone], handoffs: [], installed: [REMINDERS] }, [])
+
+  await $.session.start(START)
+  await $.command.run(command('reminders-pane'))
+  const pane = await mountPane($)
+
+  await pane.press({ key: 'upcoming' })
+  await pane.press({ key: 'group-upcoming-Max' })
+
+  expect(await pane.find({ text: /digest of 2/ })).toBeDefined()
+  expect((await pane.find({ key: 'row-max/tasks/check' }))?.props.paddingLeft).toBe(4)
+  expect((await pane.find({ key: 'row-max/tasks/mail' }))?.props.paddingLeft).toBe(4)
+  expect((await pane.find({ key: 'row-max/tasks/waves' }))?.props.paddingLeft).toBe(2)
+  expect(await pane.find({ text: /⤷ Morning brief/ })).toBeUndefined()
+
+  await pane.press({ key: 'toggle-max/tasks/brief' })
+  await pane.press({ key: 'toggle-max/tasks/mail' })
+  await pane.press({ key: 'toggle-max/tasks/waves' })
+
+  expect(await pane.find({ text: /Gathers in one message: Server check, Mail watch/ })).toBeDefined()
+  expect(await pane.find({ text: /Folded into: Morning brief at 09:00/ })).toBeDefined()
+})
+
+test('a task folded into two digests shows under each, naming the other; short of room its repeat goes first', async ($, on) => {
+  const assistant = { state: 'later', every: 'day', agent: 'Max', group: 'Max' }
+  const morning = { ...assistant, id: 'max/tasks/morning', title: 'Morning briefing of the day', on: '2026-11-02 09:00', digest: 'yes' }
+  const evening = { ...assistant, id: 'max/tasks/evening', title: 'Evening recap', on: '2026-11-02 20:00', digest: 'yes' }
+  const check = { ...assistant, id: 'max/tasks/check', title: 'Check of the servers', on: '2026-11-02 09:00' }
+  const parcels = { ...assistant, id: 'max/tasks/parcels', title: 'Parcels and mail follow-up', on: '2026-11-02', times: '09:00, 20:00' }
+  answerBeneath(on, { reminders: [morning, evening, check, parcels], handoffs: [], installed: [REMINDERS] }, [])
+
+  await $.session.start(START)
+  await $.command.run(command('reminders-pane'))
+  const pane = await mountPane($)
+
+  await pane.press({ key: 'upcoming' })
+  await pane.press({ key: 'group-upcoming-Max' })
+
+  expect(await pane.findAll({ key: 'row-max/tasks/parcels' })).toHaveLength(2)
+  expect(await pane.findAll({ key: 'row-max/tasks/check' })).toHaveLength(1)
+  expect(await pane.find({ text: /Parcels and .* · .*⤷ Evening recap/ })).toBeDefined()
+  expect(await pane.find({ text: /Parcels and .* · .*⤷ Morning briefing of the day/ })).toBeDefined()
+  const labels = (await pane.findAll({ type: 'Button' })).map(button => String(button.props?.label ?? ''))
+  expect(labels.find(label => label.includes('⤷ Morning briefing of the day'))).not.toContain('every day')
+})
+
 test('pick hands a reminder to the session; restore puts a past one back', async ($, on) => {
   const calls: string[][] = []
   const submitted: string[] = []

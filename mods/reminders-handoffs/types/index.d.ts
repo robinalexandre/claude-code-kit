@@ -11,6 +11,10 @@ export type Reminder = {
   until?: string
   /** Repeating ones: the days, as written ("friday", "monday, thursday", "day", "weekday"). */
   every?: string
+  /** Repeating ones run several times a day: "08:00, 14:00". */
+  times?: string
+  /** An assistant's repeating task that folds the others due at its time into its message: "yes". */
+  digest?: string
   /** Repeating ones: when it shows next, "YYYY-MM-DD HH:MM". */
   next?: string
   /** Repeating ones: the last day it was closed for. */
