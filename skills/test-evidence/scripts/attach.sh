@@ -8,6 +8,13 @@
 #                                                posts a comment thread on the PR, already resolved so it never blocks
 #                                                the merge; the files are uploaded first and each URL:<file name> in the
 #                                                markdown becomes that file's link: ![login](URL:02-login.gif)
+#   attach.sh jira-get <ISSUE-KEY>               prints the issue's summary, description and any field whose name
+#                                                mentions acceptance criteria, as JSON
+#   attach.sh jira-criteria <ISSUE-KEY> <file>   puts <file> (wiki markup, starting with its heading) in the issue
+#                                                description as its acceptance criteria section
+#   attach.sh ado-criteria <PR-ID> <markdown>    the same for a PR description (Azure DevOps keeps 4000 characters)
+#   attach.sh criteria-merge <text> <section>    prints <text> with its acceptance criteria section replaced by
+#                                                <section>, or <section> added after the first section
 # DRY_RUN=1 prints each request instead of sending it.
 #
 # Jira:  JIRA_BASE_URL (https://jira.example.com or https://<site>.atlassian.net), then either
@@ -191,6 +198,82 @@ ado_comment() {
   echo "commented on PR $pr"
 }
 
+# The section starts at a heading naming acceptance criteria (English or French) and ends at the next heading.
+# Without one, the new section goes before the second heading, so it follows the summary; a text with fewer
+# headings gets it at the end. The new section's first line sets the syntax: "h2. ..." is Jira wiki markup,
+# where "# item" is a numbered list, not a heading; anything else is markdown.
+criteria_merge() {
+  local text=$1 section=$2
+  [ -f "$text" ] || die "No such file: $text"
+  [ -f "$section" ] || die "No such file: $section"
+  tr -d '\r' < "$section" > "$TMP/section"
+  tr -d '\r' < "$text" | awk -v sectionf="$TMP/section" '
+    function heading(l) { return jira ? l ~ /^h[1-6]\.[ \t]/ : l ~ /^#+[ \t]/ }
+    function criteria(l) { l = tolower(l); return heading(l) && (l ~ /acceptance criteria/ || l ~ /crit[^ ]*res d[^ ]*acceptation/) }
+    BEGIN {
+      while ((getline l < sectionf) > 0) section[++n] = l
+      while (n > 0 && section[n] == "") n--
+      jira = section[1] ~ /^h[1-6]\.[ \t]/
+    }
+    { line[NR] = $0 }
+    END {
+      start = 0
+      for (i = 1; i <= NR; i++) if (criteria(line[i])) { start = i; break }
+      if (start) {
+        stop = NR + 1
+        for (i = start + 1; i <= NR; i++) if (heading(line[i])) { stop = i; break }
+      } else {
+        start = NR + 1; heads = 0
+        for (i = 1; i <= NR; i++) if (heading(line[i]) && ++heads == 2) { start = i; break }
+        stop = start
+      }
+      last = start - 1
+      while (last > 0 && line[last] == "") last--
+      for (i = 1; i <= last; i++) print line[i]
+      if (last > 0) print ""
+      for (i = 1; i <= n; i++) print section[i]
+      if (stop <= NR) print ""
+      for (i = stop; i <= NR; i++) print line[i]
+    }'
+}
+
+jira_get() {
+  local key=$1 auth
+  auth=$(jira_auth)
+  request "$auth" GET "${JIRA_BASE_URL%/}/rest/api/2/issue/$key?expand=names" |
+    jq '. as $i | {key, summary: .fields.summary, description: .fields.description,
+      criteria: [($i.names // {}) | to_entries[]
+        | select(.value | test("acceptance|acceptation"; "i"))
+        | select($i.fields[.key] != null) | {field: .value, value: $i.fields[.key]}]}'
+}
+
+jira_criteria() {
+  local key=$1 file=$2 auth
+  [ -f "$file" ] || die "No such file: $file"
+  auth=$(jira_auth)
+  request "$auth" GET "${JIRA_BASE_URL%/}/rest/api/2/issue/$key?fields=description" |
+    jq -r '.fields.description // ""' > "$TMP/description"
+  criteria_merge "$TMP/description" "$file" | jq -Rs '{fields: {description: .}}' > "$TMP/payload.json"
+  request "$auth" PUT "${JIRA_BASE_URL%/}/rest/api/2/issue/$key" \
+    -H "Content-Type: application/json" --data-binary "@$(native "$TMP/payload.json")" > /dev/null
+  echo "acceptance criteria set on $key"
+}
+
+ado_criteria() {
+  local pr=$1 file=$2 auth length
+  [ -f "$file" ] || die "No such file: $file"
+  ado_target
+  auth=$(ado_auth)
+  request "$auth" GET "$ADO_API/pullRequests/$pr?api-version=7.1" | jq -r '.description // ""' > "$TMP/description"
+  criteria_merge "$TMP/description" "$file" > "$TMP/merged"
+  length=$(jq -Rs 'length' < "$TMP/merged")
+  [ "$length" -le 4000 ] || die "The description would be $length characters; Azure DevOps keeps 4000. Shorten it."
+  jq -Rs '{description: .}' < "$TMP/merged" > "$TMP/payload.json"
+  request "$auth" PATCH "$ADO_API/pullRequests/$pr?api-version=7.1" \
+    -H "Content-Type: application/json" --data-binary "@$(native "$TMP/payload.json")" > /dev/null
+  echo "acceptance criteria set on PR $pr ($length characters)"
+}
+
 cmd=${1:-}
 [ $# -ge 2 ] || {
   awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0" >&2
@@ -202,5 +285,9 @@ case "$cmd" in
   jira-comment) jira_comment "$@" ;;
   ado) ado "$@" ;;
   ado-comment) ado_comment "$@" ;;
+  jira-get) jira_get "$@" ;;
+  jira-criteria) jira_criteria "$@" ;;
+  ado-criteria) ado_criteria "$@" ;;
+  criteria-merge) criteria_merge "$@" ;;
   *) die "Unknown command: $cmd" ;;
 esac

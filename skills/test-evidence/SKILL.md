@@ -1,6 +1,6 @@
 ---
 name: test-evidence
-description: Capture proof that a ticket works when tested locally (browser screenshots, a short video of the flow, the network requests and console behind it, or one app window) and attach it to the Jira issue or the pull request. Use when the user says "take screenshots", "record a video", "show it works", "proof for the PR", "evidence for the ticket", "attach to Jira", "add captures to the PR", or asks to demo a change for a reviewer.
+description: Capture proof that a ticket works when tested locally (browser screenshots, a short video of the flow, the network requests and console behind it, or one app window) and attach it to the Jira issue or the pull request, with the ticket's acceptance criteria copied into the PR description (drafted with the user and added to the ticket when it has none). Use when the user says "take screenshots", "record a video", "show it works", "proof for the PR", "evidence for the ticket", "attach to Jira", "add captures to the PR", "acceptance criteria on the PR", "critères d'acceptation", or asks to demo a change for a reviewer.
 ---
 
 # Test evidence for a ticket or a PR
@@ -9,7 +9,9 @@ Scripts are in the `scripts/` folder of this skill's base directory (`~/.claude/
 
 ## 1. Agree on what to show
 
-Before capturing, write down in a few lines what the reviewer must see: the scenario (steps), the expected result, and which requests prove it (endpoint, status, the field that changed). Use the ticket's acceptance criteria when there is one. Ask the user only if the scenario isn't clear from the ticket or the diff. If the ticket and the diff don't agree (the diff does less, more or something else), say so before capturing: that's worth settling before a reviewer sees it.
+Before capturing, write down in a few lines what the reviewer must see: the scenario (steps), the expected result, and which requests prove it (endpoint, status, the field that changed).
+
+Start from the ticket's acceptance criteria: each one should end up with a capture that proves it. On Jira, `bash $SK/attach.sh jira-get <KEY>` prints the summary, the description and any field named after acceptance criteria; look for them in both. When the API refuses (401, 429), read the issue from a Jira tab of the user's logged-in browser instead, with `fetch('/rest/api/2/issue/<KEY>?expand=names')`. When the ticket has none, draft them from the ticket and the diff (short, testable, one behaviour each, in the ticket's language) and show them to the user; once they agree, offer to add them to the ticket (step 6), so the ticket, the PR and the proof all say the same thing. Ask the user only if the scenario isn't clear from the ticket or the diff. If the ticket and the diff don't agree (the diff does less, more or something else), say so before capturing: that's worth settling before a reviewer sees it.
 
 Then pick the evidence that proves it, not everything you can capture. A video earns its place only when the scenario has visible steps (a form, a flow across pages, an error state). When the change happens behind the page (an API call removed, a check moved server-side), the network requests and a changed server field are the proof; add one screenshot of the result at most. The strongest proof of a removed or changed behaviour is often the same capture on the base branch next to the new one: offer it when it's cheap. Run the base branch from a temporary `git worktree` rather than switching the user's checkout, and put the stack back as it was afterwards.
 
@@ -91,7 +93,7 @@ Write the comment in Jira wiki markup: images as `!01-list-before.png|thumbnail!
 bash $SK/attach.sh ado-comment <PR-ID> <dir>/comment.md <dir>/02-flow.gif <dir>/02-flow.mp4 <dir>/03-result.png
 ```
 
-In `comment.md`, embed images and GIFs with `![login](URL:02-flow.gif)` and link videos with `[video](URL:02-flow.mp4)`: the script uploads each file passed after the markdown, replaces its `URL:<file name>` with the real link and refuses to post while a placeholder is left. `attach.sh ado <PR-ID> <file>...` uploads without commenting and prints the links. The thread is created resolved, so it never blocks a merge policy on open comments. Don't rewrite the PR description unless the user asks.
+In `comment.md`, embed images and GIFs with `![login](URL:02-flow.gif)` and link videos with `[video](URL:02-flow.mp4)`: the script uploads each file passed after the markdown, replaces its `URL:<file name>` with the real link and refuses to post while a placeholder is left. `attach.sh ado <PR-ID> <file>...` uploads without commenting and prints the links. The thread is created resolved, so it never blocks a merge policy on open comments. Don't rewrite the rest of the PR description unless the user asks.
 
 Azure DevOps only takes png, gif, jpg, jpeg, docx, pptx, xlsx, txt, pdf, zip, gz, mov, mp4 and csv attachments: attach a markdown report or a log as `.txt` (the script refuses other extensions before uploading anything). It keeps one attachment per file name on a PR and refuses a second upload of it, so the script reuses a file already attached under that name: give a changed file a new name (`09-network-v2.txt`) to attach the new version.
 
@@ -104,6 +106,17 @@ Azure DevOps only takes png, gif, jpg, jpeg, docx, pptx, xlsx, txt, pdf, zip, gz
 5. Open the posted comment and check that every image loads; close the tab.
 
 With no browser tool available, give the user the folder and the comment text, and let them drag the files in.
+
+**Acceptance criteria in the PR description** (and in the ticket when they were missing there): reviewers, and an automated reviewer if the repo has one, check the proof against them, so they belong in the PR itself. Propose it with the rest of the upload, show the exact section, and write it only after the user's yes. One `## Acceptance criteria` heading, one line per criterion with the proof that shows it (`AC1: … (proof: 01-list-before.png, 04-network.txt)`); a criterion that another PR delivers says which one (`delivered by !42`). Keep the criteria in the ticket's wording; translate only when the PR descriptions are written in another language, and say so. The scripts replace that section if it is there and add it after the summary if not, leaving the rest of the description as it is:
+
+```sh
+bash $SK/attach.sh ado-criteria <PR-ID> <dir>/criteria.md         # Azure DevOps (description limit: 4000 characters)
+bash $SK/attach.sh jira-criteria <KEY> <dir>/criteria.jira.txt    # the ticket's description; starts with "h2. Acceptance criteria"
+gh pr view <PR> --json body -q .body > <dir>/body.md                       # GitHub: merge locally, then edit
+bash $SK/attach.sh criteria-merge <dir>/body.md <dir>/criteria.md > <dir>/body-new.md && gh pr edit <PR> --body-file <dir>/body-new.md
+```
+
+Read the description back afterwards and check the accents survived (some CLIs mangle them; the scripts send UTF-8 JSON). In Jira wiki markup a numbered list is `# item`, so `jira-criteria` treats only `h1.`…`h6.` lines as headings.
 
 Prefix any command with `DRY_RUN=1` to see the requests without sending them. A 404 on Azure DevOps usually means the PR belongs to another repo: run from that repo. If an upload fails (401, 403, 413 too large, 429 rate limited), report the HTTP code and message as they are and don't retry in a loop.
 

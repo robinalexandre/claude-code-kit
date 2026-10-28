@@ -199,7 +199,7 @@
         "jq",
         "perl"
       ],
-      "what": "Screenshots, a short video and network proof of a ticket tested locally, attached to Jira or the PR.",
+      "what": "Screenshots, a short video and network proof of a ticket tested locally, attached to Jira or the PR, with the ticket's acceptance criteria copied into the PR description.",
       "why": "A reviewer trusts what they can see working.",
       "when": "After testing a change: \"take screenshots\", \"proof for the PR\".",
       "who": "Web developers (needs the chrome-devtools MCP; video needs ffmpeg)."

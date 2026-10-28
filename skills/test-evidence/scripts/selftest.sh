@@ -99,6 +99,24 @@ out=$(FAKE_CURL_LOG="$T/curl.log" CURL="$T/fake-curl" AZURE_DEVOPS_PAT=x ADO_ORG
 check "ado reuses an attachment already on the PR" "printf '%s' \"\$out\" | grep -q 'https://ado.example/old/01-shot.png' && ! grep -q 'POST .*attachments/01-shot.png' '$T/curl.log'"
 check "ado uploads the files not yet on the PR" "printf '%s' \"\$out\" | grep -q 'https://ado.example/new/03-new.png'"
 
+printf '## Acceptance criteria\n- AC1: new\n' > "$T/criteria.md"
+printf '## Summary\nFix.\n\n## Acceptance criteria\n- old\n\n## Why\nBecause.\n' > "$T/desc1.md"
+check "criteria replace the existing section" "bash '$SK/attach.sh' criteria-merge '$T/desc1.md' '$T/criteria.md' | tr '\n' '|' | grep -qx '## Summary|Fix.||## Acceptance criteria|- AC1: new||## Why|Because.|'"
+printf '## Summary\r\nFix.\r\n\r\n## Why\r\nBecause.\r\n' > "$T/desc2.md"
+check "criteria go after the summary when absent" "bash '$SK/attach.sh' criteria-merge '$T/desc2.md' '$T/criteria.md' | tr '\n' '|' | grep -qx '## Summary|Fix.||## Acceptance criteria|- AC1: new||## Why|Because.|'"
+printf 'Short text.\n' > "$T/desc3.md"
+check "criteria appended to a text without sections" "bash '$SK/attach.sh' criteria-merge '$T/desc3.md' '$T/criteria.md' | tr '\n' '|' | grep -qx 'Short text.||## Acceptance criteria|- AC1: new|'"
+fr='Crit\303\250res d\342\200\231acceptation'
+printf 'h2. Contexte\nx\nh2. %b\n# old\nh2. Notes\ny\n' "$fr" > "$T/desc4.txt"
+printf 'h2. %b\n# new\n' "$fr" > "$T/criteria.txt"
+check "criteria replace a French Jira section" "bash '$SK/attach.sh' criteria-merge '$T/desc4.txt' '$T/criteria.txt' | grep -c 'acceptation' | grep -qx 1 && bash '$SK/attach.sh' criteria-merge '$T/desc4.txt' '$T/criteria.txt' | grep -q '^# new' && ! bash '$SK/attach.sh' criteria-merge '$T/desc4.txt' '$T/criteria.txt' | grep -q '^# old'"
+out=$(DRY_RUN=1 ADO_ORG_URL=https://dev.azure.com/org ADO_PROJECT=proj ADO_REPO=repo bash "$SK/attach.sh" ado-criteria 7 "$T/criteria.md" 2>&1)
+check "ado criteria update the PR description" "printf '%s' \"\$out\" | grep -q 'PATCH https://dev.azure.com/org/proj/_apis/git/repositories/repo/pullRequests/7?'"
+awk 'BEGIN { print "## Acceptance criteria"; for (i = 0; i < 500; i++) print "- criterion number " i }' > "$T/long.md"
+check "ado criteria refuse a description over 4000 characters" "! DRY_RUN=1 ADO_ORG_URL=https://dev.azure.com/org ADO_PROJECT=proj ADO_REPO=repo bash '$SK/attach.sh' ado-criteria 7 '$T/long.md' 2> /dev/null"
+out=$(DRY_RUN=1 JIRA_BASE_URL=https://jira.example.com JIRA_PAT=x bash "$SK/attach.sh" jira-criteria ABC-1 "$T/criteria.txt" 2>&1)
+check "jira criteria update the issue" "printf '%s' \"\$out\" | grep -q 'PUT https://jira.example.com/rest/api/2/issue/ABC-1'"
+
 check "capture needs a target" "! bash '$SK/capture.sh' shot '$T/x.png' 2> /dev/null"
 
 if command -v ffmpeg > /dev/null; then
