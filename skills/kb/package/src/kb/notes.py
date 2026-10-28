@@ -192,6 +192,35 @@ def load_notes(roots: list[Path]) -> list[Note]:
     return [load_note(path) for root in roots for path in iter_note_files(root)]
 
 
+def add_links(path: Path, names: list[str]) -> bool:
+    """Add ``names`` to the note's ``links`` and touch nothing else in the file: its other
+    keys, their order, the body and the line endings stay as the author wrote them."""
+    text = path.read_bytes().decode("utf-8")
+    match = FRONT_MATTER.match(text)
+    if not match or not names:
+        return False
+    newline = "\r\n" if "\r\n" in match.group(0) else "\n"
+    lines = match.group(1).split(newline)
+    for i, line in enumerate(lines):
+        if not line.startswith("links:"):
+            continue
+        value = line[len("links:") :].strip()
+        if value:
+            current = _strings(_scalar(value))
+            lines[i] = "links: [" + ", ".join(_quote(v) for v in [*current, *names]) + "]"
+        else:
+            end = i + 1
+            while end < len(lines) and lines[end].lstrip().startswith("- "):
+                end += 1
+            lines[end:end] = [f"  - {_quote(name)}" for name in names]
+        break
+    else:
+        lines.append("links: [" + ", ".join(_quote(name) for name in names) + "]")
+    start, end = match.span(1)
+    path.write_bytes((text[:start] + newline.join(lines) + text[end:]).encode("utf-8"))
+    return True
+
+
 def slugify(text: str, max_length: int = 60) -> str:
     import unicodedata
 
@@ -207,7 +236,9 @@ def _scalar(value: str) -> Any:
 
 
 def _unquote(value: str) -> str:
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+    if len(value) >= 2 and value[0] == value[-1] == '"':
+        return re.sub(r"\\(.)", r"\1", value[1:-1])
+    if len(value) >= 2 and value[0] == value[-1] == "'":
         return value[1:-1]
     return value
 

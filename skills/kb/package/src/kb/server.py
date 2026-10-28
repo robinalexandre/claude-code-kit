@@ -34,6 +34,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from kb.embed import Embedder
+from kb.graph import related
 from kb.index import Index
 from kb.notes import load_notes
 
@@ -110,7 +111,7 @@ class Knowledge:
             raise ValueError("name is required")
         depth = clamp(first(params, "depth", "2"), 1, MAX_DEPTH)
         with self.lock:
-            nodes, edges = self.index.related(name, depth)
+            nodes, edges = related(self.index, name, depth)
         return {"nodes": nodes, "edges": [list(e) for e in edges]}
 
     def note(self, name: str) -> dict[str, Any] | None:

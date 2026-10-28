@@ -55,7 +55,8 @@ computers, where only the virtualenv is left to make (`bash install.sh` again th
 - **UserPromptSubmit**: lists up to three notes holding most words of the prompt (text
   search only, a few hundredths of a second).
 - **Every morning** (through the daily-sync skill): `morning.sh` curates every day not yet
-  curated, up to a week back, then hands the new notes to the sync.
+  curated, up to a week back, links the notes that read alike, rebuilds the site, then hands
+  the new notes to the sync.
 
 Needs Python 3.12 or newer and jq. The curator runs `claude -p` with the user's own
 subscription (the Claude Code CLI logged in), or the Messages API with an API key on a
@@ -68,10 +69,14 @@ kb index                                   # bring the index up to date (first r
 kb search qui gère ma compta               # text, then semantic when the words are not precise enough
 kb search --text parallel sessions commit  # text only, instant
 kb search --type decision --topic billing invoices
-kb related my-company --depth 2            # the notes linked to one, both ways, then same topics
+kb related my-company --depth 2            # linked notes both ways, then same topics, then alike
 kb related my-company --mermaid            # the same as a Mermaid mind map
 kb show --brief acme-accountant my-company # front matter and first lines; drop --brief for all
 kb check                                   # malformed notes, dangling links, duplicate names
+kb lint                                    # what to tidy: orphans, stale projects, near-duplicates too
+kb link                                    # the links worth adding between notes that read alike
+kb link --apply                            # write them, with a report
+kb site --open                             # the whole base as one page: graph, hubs, health
 kb stats
 kb extract                                 # yesterday's Claude Code transcripts, reduced to Markdown
 kb extract --day 2026-10-22 --out ./transcripts
@@ -87,7 +92,8 @@ is where the curator writes) / `KB_NOTES` (several folders separated by the OS p
 `KB_EMBED`, `KB_EMBED_MODEL`, `KB_MODEL_DIR`, `KB_CURATE_MODEL` (default `sonnet`),
 `KB_CURATE_ENGINE` (`subscription`, the default, or `api` with `KB_ANTHROPIC_API_KEY`, else
 `ANTHROPIC_API_KEY`),
-`KB_CURATE_MAX` (new notes per day, default 15), `KB_BIN` (the `kb` the hooks run). Every
+`KB_CURATE_MAX` (new notes per day, default 15), `KB_LINK` (`off` stops the morning linking),
+`KB_LINK_MIN` (similarity a link needs, default 0.6), `KB_BIN` (the `kb` the hooks run). Every
 command takes `--json` for other programs and agents.
 
 The curator also reads what changed that day in the config sync: reminders, handoffs, notes,
@@ -112,6 +118,31 @@ your own) does the same for a document another agent of yours wrote about its ow
 nightly review of its sessions for instance, on the computer or server where that agent
 runs: each place curates what happened there. Its notes have `NAME` as their source, and its
 report is `<notes>/.curator/<day>-<name>.md`.
+
+## Links, health and the site
+
+A note's vector is the mean of its chunks' vectors, already in the index: comparing notes
+never loads the model. `kb link` finds each note's nearest notes (cosine 0.6 or more by
+default) and, for every pair not linked yet, adds the other one's name to the `links` of the
+note in the first notes folder; only the `links` line changes, the rest of the file stays as
+written. Memory folders (Claude Code's own) are never written to: their likeness shows in the
+site instead. At most three new links per note and run. A link someone moved from `links` to
+`unlink` is never added again. `--apply` writes them and a report in
+`<notes>/.curator/<day>-links.md`; without it, the command only lists them.
+
+`kb lint` adds advice to `kb check`: notes linked to nothing, a `project` or `decision`
+with no date (created, valid_from, or a `## YYYY-MM-DD` merge heading) for 120 days
+(`--stale-days`), two notes that read nearly the same.
+
+`kb site` writes the whole base as one HTML page, `site.html` next to the index (`--out`
+elsewhere, `--open` to show it): a graph of the notes, clustered by project (the folder a
+note sits in, else the topic that names one) and coloured by project, type or trust, with
+links drawn solid and similar notes dashed; each note's page with its links, backlinks and
+the notes that read like it; a page per project and per topic; and the lint's findings. It
+needs no network and loads nothing from anywhere. It holds the notes in clear, so it stays
+next to the index, on this computer, never in a synced folder.
+
+The morning job runs `kb link --apply` and `kb site` after the curation.
 
 ## Serve
 

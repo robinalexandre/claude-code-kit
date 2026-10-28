@@ -1,6 +1,7 @@
 #!/bin/bash
 # Run by the daily-sync skill after the morning sync: curates every day not yet curated,
-# up to a week back, then hands the new notes to the sync.
+# up to a week back, links the notes that read alike, rebuilds the site, then hands the new
+# notes to the sync.
 set -u
 if [ -f "$HOME/.claude/kb/kb.env" ]; then
   set -a
@@ -37,9 +38,7 @@ for _ in 1 2 3 4 5 6 7; do
   days=("$day" "${days[@]}")
   day=$(day_before "$day")
 done
-[ ${#days[@]} -gt 0 ] || exit 0
-
-for day in "${days[@]}"; do
+for day in ${days[@]+"${days[@]}"}; do
   printf '%s curate %s\n' "$(date '+%F %T')" "$day" >>"$LOG"
   if "$KB" curate --day "$day" >>"$LOG" 2>&1; then
     printf '%s\n' "$day" >"$STATE/curated-until"
@@ -49,5 +48,9 @@ for day in "${days[@]}"; do
   fi
 done
 "$KB" index >>"$LOG" 2>&1
+if [ "${KB_LINK:-on}" != off ]; then
+  "$KB" link --apply >>"$LOG" 2>&1 && "$KB" index >>"$LOG" 2>&1
+fi
+"$KB" site >>"$LOG" 2>&1
 [ -f "$HOME/.claude-sync/sync.sh" ] && bash "$HOME/.claude-sync/sync.sh" bg >/dev/null 2>&1
 exit 0

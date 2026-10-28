@@ -5,11 +5,10 @@ from pathlib import Path
 from kb.extract import clean, extract_day, read_session
 
 DAY = date(2026, 10, 22)
-TZ = datetime.now().astimezone().tzinfo
 
 
 def stamp(hour: int, day: date = DAY) -> str:
-    local = datetime.combine(day, datetime.min.time(), TZ) + timedelta(hours=hour)
+    local = datetime.combine(day, datetime.min.time()) + timedelta(hours=hour)
     return local.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
@@ -106,7 +105,7 @@ def test_scripted_sessions_and_empty_days_are_skipped(tmp_path: Path):
 def test_read_session_outside_dev_root_uses_last_folders(tmp_path: Path):
     projects = tmp_path / "projects"
     path = write_transcript(projects, "s1", [line("user", "hi", cwd="/Users/me/Documents/Code")])
-    start = datetime.combine(DAY, datetime.min.time(), TZ)
+    start = datetime.combine(DAY, datetime.min.time()).astimezone()
     session = read_session(path, start, start + timedelta(days=1), Path("/elsewhere"))
     assert session is not None
     assert session.repo == "Documents/Code"

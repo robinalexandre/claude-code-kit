@@ -83,6 +83,23 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("check", help="report malformed notes and dangling links")
     p.set_defaults(func=cmd_check)
 
+    p = sub.add_parser(
+        "lint", help="what to tidy: orphans, stale projects, near-duplicates, broken links"
+    )
+    p.add_argument("--stale-days", type=int, help="days without a date before a project is stale")
+    p.set_defaults(func=cmd_lint)
+
+    p = sub.add_parser("link", help="link the notes that read alike (in the first notes folder)")
+    p.add_argument("--apply", action="store_true", help="write the links and a report")
+    p.add_argument("--min", type=float, help="similarity needed (default: $KB_LINK_MIN or 0.6)")
+    p.add_argument("--per-note", type=int, help="new links per note and run at most (default: 3)")
+    p.set_defaults(func=cmd_link)
+
+    p = sub.add_parser("site", help="the whole base as one HTML page: graph, hubs, health")
+    p.add_argument("--out", type=Path, help="the page (default: site.html next to the index)")
+    p.add_argument("--open", action="store_true", help="open it in the browser")
+    p.set_defaults(func=cmd_site)
+
     p = sub.add_parser("stats", help="what the index holds")
     p.set_defaults(func=cmd_stats)
 
@@ -192,8 +209,9 @@ def cmd_search(args: argparse.Namespace) -> int:
 
 
 def cmd_related(args: argparse.Namespace) -> int:
-    index = open_index(args, with_embedder=False)
-    nodes, edges = index.related(args.name, args.depth)
+    from kb.graph import related
+
+    nodes, edges = related(open_index(args, with_embedder=False), args.name, args.depth)
     if args.mermaid:
         lines = ["mindmap", f"  root(({args.name}))"]
         children: dict[str, list[str]] = {}
@@ -219,12 +237,11 @@ def cmd_related(args: argparse.Namespace) -> int:
             continue
         marker = "?" if node["type"] == "missing" else node["type"]
         lines.append(f"{'  ' * node['depth']}{node['name']}  [{marker}]  {node['title']}")
-    by_topic = [n for n in nodes if n["via"] != "link"]
-    if by_topic:
-        lines.append("")
-        lines.append("Same topics:")
-        for node in by_topic:
-            lines.append(f"  {node['name']}  [{node['type']}, {node['via']}]  {node['title']}")
+    for heading, prefix in (("Same topics:", "topic"), ("Reads like:", "reads like")):
+        found = [n for n in nodes if n["via"].startswith(prefix)]
+        if found:
+            lines += ["", heading]
+            lines += [f"  {n['name']}  [{n['type']}, {n['via']}]  {n['title']}" for n in found]
     emit(args, {"nodes": nodes, "edges": edges}, "\n".join(lines) or "Unknown note.")
     return 0
 
@@ -282,6 +299,107 @@ def cmd_check(args: argparse.Namespace) -> int:
         or f"{len(notes)} notes, nothing to report.",
     )
     return 1 if report else 0
+
+
+def cmd_lint(args: argparse.Namespace) -> int:
+    from kb.graph import KINDS, STALE_DAYS, lint, similar_pairs
+
+    roots = [r for r in notes_roots(args) if r.exists()]
+    notes = load_notes(roots)
+    pairs = similar_pairs(open_index(args, with_embedder=False))
+    findings = lint(notes, pairs, date.today(), args.stale_days or STALE_DAYS)
+    lines = []
+    for kind in KINDS:
+        found = [f for f in findings if f.kind == kind]
+        if found:
+            lines += ["", f"{kind} ({len(found)})"]
+            lines += [f"  {f.name}: {f.detail}  ({f.path})" for f in found]
+    emit(
+        args,
+        [f.as_dict() for f in findings],
+        "\n".join(lines).strip() or f"{len(notes)} notes, nothing to tidy.",
+    )
+    return 0
+
+
+def cmd_link(args: argparse.Namespace) -> int:
+    from kb.graph import (
+        LINK_MIN,
+        LINKS_PER_RUN,
+        apply_links,
+        links_report,
+        links_to_add,
+        similar_pairs,
+    )
+
+    roots = [r for r in notes_roots(args) if r.exists()]
+    if not roots:
+        print("No notes folder found: " + ", ".join(str(r) for r in notes_roots(args)))
+        return 1
+    notes = load_notes(roots)
+    minimum = args.min or float(os.environ.get("KB_LINK_MIN") or LINK_MIN)
+    index = open_index(args, with_embedder=False)
+    if index.conn.execute("SELECT 1 FROM chunks WHERE embedding IS NOT NULL").fetchone() is None:
+        emit(args, [], "No note vectors to compare: kb link needs the semantic search.")
+        return 0
+    pairs = similar_pairs(index, minimum)
+    plan = links_to_add(notes, pairs, roots[0], minimum, args.per_note or LINKS_PER_RUN)
+    names = {str(n.path): n.name for n in notes}
+    rows = [
+        {"from": names.get(str(path), path.stem), "to": dst, "score": score, "path": str(path)}
+        for path, added in sorted(plan.items(), key=lambda kv: str(kv[0]))
+        for dst, score in added
+    ]
+    text = "\n".join(f"{r['from']} → {r['to']}  ({r['score']:.2f})" for r in rows)
+    if args.apply and plan:
+        written = apply_links(plan)
+        report = roots[0] / ".curator" / f"{date.today().isoformat()}-links.md"
+        report.parent.mkdir(exist_ok=True)
+        content = links_report(plan, notes, date.today())
+        if report.exists():
+            content = report.read_text(encoding="utf-8").rstrip() + "\n\n" + content
+        report.write_text(content, encoding="utf-8")
+        text += f"\n{written} link(s) written; report in {report}"
+    elif rows and not args.apply:
+        text += "\nNothing written: add --apply to write them."
+    emit(args, rows, text.strip() or "No link to add.")
+    return 0
+
+
+def site_path(args: argparse.Namespace) -> Path:
+    if args.out:
+        return args.out
+    db = args.db or Path(os.environ.get("KB_DB") or DEFAULT_DB)
+    return db.parent / "site.html"
+
+
+def cmd_site(args: argparse.Namespace) -> int:
+    from kb.graph import lint, similar_pairs
+    from kb.site import render, site_data
+
+    roots = [r for r in notes_roots(args) if r.exists()]
+    notes = load_notes(roots)
+    pairs = similar_pairs(open_index(args, with_embedder=False))
+    today = date.today()
+    data = site_data(notes, roots, pairs, lint(notes, pairs, today), today)
+    out = site_path(args)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(render(data), encoding="utf-8")
+    try:
+        out.chmod(0o600)
+    except OSError:
+        pass
+    if args.open:
+        import webbrowser
+
+        webbrowser.open(out.resolve().as_uri())
+    emit(
+        args,
+        {"path": str(out), "notes": len(data["nodes"]), "links": len(data["links"])},
+        f"{len(data['nodes'])} notes, {len(data['links'])} links,"
+        f" {len(data['similar'])} similar pairs, {len(data['findings'])} to tidy: {out}",
+    )
+    return 0
 
 
 def cmd_stats(args: argparse.Namespace) -> int:

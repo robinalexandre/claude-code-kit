@@ -88,9 +88,9 @@ def extract_day(
     out_dir = (out_dir or Path.home() / ".claude" / "kb" / "transcripts") / day.isoformat()
     sync_dir = sync_dir or Path.home() / ".claude-sync"
     dev_root = dev_root or Path(os.environ.get("CLAUDE_DEV_ROOT") or Path.home() / "dev")
-    tz = datetime.now().astimezone().tzinfo
-    start = datetime.combine(day, datetime.min.time(), tz)
-    end = start + timedelta(days=1)
+    # Each midnight in the zone of its own date: a day with a clock change lasts 23 or 25 hours.
+    start = datetime.combine(day, datetime.min.time()).astimezone()
+    end = datetime.combine(day + timedelta(days=1), datetime.min.time()).astimezone()
 
     sessions: list[Session] = []
     raw_total = 0

@@ -240,7 +240,7 @@
         "python3",
         "jq"
       ],
-      "what": "A personal knowledge base: Markdown notes with [[links]] in your config sync (or ~/.claude/knowledge), indexed in SQLite for text, semantic (a local multilingual model) and graph search. Every morning, Claude reads the previous day's transcripts of this computer and proposes notes, written with a report. The notes that match the repository, the branch or the prompt are recalled at session start and on each prompt; a server (and a container) gives them to your other agents.",
+      "what": "A personal knowledge base: Markdown notes with [[links]] in your config sync (or ~/.claude/knowledge), indexed in SQLite for text, semantic (a local multilingual model) and graph search. Every morning, Claude reads the previous day's transcripts of this computer and proposes notes, written with a report, then links the notes that read alike and rebuilds a local page with the graph of the base, a page per project and topic, and what to tidy. The notes that match the repository, the branch or the prompt are recalled at session start and on each prompt; a server (and a container) gives them to your other agents.",
       "why": "What you decided and learned in a session is found again later, on every computer, instead of being asked again or lost in old transcripts.",
       "when": "Each session start and prompt; every morning for the curation; \"what do you know about…\", \"note this for good\".",
       "who": "Anyone with Python 3.12 (the morning curation needs daily-sync and the Claude Code CLI signed in)."

@@ -1,0 +1,568 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:">
+<title>Knowledge base</title>
+<style>
+:root {
+  --bg: #f7f6f3; --surface: #ffffff; --fg: #1f1f22; --muted: #6d6d73; --line: #e3e1dc;
+  --edge: rgba(70, 70, 85, 0.28); --similar: rgba(70, 70, 85, 0.22); --accent: #2f64d6;
+  --warn: #b04a12; --chip: #efede8; --shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131315; --surface: #1c1c1f; --fg: #ececef; --muted: #9a9aa3; --line: #2e2e33;
+    --edge: rgba(220, 220, 235, 0.22); --similar: rgba(220, 220, 235, 0.16); --accent: #7aa2ff;
+    --warn: #f0965a; --chip: #2a2a2f; --shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  display: flex; flex-direction: column;
+  background: var(--bg); color: var(--fg); overflow: hidden;
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+header {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
+  padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--surface);
+}
+header h1 { font-size: 15px; margin: 0; font-weight: 650; }
+.stats { color: var(--muted); font-size: 12px; }
+.tabs { display: flex; gap: 2px; background: var(--chip); border-radius: 8px; padding: 2px; }
+.tabs button {
+  border: 0; background: transparent; color: var(--muted); padding: 4px 10px; border-radius: 6px;
+  font: inherit; cursor: pointer;
+}
+.tabs button.on { background: var(--surface); color: var(--fg); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+.tools { display: flex; align-items: center; gap: 10px; margin-left: auto; flex-wrap: wrap; }
+.search { position: relative; }
+.search input {
+  width: 220px; max-width: 60vw; padding: 5px 9px; border: 1px solid var(--line); border-radius: 7px;
+  background: var(--bg); color: var(--fg); font: inherit;
+}
+.results {
+  position: absolute; top: 34px; right: 0; width: 320px; max-width: 90vw; z-index: 20;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow);
+  max-height: 60vh; overflow: auto; display: none;
+}
+.results a { display: block; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+.results a:last-child { border-bottom: 0; }
+select, label { font: inherit; color: var(--fg); }
+select { background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 4px 6px; }
+a { color: var(--accent); text-decoration: none; cursor: pointer; }
+a:hover { text-decoration: underline; }
+main { position: relative; flex: 1; min-height: 0; }
+#graph { position: absolute; inset: 0; }
+canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+.legend {
+  position: absolute; left: 12px; bottom: 12px; max-height: 45%; overflow: auto; z-index: 5;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px;
+  font-size: 12px; box-shadow: var(--shadow); min-width: 150px;
+}
+.legend div { display: flex; align-items: center; gap: 6px; padding: 1px 2px; cursor: pointer; border-radius: 4px; }
+.legend div.on { background: var(--chip); font-weight: 600; }
+.legend i { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.legend span { margin-left: auto; color: var(--muted); padding-left: 8px; }
+.zoom { position: absolute; right: 12px; bottom: 12px; display: flex; flex-direction: column; gap: 4px; z-index: 5; }
+.zoom button {
+  width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--surface); color: var(--fg); font-size: 16px; cursor: pointer;
+}
+.page { position: absolute; inset: 0; overflow: auto; padding: 18px 16px 40px; display: none; }
+.page .wrap { max-width: 980px; margin: 0 auto; }
+.page h2 { font-size: 16px; margin: 18px 0 8px; }
+.hubs { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.hub { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.hub h3 { margin: 0 0 6px; font-size: 14px; display: flex; gap: 6px; align-items: center; }
+.hub h3 span { color: var(--muted); font-weight: 400; margin-left: auto; }
+.hub ul { margin: 0; padding-left: 16px; font-size: 13px; }
+.hub li.more { list-style: none; margin-left: -16px; color: var(--muted); }
+.finding { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; margin-bottom: 10px; }
+.finding p { margin: 2px 0 8px; color: var(--muted); }
+.finding ul { margin: 0; padding-left: 18px; }
+aside {
+  position: absolute; top: 0; right: 0; bottom: 0; width: 440px; max-width: 100%; z-index: 10;
+  background: var(--surface); border-left: 1px solid var(--line); box-shadow: var(--shadow);
+  overflow: auto; padding: 14px 18px 40px; display: none;
+}
+aside .close {
+  position: sticky; top: 0; float: right; border: 0; background: var(--chip); color: var(--fg);
+  border-radius: 6px; width: 28px; height: 28px; cursor: pointer; font-size: 15px;
+}
+aside h2 { font-size: 17px; margin: 2px 36px 4px 0; line-height: 1.3; }
+.name { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); }
+.chips { display: flex; flex-wrap: wrap; gap: 5px; margin: 8px 0; }
+.chip { background: var(--chip); border-radius: 999px; padding: 1px 9px; font-size: 12px; color: var(--fg); }
+a.chip:hover { text-decoration: none; outline: 1px solid var(--accent); }
+.chip.warn { color: var(--warn); outline: 1px solid var(--warn); }
+.meta { color: var(--muted); font-size: 12px; margin-bottom: 10px; word-break: break-word; }
+.body { border-top: 1px solid var(--line); padding-top: 6px; overflow-wrap: anywhere; }
+.body h1, .body h2, .body h3, .body h4 { font-size: 14px; margin: 14px 0 4px; }
+.body pre { background: var(--chip); padding: 8px; border-radius: 6px; overflow: auto; font-size: 12px; }
+.body code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--chip); padding: 0 3px; border-radius: 3px; }
+.body pre code { background: none; padding: 0; }
+.body .dead { color: var(--warn); text-decoration: underline dotted; }
+.rel h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 16px 0 4px; }
+.rel ul { margin: 0; padding-left: 16px; }
+.rel small { color: var(--muted); }
+.empty { color: var(--muted); }
+@media (max-width: 720px) {
+  aside { top: auto; height: 62%; width: 100%; border-left: 0; border-top: 1px solid var(--line); border-radius: 12px 12px 0 0; }
+  .legend { max-height: 30%; }
+  .tools { margin-left: 0; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Knowledge base</h1>
+  <span class="stats" id="stats"></span>
+  <nav class="tabs" id="tabs">
+    <button data-view="graph" class="on">Graph</button>
+    <button data-view="hubs">Hubs</button>
+    <button data-view="health">Health</button>
+  </nav>
+  <div class="tools">
+    <div class="search">
+      <input id="q" type="search" placeholder="Search notes" autocomplete="off">
+      <div class="results" id="results"></div>
+    </div>
+    <label>Colour <select id="colour">
+      <option value="project">project</option>
+      <option value="type">type</option>
+      <option value="trust">trust</option>
+    </select></label>
+    <label><input type="checkbox" id="similar" checked> similar</label>
+  </div>
+</header>
+<main>
+  <div id="graph">
+    <canvas id="canvas"></canvas>
+    <div class="legend" id="legend"></div>
+    <div class="zoom"><button id="zin" aria-label="Zoom in">+</button><button id="zout" aria-label="Zoom out">−</button><button id="zfit" aria-label="Fit">⤢</button></div>
+  </div>
+  <div class="page" id="hubs"><div class="wrap" id="hubs-body"></div></div>
+  <div class="page" id="health"><div class="wrap" id="health-body"></div></div>
+  <aside id="panel"></aside>
+</main>
+<script>
+const D = /*KB_DATA*/null;
+(() => {
+"use strict";
+const N = D.nodes, $ = (id) => document.getElementById(id);
+const PALETTE = ["#4e79a7", "#f28e2b", "#e15759", "#76b7b2", "#59a14f", "#edc948", "#b07aa1", "#ff9da7", "#9c755f", "#8cd17d", "#86bcb6", "#d37295"];
+const KIND_HELP = {
+  "malformed": "The front matter breaks a rule: fix the field named.",
+  "dangling": "A link to a note that does not exist: write that note, or fix or drop the link.",
+  "same-name": "Two notes share a name: links to it reach only the first one.",
+  "near-duplicate": "Two notes say nearly the same thing: merge them.",
+  "stale": "A project or decision with no date for months: still true? Add a valid_until if not.",
+  "orphan": "No link in or out, and no note reads like it: link it by hand, or let it be.",
+};
+const byName = {};
+N.forEach((n, i) => { n.id = i; if (!(n.name in byName)) byName[n.name] = i; });
+const out = N.map(() => []), inn = N.map(() => []), sim = N.map(() => []);
+D.links.forEach(([a, b]) => { out[a].push(b); inn[b].push(a); });
+D.similar.forEach(([a, b, s]) => { sim[a].push([b, s]); sim[b].push([a, s]); });
+const degree = N.map((_, i) => out[i].length + inn[i].length);
+
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fold = (s) => String(s ?? "").normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase();
+const noteLink = (i, label) => `<a data-id="${i}">${esc(label ?? N[i].title)}</a>`;
+
+function inline(raw) {
+  let s = esc(raw);
+  const codes = [];
+  s = s.replace(/`([^`]+)`/g, (_, c) => { codes.push(c); return `\u0000${codes.length - 1}\u0000`; });
+  s = s.replace(/\[\[([^\]|#]+)(?:[#|]([^\]]*))?\]\]/g, (_, name, label) => {
+    const i = byName[name.trim().toLowerCase()];
+    return i === undefined ? `<span class="dead">${label || name}</span>` : `<a data-id="${i}">${label || name}</a>`;
+  });
+  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  s = s.replace(/(^|[\s(])_([^_]+)_(?=[\s).,;:!?]|$)/g, "$1<em>$2</em>");
+  return s.replace(/\u0000(\d+)\u0000/g, (_, k) => `<code>${codes[+k]}</code>`);
+}
+
+function markdown(text) {
+  const lines = String(text || "").split(/\r?\n/), html = [];
+  let para = [], list = null, code = null;
+  const flush = () => {
+    if (para.length) { html.push(`<p>${inline(para.join(" "))}</p>`); para = []; }
+    if (list) { html.push(`<${list.tag}>${list.items.map((x) => `<li>${inline(x)}</li>`).join("")}</${list.tag}>`); list = null; }
+  };
+  for (const line of lines) {
+    if (code !== null) {
+      if (/^\s*```/.test(line)) { html.push(`<pre><code>${esc(code.join("\n"))}</code></pre>`); code = null; }
+      else code.push(line);
+      continue;
+    }
+    if (/^\s*```/.test(line)) { flush(); code = []; continue; }
+    const h = line.match(/^(#{1,4})\s+(.*)$/);
+    if (h) { flush(); html.push(`<h${h[1].length + 1}>${inline(h[2])}</h${h[1].length + 1}>`); continue; }
+    const li = line.match(/^\s*([-*]|\d+[.)])\s+(.*)$/);
+    if (li) {
+      const tag = /\d/.test(li[1]) ? "ol" : "ul";
+      if (para.length || (list && list.tag !== tag)) flush();
+      if (!list) list = { tag, items: [] };
+      list.items.push(li[2]);
+      continue;
+    }
+    if (!line.trim()) { flush(); continue; }
+    if (list && /^\s{2,}/.test(line)) { list.items[list.items.length - 1] += " " + line.trim(); continue; }
+    if (list) flush();
+    para.push(line.trim());
+  }
+  if (code !== null) html.push(`<pre><code>${esc(code.join("\n"))}</code></pre>`);
+  flush();
+  return html.join("\n");
+}
+
+// Colours
+let colourBy = "project", focusCat = null;
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+function categories() {
+  const count = {};
+  N.forEach((n) => { const k = n[colourBy] || "none"; count[k] = (count[k] || 0) + 1; });
+  return Object.entries(count).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+}
+let colourOf = {};
+function recolour() {
+  colourOf = {};
+  categories().forEach(([k], i) => {
+    colourOf[k] = i < PALETTE.length ? PALETTE[i] : `hsl(${(i * 137.5) % 360} 45% 58%)`;
+  });
+  const fixed = { trust: { user: "#59a14f", agent: "#4e79a7", "third-party": "#e15759" } };
+  if (fixed[colourBy]) Object.assign(colourOf, fixed[colourBy]);
+  $("legend").innerHTML = categories().map(([k, c]) =>
+    `<div data-cat="${esc(k)}" class="${focusCat === k ? "on" : ""}"><i style="background:${colourOf[k]}"></i>${esc(k)}<span>${c}</span></div>`).join("");
+  draw();
+}
+
+// Layout: a small force simulation, clusters pulled towards their project's centre
+const P = N.map((n, i) => ({ x: 0, y: 0, vx: 0, vy: 0, fx: null, fy: null }));
+const spiral = (k, step) => {
+  const r = step * Math.sqrt(0.5 + k), t = k * Math.PI * (3 - Math.sqrt(5));
+  return [r * Math.cos(t), r * Math.sin(t)];
+};
+const members = {};
+N.forEach((n, i) => (members[n.project] = members[n.project] || []).push(i));
+Object.values(members).sort((a, b) => b.length - a.length).forEach((ids, g) => {
+  const [cx, cy] = spiral(g, 110);
+  ids.forEach((i, k) => { const [x, y] = spiral(k, 9); P[i].x = cx + x; P[i].y = cy + y; });
+});
+let alpha = 1;
+const across = (a, b) => (N[a].project === N[b].project ? 1 : 0.3);
+const LINKS = D.links.map(([a, b]) => [a, b, 45, 0.6 * across(a, b)]);
+const SIMS = D.similar.map(([a, b, s]) => [a, b, 70, 0.25 * s * across(a, b)]);
+const labelDegree = Math.max(4, degree.slice().sort((a, b) => b - a)[11] || 0);
+function tick() {
+  const n = P.length;
+  for (let i = 0; i < n; i++) {
+    const a = P[i];
+    for (let j = i + 1; j < n; j++) {
+      const b = P[j];
+      let dx = b.x - a.x, dy = b.y - a.y, d2 = dx * dx + dy * dy;
+      if (d2 > 160000) continue;
+      if (d2 < 1) { dx = Math.random() - 0.5; dy = Math.random() - 0.5; d2 = 1; }
+      const f = (-60 * alpha) / d2;
+      a.vx += dx * f; a.vy += dy * f; b.vx -= dx * f; b.vy -= dy * f;
+    }
+  }
+  for (const [s, t, len, k] of LINKS.concat(SIMS)) {
+    const a = P[s], b = P[t];
+    let dx = b.x + b.vx - a.x - a.vx, dy = b.y + b.vy - a.y - a.vy;
+    const l = Math.sqrt(dx * dx + dy * dy) || 1, f = ((l - len) / l) * alpha * k * 0.5;
+    dx *= f; dy *= f; b.vx -= dx; b.vy -= dy; a.vx += dx; a.vy += dy;
+  }
+  const centre = {};
+  N.forEach((node, i) => {
+    const c = centre[node.project] || (centre[node.project] = { x: 0, y: 0, n: 0 });
+    c.x += P[i].x; c.y += P[i].y; c.n++;
+  });
+  N.forEach((node, i) => {
+    const c = centre[node.project], p = P[i];
+    p.vx += (c.x / c.n - p.x) * 0.15 * alpha - p.x * 0.01 * alpha;
+    p.vy += (c.y / c.n - p.y) * 0.15 * alpha - p.y * 0.01 * alpha;
+    if (p.fx !== null) { p.x = p.fx; p.y = p.fy; p.vx = p.vy = 0; return; }
+    p.vx *= 0.6; p.vy *= 0.6; p.x += p.vx; p.y += p.vy;
+  });
+  alpha += (0 - alpha) * 0.0228;
+}
+
+// Drawing
+const canvas = $("canvas"), ctx = canvas.getContext("2d");
+const cam = { x: 0, y: 0, k: 1 };
+let W = 0, H = 0, selected = null, hover = null, matches = null, showSimilar = true, fitted = false;
+function resize() {
+  const r = canvas.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  W = r.width; H = r.height; canvas.width = W * dpr; canvas.height = H * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); draw();
+}
+const radius = (i) => 3.5 + Math.sqrt(degree[i]) * 1.8;
+const toScreen = (p) => [(p.x - cam.x) * cam.k + W / 2, (p.y - cam.y) * cam.k + H / 2];
+const toWorld = (sx, sy) => [(sx - W / 2) / cam.k + cam.x, (sy - H / 2) / cam.k + cam.y];
+function lit(i) {
+  if (matches) return matches.has(i);
+  if (focusCat !== null) return (N[i][colourBy] || "none") === focusCat;
+  if (selected === null) return true;
+  return i === selected || out[selected].includes(i) || inn[selected].includes(i) || (showSimilar && sim[selected].some(([j]) => j === i));
+}
+function draw() {
+  if (!W) return;
+  ctx.fillStyle = css("--bg"); ctx.fillRect(0, 0, W, H);
+  const edge = css("--edge"), similar = css("--similar"), fg = css("--fg"), accent = css("--accent"), warn = css("--warn");
+  ctx.lineWidth = 1;
+  if (showSimilar) {
+    ctx.setLineDash([3, 4]); ctx.strokeStyle = similar; ctx.beginPath();
+    for (const [a, b] of D.similar) {
+      if (!(lit(a) && lit(b))) continue;
+      const [x1, y1] = toScreen(P[a]), [x2, y2] = toScreen(P[b]); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
+    }
+    ctx.stroke(); ctx.setLineDash([]);
+  }
+  ctx.strokeStyle = edge; ctx.beginPath();
+  for (const [a, b] of D.links) {
+    if (!(lit(a) && lit(b))) continue;
+    const [x1, y1] = toScreen(P[a]), [x2, y2] = toScreen(P[b]); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
+  }
+  ctx.stroke();
+  const labels = [];
+  N.forEach((n, i) => {
+    const [x, y] = toScreen(P[i]), r = radius(i) * Math.max(0.7, Math.min(cam.k, 2));
+    if (x < -20 || y < -20 || x > W + 20 || y > H + 20) return;
+    ctx.globalAlpha = lit(i) ? (n.expired ? 0.45 : 1) : 0.12;
+    ctx.fillStyle = colourOf[n[colourBy] || "none"] || "#999";
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+    if (n.trust === "third-party") { ctx.strokeStyle = warn; ctx.lineWidth = 1.5; ctx.stroke(); ctx.lineWidth = 1; }
+    if (i === selected || i === hover) { ctx.strokeStyle = accent; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(x, y, r + 3, 0, Math.PI * 2); ctx.stroke(); ctx.lineWidth = 1; }
+    const show = i === hover || i === selected || (lit(i) && (selected !== null || matches || focusCat !== null)) || cam.k > 1.8 || (cam.k > 0.6 && degree[i] >= labelDegree);
+    const first = i === hover || i === selected;
+    if (show && lit(i)) labels.push([first ? 0 : 1, -degree[i], x + r + 3, y + 4, n.title.length > 48 ? n.title.slice(0, 46) + "…" : n.title]);
+  });
+  ctx.globalAlpha = 1; ctx.font = "12px system-ui, sans-serif"; ctx.fillStyle = fg;
+  ctx.lineWidth = 3; ctx.strokeStyle = css("--bg");
+  const taken = [];
+  labels.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  for (const [, , x, y, t] of labels) {
+    const w = ctx.measureText(t).width, box = [x - 2, y - 12, x + w + 2, y + 4];
+    if (taken.some((o) => box[0] < o[2] && box[2] > o[0] && box[1] < o[3] && box[3] > o[1])) continue;
+    taken.push(box); ctx.strokeText(t, x, y); ctx.fillText(t, x, y);
+  }
+  ctx.lineWidth = 1;
+}
+function fit() {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  P.forEach((p) => { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); });
+  if (!isFinite(x0)) return;
+  cam.x = (x0 + x1) / 2; cam.y = (y0 + y1) / 2;
+  cam.k = Math.min(3, Math.max(0.15, 0.9 * Math.min(W / (x1 - x0 + 40), H / (y1 - y0 + 40))));
+  draw();
+}
+function loop() {
+  if (alpha > 0.004) {
+    tick();
+    if (!fitted && alpha < 0.35) { fitted = true; fit(); }
+    draw();
+  }
+  requestAnimationFrame(loop);
+}
+function pick(sx, sy) {
+  const [wx, wy] = toWorld(sx, sy);
+  let best = null, bestD = Infinity;
+  P.forEach((p, i) => {
+    const d = Math.hypot(p.x - wx, p.y - wy), r = (radius(i) * Math.max(0.7, Math.min(cam.k, 2)) + 5) / cam.k;
+    if (d < r && d < bestD) { best = i; bestD = d; }
+  });
+  return best;
+}
+let drag = null;
+canvas.addEventListener("pointerdown", (e) => {
+  canvas.setPointerCapture(e.pointerId);
+  const i = pick(e.offsetX, e.offsetY);
+  drag = { i, sx: e.offsetX, sy: e.offsetY, cx: cam.x, cy: cam.y, moved: false };
+  if (i !== null) { P[i].fx = P[i].x; P[i].fy = P[i].y; }
+});
+canvas.addEventListener("pointermove", (e) => {
+  if (!drag) {
+    const h = pick(e.offsetX, e.offsetY);
+    if (h !== hover) { hover = h; canvas.style.cursor = h === null ? "grab" : "pointer"; draw(); }
+    return;
+  }
+  const dx = e.offsetX - drag.sx, dy = e.offsetY - drag.sy;
+  if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
+  if (drag.i !== null) {
+    const [wx, wy] = toWorld(e.offsetX, e.offsetY);
+    P[drag.i].fx = wx; P[drag.i].fy = wy; alpha = Math.max(alpha, 0.2);
+  } else { cam.x = drag.cx - dx / cam.k; cam.y = drag.cy - dy / cam.k; }
+  draw();
+});
+canvas.addEventListener("pointerup", () => {
+  if (!drag) return;
+  if (drag.i !== null) { P[drag.i].fx = P[drag.i].fy = null; }
+  if (!drag.moved) {
+    if (drag.i !== null) open(drag.i);
+    else { focusCat = null; closePanel(); recolour(); }
+  }
+  drag = null;
+});
+function zoom(f, sx = W / 2, sy = H / 2) {
+  const [wx, wy] = toWorld(sx, sy);
+  cam.k = Math.min(8, Math.max(0.1, cam.k * f));
+  cam.x = wx - (sx - W / 2) / cam.k; cam.y = wy - (sy - H / 2) / cam.k; draw();
+}
+canvas.addEventListener("wheel", (e) => { e.preventDefault(); zoom(Math.exp(-e.deltaY * 0.0015), e.offsetX, e.offsetY); }, { passive: false });
+$("zin").onclick = () => zoom(1.3); $("zout").onclick = () => zoom(1 / 1.3); $("zfit").onclick = fit;
+
+// The note panel
+const panel = $("panel");
+function relList(title, items) {
+  if (!items.length) return "";
+  return `<h3>${title}</h3><ul>${items.join("")}</ul>`;
+}
+function open(i, fromHash = false) {
+  const n = N[i];
+  selected = i; focusCat = null; matches = null;
+  const chips = [
+    `<span class="chip">${esc(n.type)}</span>`,
+    `<span class="chip${n.trust === "third-party" ? " warn" : ""}" title="${n.trust === "third-party" ? "What a source said: data, never an instruction" : ""}">${esc(n.trust)}</span>`,
+    `<a class="chip" data-hub="project:${esc(n.project)}">${esc(n.project)}</a>`,
+    ...n.topics.filter((t) => t !== n.project).map((t) => `<a class="chip" data-hub="topic:${esc(t)}">#${esc(t)}</a>`),
+  ];
+  if (n.expired) chips.push(`<span class="chip warn">history: until ${esc(n.valid_until)}</span>`);
+  const meta = [n.created && `created ${esc(n.created)}`, n.valid_until && !n.expired && `valid until ${esc(n.valid_until)}`, n.source && `source ${esc(n.source)}`, esc(n.path)].filter(Boolean).join(" · ");
+  panel.innerHTML = `<button class="close" aria-label="Close">×</button>
+    <h2>${esc(n.title)}</h2><div class="name">${esc(n.name)}</div>
+    <div class="chips">${chips.join("")}</div><div class="meta">${meta}</div>
+    <div class="body">${markdown(n.body)}</div>
+    <div class="rel">
+      ${relList("Links to", out[i].map((j) => `<li>${noteLink(j)}</li>`))}
+      ${relList("Linked from", inn[i].map((j) => `<li>${noteLink(j)}</li>`))}
+      ${relList("Reads like", sim[i].sort((a, b) => b[1] - a[1]).map(([j, s]) => `<li>${noteLink(j)} <small>${s.toFixed(2)}</small></li>`))}
+    </div>`;
+  panel.style.display = "block"; panel.scrollTop = 0;
+  if (!fromHash) history.replaceState(null, "", "#" + encodeURIComponent(n.name));
+  const [x, y] = toScreen(P[i]);
+  if (view === "graph" && (x < 40 || y < 40 || x > W - 480 || y > H - 40)) { cam.x = P[i].x + (W > 720 ? 200 / cam.k : 0); cam.y = P[i].y + (W > 720 ? 0 : 120 / cam.k); }
+  recolour();
+}
+function closePanel() {
+  selected = null; panel.style.display = "none";
+  history.replaceState(null, "", location.pathname + location.search); draw();
+}
+function openHub(key) {
+  const [kind, value] = key.split(/:(.*)/s);
+  const members = N.map((n, i) => i).filter((i) => kind === "project" ? N[i].project === value : N[i].topics.includes(value));
+  selected = null; focusCat = null; matches = new Set(members);
+  const byType = {};
+  members.forEach((i) => (byType[N[i].type] = byType[N[i].type] || []).push(i));
+  panel.innerHTML = `<button class="close" aria-label="Close">×</button>
+    <h2>${kind === "topic" ? "#" : ""}${esc(value)}</h2><div class="name">${kind} · ${members.length} notes</div>
+    <div class="rel">${Object.entries(byType).sort((a, b) => b[1].length - a[1].length).map(([t, ids]) =>
+      relList(esc(t), ids.sort((a, b) => N[a].title.localeCompare(N[b].title)).map((j) => `<li>${noteLink(j)}</li>`))).join("")}</div>`;
+  panel.style.display = "block"; panel.scrollTop = 0;
+  draw();
+}
+panel.addEventListener("click", (e) => {
+  const t = e.target.closest("a, button");
+  if (!t) return;
+  if (t.classList.contains("close")) { matches = null; closePanel(); return; }
+  if (t.dataset.id !== undefined) { e.preventDefault(); matches = null; open(+t.dataset.id); }
+  else if (t.dataset.hub) { e.preventDefault(); openHub(t.dataset.hub); }
+});
+
+// Search
+const q = $("q"), results = $("results");
+const haystack = N.map((n) => fold([n.name, n.title, n.topics.join(" "), n.project, n.body].join(" ")));
+function search() {
+  const words = fold(q.value).split(/\s+/).filter(Boolean);
+  if (!words.length) { matches = null; results.style.display = "none"; draw(); return; }
+  const hits = N.map((n, i) => i).filter((i) => words.every((w) => haystack[i].includes(w)));
+  const score = (i) => words.reduce((s, w) => s + (fold(N[i].title).includes(w) ? 3 : 0) + (N[i].name.includes(w) ? 2 : 0), 0);
+  hits.sort((a, b) => score(b) - score(a) || degree[b] - degree[a]);
+  matches = new Set(hits);
+  results.innerHTML = hits.length ? hits.slice(0, 12).map((i) => `<a data-id="${i}">${esc(N[i].title)}<br><span class="name">${esc(N[i].name)}</span></a>`).join("")
+    : `<a class="empty">No note matches.</a>`;
+  results.style.display = "block"; draw();
+}
+q.addEventListener("input", search);
+q.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { const first = results.querySelector("a[data-id]"); if (first) { results.style.display = "none"; open(+first.dataset.id); } }
+  if (e.key === "Escape") { q.value = ""; search(); }
+});
+results.addEventListener("click", (e) => { const a = e.target.closest("a[data-id]"); if (a) { results.style.display = "none"; open(+a.dataset.id); } });
+document.addEventListener("click", (e) => { if (!e.target.closest(".search")) results.style.display = "none"; });
+
+// Hubs and health pages
+function hubCard(key, title, ids) {
+  const list = ids.slice().sort((a, b) => degree[b] - degree[a]);
+  const shown = list.slice(0, 8).map((i) => `<li>${noteLink(i)}</li>`).join("");
+  const more = list.length > 8 ? `<li class="more"><a data-hub="${esc(key)}">all ${list.length} notes…</a></li>` : "";
+  return `<div class="hub"><h3><a data-hub="${esc(key)}">${esc(title)}</a><span>${ids.length}</span></h3><ul>${shown}${more}</ul></div>`;
+}
+function renderHubs() {
+  const projects = {}, topics = {};
+  N.forEach((n, i) => {
+    (projects[n.project] = projects[n.project] || []).push(i);
+    n.topics.forEach((t) => (topics[t] = topics[t] || []).push(i));
+  });
+  const sorted = (o) => Object.entries(o).sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
+  $("hubs-body").innerHTML =
+    `<h2>Projects</h2><div class="hubs">${sorted(projects).map(([k, ids]) => hubCard("project:" + k, k, ids)).join("")}</div>` +
+    `<h2>Topics</h2><div class="hubs">${sorted(topics).filter(([, ids]) => ids.length > 1).map(([k, ids]) => hubCard("topic:" + k, "#" + k, ids)).join("") || '<p class="empty">No topic shared by two notes yet.</p>'}</div>`;
+}
+function renderHealth() {
+  const groups = {};
+  D.findings.forEach((f) => (groups[f.kind] = groups[f.kind] || []).push(f));
+  const kinds = Object.keys(KIND_HELP).filter((k) => groups[k]);
+  $("health-body").innerHTML = kinds.length ? kinds.map((k) => `<div class="finding"><h2>${esc(k)} <span class="stats">${groups[k].length}</span></h2><p>${KIND_HELP[k]}</p><ul>${
+    groups[k].map((f) => `<li>${f.id >= 0 ? noteLink(f.id, f.name) : esc(f.name)}: ${esc(f.detail)}</li>`).join("")}</ul></div>`).join("")
+    : '<p class="empty">Nothing to tidy.</p>';
+}
+let view = "graph";
+function show(v) {
+  view = v;
+  document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("on", b.dataset.view === v));
+  $("graph").style.display = v === "graph" ? "block" : "none";
+  $("hubs").style.display = v === "hubs" ? "block" : "none";
+  $("health").style.display = v === "health" ? "block" : "none";
+  if (v === "graph") resize();
+}
+$("tabs").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) show(b.dataset.view); });
+for (const page of ["hubs-body", "health-body"]) {
+  $(page).addEventListener("click", (e) => {
+    const a = e.target.closest("a");
+    if (!a) return;
+    if (a.dataset.id !== undefined) open(+a.dataset.id);
+    else if (a.dataset.hub) openHub(a.dataset.hub);
+  });
+}
+$("legend").addEventListener("click", (e) => {
+  const d = e.target.closest("[data-cat]");
+  if (!d) return;
+  focusCat = focusCat === d.dataset.cat ? null : d.dataset.cat;
+  matches = null; recolour();
+});
+$("colour").addEventListener("change", (e) => { colourBy = e.target.value; focusCat = null; recolour(); });
+$("similar").addEventListener("change", (e) => { showSimilar = e.target.checked; draw(); });
+window.addEventListener("hashchange", () => {
+  const i = byName[decodeURIComponent(location.hash.slice(1))];
+  if (i !== undefined && i !== selected) open(i, true);
+});
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", draw);
+new ResizeObserver(resize).observe($("graph"));
+
+const findingsCount = D.findings.length;
+$("stats").textContent = `${N.length} notes · ${D.links.length} links · ${D.similar.length} similar · ${findingsCount} to tidy · ${D.generated}`;
+renderHubs(); renderHealth(); resize(); recolour();
+const start = byName[decodeURIComponent(location.hash.slice(1))];
+if (start !== undefined) open(start, true);
+loop();
+})();
+</script>
+</body>
+</html>
