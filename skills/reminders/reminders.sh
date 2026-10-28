@@ -49,6 +49,24 @@ frontmatter() {
     NR > 1 { i = index($0, ":"); if (substr($0, 1, i - 1) == k) { v = substr($0, i + 1); sub(/^ +/, "", v); sub(/ +$/, "", v); print v; exit } }' "$1"
 }
 
+# fields FILE: sets F_<key> to each of FILE's front matter values in one awk run. Every process
+# costs a few hundred milliseconds on some Windows computers, against the hooks' 10 s timeout.
+F_FILE=""
+fields() {
+  [ "$F_FILE" = "$1" ] && return 0
+  IFS=$'\037' read -r F_title F_on F_until F_where F_machine F_every F_times F_done F_group F_closed F_digest < <(
+    awk -v keys="title on until where machine every times done group closed digest" '
+      BEGIN { n = split(keys, k, " ") }
+      { sub(/\r$/, "") }
+      NR == 1 && $0 != "---" { exit }
+      NR > 1 && $0 == "---" { exit }
+      NR > 1 { i = index($0, ":"); key = substr($0, 1, i - 1)
+        if (i && !(key in v)) { val = substr($0, i + 1); sub(/^ +/, "", val); sub(/ +$/, "", val); v[key] = val } }
+      END { for (j = 1; j <= n; j++) printf "%s%s", v[k[j]], (j < n ? "\037" : "\n") }' "$1"
+  )
+  F_FILE=$1
+}
+
 body() { awk '{ sub(/\r$/, "") } NR == 1 && $0 == "---" { fm = 1; next } fm && $0 == "---" { fm = 0; next } !fm' "$1"; }
 
 lower() { tr 'A-Z\\' 'a-z/'; }
@@ -64,12 +82,15 @@ in_place() {
   return 1
 }
 
-machine() { tr -d '[:space:]' < "$SYNC/.machine" 2> /dev/null; }
+MACHINE=""
+[ -f "$SYNC/.machine" ] && read -r MACHINE < "$SYNC/.machine"
+MACHINE=${MACHINE//[[:space:]]/}
+NOW=$(date '+%Y-%m-%d %H:%M')
 
-# weekdays EVERY: the ISO weekday numbers (1 = Monday) that EVERY names.
+# weekdays EVERY: the ISO weekday numbers (1 = Monday) that EVERY (lower-case) names.
 weekdays() {
   local d out=""
-  for d in $(printf '%s' "$1" | lower | tr ',' ' '); do
+  for d in ${1//,/ }; do
     case "$d" in
       day | daily) out="1 2 3 4 5 6 7" ;;
       weekday | weekdays) out="$out 1 2 3 4 5" ;;
@@ -86,90 +107,117 @@ weekdays() {
 }
 
 # GNU date first, then BSD date (macOS).
-shift_day() { date -d "$1 +$2 days" +%Y-%m-%d 2> /dev/null || date -j -v+"$2"d -f %Y-%m-%d "$1" +%Y-%m-%d; }
-weekday_of() { date -d "$1" +%u 2> /dev/null || date -j -f %Y-%m-%d "$1" +%u; }
 epoch_of() { date -d "$1 12:00" +%s 2> /dev/null || date -j -f '%Y-%m-%d %H:%M' "$1 12:00" +%s; }
 
-# repeats_on EVERY ON DAY: whether a series with this `every` (weekdays, "3 days" counted
-# from ON, or "month" on ON's day or the last day of a shorter month) falls on DAY.
-repeats_on() {
-  local every on=$2 day=$3 n days
-  every=$(printf '%s' "$1" | lower | tr -s ' ')
-  case "$every" in
-    [0-9]*day | [0-9]*days)
-      n=${every%% *}
-      n=${n%day*}
-      [ -n "$on" ] && [ "$n" -gt 0 ] 2> /dev/null || return 1
-      [ $((($(epoch_of "$day") - $(epoch_of "${on:0:10}")) / 86400 % n)) -eq 0 ]
-      return
-      ;;
-    month | monthly)
-      [ -n "$on" ] || return 1
-      [ "${day:8:2}" = "${on:8:2}" ] && return 0
-      [[ "${on:8:2}" > "${day:8:2}" ]] && [ "$(shift_day "$day" 1 | cut -c9-10)" = "01" ]
-      return
-      ;;
-  esac
-  days=$(weekdays "$every")
-  case " $days " in *" $(weekday_of "$day") "*) return 0 ;; esac
-  return 1
+# days_from DAY N: DAY and the N days after it, one "YYYY-MM-DD <ISO weekday>" line each. GNU date
+# reads them all in one run; noon plus whole days stays on the right date across DST changes.
+days_from() {
+  local e k
+  if e=$(date -d "$1 12:00" +%s 2> /dev/null); then
+    for ((k = 0; k <= $2; k++)); do printf '@%d\n' $((e + k * 86400)); done | date -f - '+%Y-%m-%d %u'
+  else
+    for ((k = 0; k <= $2; k++)); do date -j -v+"$k"d -f %Y-%m-%d "$1" '+%Y-%m-%d %u'; done
+  fi
 }
 
 # next_time FILE: "YYYY-MM-DD HH:MM" a repeating reminder shows next, today's while it isn't
-# closed. With `times: 08:00, 14:00`, the next of those times.
+# closed: on the weekdays `every` names, every N days counted from `on`, or each month on `on`'s
+# day (the last day of a shorter month). With `times: 08:00, 14:00`, the next of those times.
+# next_time_of sets NEXT instead, without a subshell.
 next_time() {
-  local f=$1 every on at times closed base k day now t
-  every=$(frontmatter "$f" every)
-  [ -n "$every" ] || return 0
-  on=$(frontmatter "$f" on)
+  next_time_of "$1"
+  printf '%s' "$NEXT"
+}
+
+next_time_of() {
+  local every on at times base today=${NOW% *} now=${NOW#* } mode since=0 n=0 wds="" k=0 d w t
+  local -a day=() wd=()
+  NEXT=""
+  fields "$1"
+  [ -n "$F_every" ] || return 0
+  every=$F_every
+  case "$every" in *[A-Z\\]*) every=$(printf '%s' "$every" | lower) ;; esac
+  while [[ "$every" == *"  "* ]]; do every=${every//  / }; done
+  on=$F_on
   at=$DEFAULT_AT
   [ ${#on} -gt 10 ] && at=${on:11:5}
-  times=$(frontmatter "$f" times | tr ',' ' ')
-  closed=$(frontmatter "$f" done)
-  base=$(date +%Y-%m-%d)
-  now=$(date +%H:%M)
+  times=${F_times//,/ }
+  base=$today
   [ -n "$on" ] && [[ "$base" < "${on:0:10}" ]] && base=${on:0:10}
-  for k in $(seq 0 62); do
-    day=$base
-    [ "$k" -gt 0 ] && day=$(shift_day "$base" "$k")
-    [ "$day" = "$closed" ] && continue
-    repeats_on "$every" "$on" "$day" || continue
+  case "$every" in
+    [0-9]*day | [0-9]*days)
+      mode=days
+      n=${every%% *}
+      n=${n%day*}
+      [ -n "$on" ] && [ "$n" -gt 0 ] 2> /dev/null || return 0
+      [ "$base" = "${on:0:10}" ] || since=$((($(epoch_of "$base") - $(epoch_of "${on:0:10}") + 43200) / 86400))
+      ;;
+    month | monthly)
+      mode=month
+      [ -n "$on" ] || return 0
+      ;;
+    *)
+      mode=week
+      wds=" $(weekdays "$every") "
+      ;;
+  esac
+  while read -r d w; do
+    day[k]=$d
+    wd[k]=$w
+    k=$((k + 1))
+  done < <(days_from "$base" 63)
+  for ((k = 0; k < 63; k++)); do
+    d=${day[k]:-}
+    [ -n "$d" ] || return 0
+    [ "$d" = "$F_done" ] && continue
+    case "$mode" in
+      days) [ $(((since + k) % n)) -eq 0 ] || continue ;;
+      month)
+        w=${day[k + 1]:-}
+        [ "${d:8:2}" = "${on:8:2}" ] || { [[ "${on:8:2}" > "${d:8:2}" ]] && [ "${w:8:2}" = 01 ]; } || continue
+        ;;
+      week) [[ "$wds" == *" ${wd[k]} "* ]] || continue ;;
+    esac
     if [ -n "$times" ]; then
       at=""
       for t in $times; do
-        { [ "$day" != "$(date +%Y-%m-%d)" ] || [[ ! "$t" < "$now" ]]; } && { at=$t; break; }
+        { [ "$d" != "$today" ] || [[ ! "$t" < "$now" ]]; } && { at=$t; break; }
       done
       [ -n "$at" ] || continue
     fi
-    printf '%s %s' "$day" "$at"
+    NEXT="$d $at"
     return 0
   done
 }
 
 # state FILE [DIR]: due, later or expired; "elsewhere" when the reminder is
-# for another folder or computer than a session in DIR.
+# for another folder or computer than a session in DIR. state_of sets S instead.
 state() {
-  local f=$1 cwd=${2:-} on until where for now today
-  now=$(date '+%Y-%m-%d %H:%M')
-  today=${now% *}
-  on=$(frontmatter "$f" on)
-  until=$(frontmatter "$f" until)
-  where=$(frontmatter "$f" where)
-  for=$(frontmatter "$f" machine)
+  state_of "$@"
+  echo "$S"
+}
+
+state_of() {
+  local f=$1 cwd=${2:-} on today=${NOW% *}
+  fields "$f"
+  on=$F_on
   [ ${#on} -eq 10 ] && on="$on 00:00"
-  [ -n "$(frontmatter "$f" every)" ] && on=$(next_time "$f")
-  if [ -n "$until" ] && { [[ "$until" < "$today" ]] || [[ "$until" < "${on:0:10}" ]]; }; then
-    echo expired
-  elif [ -n "$(frontmatter "$f" every)" ] && [ -z "$on" ]; then
-    echo expired
-  elif [ -n "$on" ] && [[ "$now" < "$on" ]]; then
-    echo later
-  elif [ -n "$for" ] && [ "$for" != "$(machine)" ]; then
-    echo elsewhere
-  elif [ -n "$cwd" ] && [ -n "$where" ] && ! in_place "$cwd" "$where"; then
-    echo elsewhere
+  if [ -n "$F_every" ]; then
+    next_time_of "$f"
+    on=$NEXT
+  fi
+  if [ -n "$F_until" ] && { [[ "$F_until" < "$today" ]] || [[ "$F_until" < "${on:0:10}" ]]; }; then
+    S=expired
+  elif [ -n "$F_every" ] && [ -z "$on" ]; then
+    S=expired
+  elif [ -n "$on" ] && [[ "$NOW" < "$on" ]]; then
+    S=later
+  elif [ -n "$F_machine" ] && [ "$F_machine" != "$MACHINE" ]; then
+    S=elsewhere
+  elif [ -n "$cwd" ] && [ -n "$F_where" ] && ! in_place "$cwd" "$F_where"; then
+    S=elsewhere
   else
-    echo due
+    S=due
   fi
 }
 
@@ -203,50 +251,99 @@ past_of() {
 due() {
   local f
   files | while IFS= read -r f; do
-    [ "$(state "$f" "${1:-}")" = due ] && printf '%s\n' "$f"
+    state_of "$f" "${1:-}"
+    [ "$S" = due ] && printf '%s\n' "$f"
   done
 }
 
 list() {
-  local f every
+  local f id
   files | while IFS= read -r f; do
-    every=$(frontmatter "$f" every)
-    printf '%s\t%s\t%s%s\n' "$(basename "$f" .md)" "$(state "$f")" "$(frontmatter "$f" title)" \
-      "${every:+ (every $every, next $(next_time "$f"))}"
+    state_of "$f"
+    id=${f##*/}
+    printf '%s\t%s\t%s%s\n' "${id%.md}" "$S" "$F_title" "${F_every:+ (every $F_every, next $NEXT)}"
   done
 }
 
-# one FILE STATE: a reminder as one JSON object, its empty fields left out.
-one() {
-  local f=$1
-  jq -n --arg id "$(basename "$f" .md)" --arg state "$2" --arg title "$(frontmatter "$f" title)" \
-    --arg on "$(frontmatter "$f" on)" --arg until "$(frontmatter "$f" until)" --arg every "$(frontmatter "$f" every)" \
-    --arg where "$(frontmatter "$f" where)" --arg machine "$(frontmatter "$f" machine)" \
-    --arg group "$(frontmatter "$f" group)" --arg done "$(frontmatter "$f" done)" \
-    --arg closed "$(frontmatter "$f" closed)" --arg next "$(next_time "$f")" --arg body "$(body "$f")" \
-    --arg times "$(frontmatter "$f" times)" --arg digest "$(frontmatter "$f" digest)" \
-    '{$id, $state, $title, $on, $until, $every, $times, $digest, $where, $machine, $group, $done, $closed, $next, $body}
-     | with_entries(select(.value != ""))'
+# records KIND AGENT FOLDER FILE...: one line per FILE: KIND, AGENT, FOLDER, the file, its front
+# matter values in fields' order and its body as a JSON string, \037 between them, from one awk
+# run for all the files. An empty file has no line.
+records() {
+  local kind=$1 agent=$2 folder=$3
+  shift 3
+  [ $# -gt 0 ] || return 0
+  awk -v kind="$kind" -v agent="$agent" -v folder="$folder" -v keys="title on until where machine every times done group closed digest" '
+    BEGIN { n = split(keys, k, " "); for (i = 1; i < 32; i++) ctl[sprintf("%c", i)] = sprintf("\\u%04x", i) }
+    function esc(s,   out, i, c) {
+      gsub(/\\/, "\\\\", s)
+      gsub(/"/, "\\\"", s)
+      if (s !~ /[[:cntrl:]]/) return s
+      out = ""
+      for (i = 1; i <= length(s); i++) { c = substr(s, i, 1); out = out ((c in ctl) ? ctl[c] : c) }
+      return out
+    }
+    function flush(   j, line) {
+      if (file == "") return
+      line = kind "\037" agent "\037" folder "\037" file
+      for (j = 1; j <= n; j++) line = line "\037" v[k[j]]
+      sub(/\n+$/, "", body)
+      print line "\037\"" esc(body) "\""
+    }
+    FNR == 1 { flush(); file = FILENAME; split("", v); body = ""; fm = 0 }
+    { sub(/\r$/, "") }
+    FNR == 1 && $0 == "---" { fm = 1; next }
+    fm && $0 == "---" { fm = 0; next }
+    fm { i = index($0, ":"); key = substr($0, 1, i - 1)
+      if (i && !(key in v)) { val = substr($0, i + 1); sub(/^ +/, "", val); sub(/ +$/, "", val); v[key] = val }
+      next }
+    { body = body $0 "\n" }
+    END { flush() }' "$@"
 }
 
+# json [DIR]: every reminder and assistant task as a JSON array (the reminders pane), its objects'
+# empty fields left out. One awk and one jq run in all: the pane gives it 30 s.
 json() {
-  local f name dir
+  local cwd=${1:-} f name dir kind id body
+  local -a open=() past=()
   {
-    files | while IFS= read -r f; do one "$f" "$(state "$f" "${1:-}")"; done
-    for f in "$PAST"/*.md; do [ -f "$f" ] && one "$f" past; done
+    for f in "$DIR"/*.md; do [ -f "$f" ] && open+=("$f"); done
+    for f in "$PAST"/*.md; do [ -f "$f" ] && past+=("$f"); done
+    records open "" "" ${open[@]+"${open[@]}"}
+    records past "" "" ${past[@]+"${past[@]}"}
     agents | while IFS=$'\t' read -r name dir; do
-      for f in "$ROOT/$dir"/*.md "$ROOT/$dir/past"/*.md; do
-        [ -f "$f" ] || continue
-        case "$f" in */past/*) set -- past ;; *) set -- "$(state "$f")" ;; esac
-        one "$f" "$1" | jq --arg id "$dir/$(basename "$f" .md)" --arg agent "$name" \
-          '.id = $id | .agent = $agent | .group = $agent'
-      done
+      open=() past=()
+      for f in "$ROOT/$dir"/*.md; do [ -f "$f" ] && open+=("$f"); done
+      for f in "$ROOT/$dir/past"/*.md; do [ -f "$f" ] && past+=("$f"); done
+      records agent "$name" "$dir" ${open[@]+"${open[@]}"}
+      records agent-past "$name" "$dir" ${past[@]+"${past[@]}"}
     done
-  } | jq -s .
+  } | while IFS=$'\037' read -r kind name dir f F_title F_on F_until F_where F_machine F_every F_times F_done F_group F_closed F_digest body; do
+    F_FILE=$f
+    NEXT=""
+    case "$kind" in
+      open) state_of "$f" "$cwd" ;;
+      agent) state_of "$f" ;;
+      *)
+        S=past
+        next_time_of "$f"
+        ;;
+    esac
+    id=${f##*/}
+    id=${id%.md}
+    case "$kind" in agent*) id="$dir/$id" ;; esac
+    printf '%s\037' "$kind" "$name" "$id" "$S" "$F_title" "$F_on" "$F_until" "$F_every" "$F_times" "$F_digest" \
+      "$F_where" "$F_machine" "$F_group" "$F_done" "$F_closed" "$NEXT"
+    printf '%s\n' "$body"
+  done | jq -nR '[inputs | split("\u001f") as $r
+    | {id: $r[2], state: $r[3], title: $r[4], on: $r[5], until: $r[6], every: $r[7], times: $r[8], digest: $r[9],
+       where: $r[10], machine: $r[11], group: $r[12], done: $r[13], closed: $r[14], next: $r[15], body: ($r[16] | fromjson)}
+    | with_entries(select(.value != ""))
+    | if ($r[0] | startswith("agent")) then .agent = $r[1] | .group = $r[1] else . end]'
 }
 
 # set_field FILE KEY VALUE: sets KEY in FILE's front matter, added before its end if missing.
 set_field() {
+  F_FILE=""
   awk -v k="$2" -v v="$3" '{ sub(/\r$/, "") }
     NR == 1 { print; next }
     !end && $0 == "---" { if (!set) print k ": " v; end = 1; print; next }
@@ -265,6 +362,7 @@ close() {
 }
 
 drop_field() {
+  F_FILE=""
   awk -v k="$2" '{ sub(/\r$/, "") } NR == 1 { print; next } !end && $0 == "---" { end = 1 } !end && index($0, k ":") == 1 { next } { print }' \
     "$1" > "$1.tmp" && mv "$1.tmp" "$1"
 }
@@ -342,44 +440,47 @@ encrypted() {
 
 # summary FILE...: "title" for one reminder, "title (+N more)" for several.
 summary() {
-  local first
-  first=$(frontmatter "$1" title)
-  if [ $# -gt 1 ]; then printf '%s (+%d)' "$first" $(($# - 1)); else printf '%s' "$first"; fi
+  fields "$1"
+  if [ $# -gt 1 ]; then printf '%s (+%d)' "$F_title" $(($# - 1)); else printf '%s' "$F_title"; fi
 }
 
 # Hook input: sets SID (the session) and CWD.
 read_input() {
   local input=""
+  SID="" CWD=""
   [ -t 0 ] || input=$(cat)
-  SID=$(printf '%s' "$input" | jq -r '.session_id // empty' 2> /dev/null | tr -cd 'A-Za-z0-9_-')
+  { IFS= read -r SID; IFS= read -r CWD; } < <(printf '%s' "$input" | jq -r '.session_id // "", .cwd // ""' 2> /dev/null)
+  SID=${SID//[^A-Za-z0-9_-]/}
   SID=${SID:-default}
-  CWD=$(printf '%s' "$input" | jq -r '.cwd // empty' 2> /dev/null)
   CWD=${CWD:-$PWD}
 }
 
 # unseen SID DIR: the due reminders for DIR that session SID hasn't been given yet.
 unseen() {
-  local f
+  local f id shown=$'\n' line
+  if [ -f "$STATE/shown-$1" ]; then
+    while IFS= read -r line; do shown="$shown$line"$'\n'; done < "$STATE/shown-$1"
+  fi
   due "$2" | while IFS= read -r f; do
-    grep -qxF "$(basename "$f" .md)" "$STATE/shown-$1" 2> /dev/null || printf '%s\n' "$f"
+    id=${f##*/}
+    [[ "$shown" == *$'\n'"${id%.md}"$'\n'* ]] || printf '%s\n' "$f"
   done
 }
 
-# show EVENT SID DIR: hands the unseen reminders to the session as hook output.
+# show EVENT SID FILE...: hands these reminders to the session as hook output.
 show() {
-  local context="" shown="" f id
-  set -- "$1" "$2" "$3"
-  while IFS= read -r f; do set -- "$@" "$f"; done < <(unseen "$2" "$3")
-  [ $# -gt 3 ] || return 0
-  local event=$1 sid=$2
-  shift 3
+  local context="" shown="" f id event=$1 sid=$2
+  shift 2
+  [ $# -gt 0 ] || return 0
   for f in "$@"; do
-    id=$(basename "$f" .md)
+    id=${f##*/}
+    id=${id%.md}
+    fields "$f"
     echo "$id" >> "$STATE/shown-$sid"
-    shown="$shown 🔔 $(frontmatter "$f" title)"
+    shown="$shown 🔔 $F_title"
     context="$context
 
-### $id: $(frontmatter "$f" title)$([ -n "$(frontmatter "$f" every)" ] && printf ' (every %s)' "$(frontmatter "$f" every)")$([ -n "$(frontmatter "$f" until)" ] && printf ' (until %s)' "$(frontmatter "$f" until)")
+### $id: $F_title${F_every:+ (every $F_every)}${F_until:+ (until $F_until)}
 $(body "$f")"
   done
   jq -n --arg ctx "$context" --arg shown "${shown# }" --arg sk "$SK" --arg ev "$event" '{
@@ -391,25 +492,32 @@ $(body "$f")"
 # The session starts at once with what is already here. The day's sync runs in
 # the background; whatever it brings is notified as soon as it lands, and handed
 # to the session with the user's next message (prompt).
+# The old state and past reminders are cleaned once a day: each find is another process.
 start() {
-  local today f
+  local today=${NOW% *} f last=""
   read_input
   mkdir -p "$STATE"
-  find "$STATE" -maxdepth 1 \( -name 'shown-*' -o -name 'pending-*' \) -mtime +2 -exec rm -f {} + 2> /dev/null
-  { printf '%s\n' "$PAST"; agents | cut -f2 | while IFS= read -r p; do printf '%s/%s/past\n' "$ROOT" "$p"; done; } |
-    while IFS= read -r p; do
-      [ -d "$p" ] && find "$p" -maxdepth 1 -name '*.md' -mtime +"$PAST_DAYS" -exec rm -f {} + 2> /dev/null
-    done
+  [ -f "$STATE/cleaned" ] && read -r last < "$STATE/cleaned"
+  if [ "$last" != "$today" ]; then
+    find "$STATE" -maxdepth 1 \( -name 'shown-*' -o -name 'pending-*' \) -mtime +2 -exec rm -f {} + 2> /dev/null
+    { printf '%s\n' "$PAST"; agents | cut -f2 | while IFS= read -r p; do printf '%s/%s/past\n' "$ROOT" "$p"; done; } |
+      while IFS= read -r p; do
+        [ -d "$p" ] && find "$p" -maxdepth 1 -name '*.md' -mtime +"$PAST_DAYS" -exec rm -f {} + 2> /dev/null
+      done
+    echo "$today" > "$STATE/cleaned"
+  fi
   (nohup bash "$SK/reminders.sh" after-sync "$SID" "$CWD" > /dev/null 2>&1 < /dev/null &)
   set --
   while IFS= read -r f; do set -- "$@" "$f"; done < <(unseen "$SID" "$CWD")
   [ $# -gt 0 ] || return 0
-  today=$(date +%Y-%m-%d)
-  if [ "$(cat "$STATE/session-notified" 2> /dev/null)" != "$today" ]; then
-    notify "Reminder" "$(summary "$@")" "$(phone_text $#)"
+  last=""
+  [ -f "$STATE/session-notified" ] && read -r last < "$STATE/session-notified"
+  if [ "$last" != "$today" ]; then
+    # In the background: PowerShell's toast alone takes seconds on Windows.
+    (notify "Reminder" "$(summary "$@")" "$(phone_text $#)" > /dev/null 2>&1 < /dev/null &)
     echo "$today" > "$STATE/session-notified"
   fi
-  show SessionStart "$SID" "$CWD"
+  show SessionStart "$SID" "$@"
 }
 
 # Waits for the sync the session start launched (or runs today's first one).
@@ -422,6 +530,7 @@ after_sync() {
     n=$((n + 1))
   done
   bash "$SYNC/sync.sh" fresh 60 > /dev/null 2>&1 < /dev/null
+  NOW=$(date '+%Y-%m-%d %H:%M')
   set --
   while IFS= read -r f; do set -- "$@" "$f"; done < <(unseen "$sid" "$cwd")
   [ $# -gt 0 ] || return 0
@@ -431,10 +540,13 @@ after_sync() {
 }
 
 prompt() {
+  local f
   read_input
   [ -f "$STATE/pending-$SID" ] || return 0
   rm -f "$STATE/pending-$SID"
-  show UserPromptSubmit "$SID" "$CWD"
+  set --
+  while IFS= read -r f; do set -- "$@" "$f"; done < <(unseen "$SID" "$CWD")
+  show UserPromptSubmit "$SID" "$@"
 }
 
 morning() {
@@ -449,8 +561,9 @@ done_() {
   reminder_file "${1:-}"
   local f
   f=$(file_of "$1")
-  if [ -n "$(frontmatter "$f" every)" ]; then
-    set_field "$f" done "$(date +%Y-%m-%d)"
+  fields "$f"
+  if [ -n "$F_every" ]; then
+    set_field "$f" done "${NOW% *}"
     echo "done for today: $1 (next: $(next_time "$f"))"
   else
     close "$1"
