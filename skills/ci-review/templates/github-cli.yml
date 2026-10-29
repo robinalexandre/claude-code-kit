@@ -24,10 +24,6 @@ on:
     # "edited" only matters when the PR moves to another base branch (see the job's condition).
     types: [opened, synchronize, ready_for_review, reopened, edited]
 
-concurrency:
-  group: ai-review-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
 permissions:
   contents: read
   pull-requests: write
@@ -41,6 +37,10 @@ jobs:
     if: >-
       ${{ !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository &&
       (github.event.action != 'edited' || github.event.changes.base) }}
+    # On the job, not the workflow: a skipped run (a title edit) must not cancel the review in progress.
+    concurrency:
+      group: ai-review-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -74,7 +74,9 @@ jobs:
             approvable=false
           fi
           [ "$BASE" = "$DEFAULT_BRANCH" ] || approvable=false
-          gh pr diff "$PR" --name-only > "$RUNNER_TEMP/files.txt"
+          # Old names too: a file renamed away from a sensitive path changes it as much as an edit.
+          gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[] | .filename, (.previous_filename // empty)' \
+            > "$RUNNER_TEMP/files.txt"
           if grep -qiE '^(\.github/|\.claude/|\.mcp\.json$)|(^|/)claude(\.local)?\.md$' "$RUNNER_TEMP/files.txt"; then
             approvable=false
           fi
