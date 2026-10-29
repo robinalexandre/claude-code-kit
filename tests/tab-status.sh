@@ -25,6 +25,17 @@ ev() {
 title() { local s; s=$(cat "$T/tty"); s=${s#*]0;}; printf '%s' "${s%%$'\033'*}"; }
 rang() { LC_ALL=C grep -q "$(printf '\a')" "$T/tty"; }
 
+case "$(uname -s)" in
+  MINGW* | MSYS* | CYGWIN*)
+    # Windows: the hook does nothing (no tty to write to)
+    ev done
+    check "windows: writes nothing" '[ ! -s "$T/tty" ]'
+    echo "$fails failure(s)"
+    [ "$fails" -eq 0 ]
+    exit
+    ;;
+esac
+
 ev start
 check "start: green, the repo and the session title" '[ "$(title)" = "🟢 repo · Fix the login" ]'
 check "start: no bell" '! rang'
@@ -62,6 +73,12 @@ check "end: the repo alone, and nothing kept" '[ "$(title)" = "repo" ] && [ -z "
 : > "$T/tty"
 printf '{"session_id":"../x","cwd":"%s"}' "$T" | sh "$KIT/hooks/tab-status.sh" done
 check "a session id with a path in it is refused" '[ ! -s "$T/tty" ]'
+
+esc=$(printf '\033')
+mkdir -p "$T/re${esc}]0;x$(printf '\a')po"
+: > "$T/tty"
+jq -cn --arg c "$T/re${esc}]0;x$(printf '\a')po" '{session_id: "s3", cwd: $c}' | sh "$KIT/hooks/tab-status.sh" done
+check "control characters in the folder name are dropped" '[ "$(LC_ALL=C tr -cd "\033" < "$T/tty" | wc -c)" -eq 2 ] && [ "$(LC_ALL=C tr -cd "\007" < "$T/tty" | wc -c)" -eq 1 ] && grep -q "re\]0;xpo" "$T/tty"'
 
 out=$(printf 'not json' | sh "$KIT/hooks/tab-status.sh" done 2>&1); code=$?
 check "bad input: silent, exit 0" '[ -z "$out" ] && [ $code = 0 ]'

@@ -43,6 +43,7 @@ while [ $# -gt 0 ]; do
     --find) find="${2:-}"; shift ;;
     --terminal) terminal="${2:-}"; shift ;;
     -h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
+    *[!0-9a-f-]*) echo "Not a session id: $1" >&2; exit 2 ;;
     ''|*[!0-9]*) ids+=("$1") ;;
     *) minutes="$1" ;;
   esac
@@ -132,6 +133,7 @@ ago() {
 ranked=()
 for t in ${candidates[@]+"${candidates[@]}"}; do
   id=$(basename "$t" .jsonl)
+  case "$id" in *[!0-9a-f-]*) continue ;; esac
   grep -aq '"entrypoint":"cli"' "$t" || continue
   if is_live "$id"; then echo "skip ${id:0:8} (already running)"; continue; fi
   ranked+=("$(last_used "$t")"$'\t'"$t")

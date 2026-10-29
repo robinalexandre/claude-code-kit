@@ -109,6 +109,13 @@ check "windows terminal: a tab in the repo's named window" 'grep -q "^wt.exe -w 
 out=$(KITTY_WINDOW_ID=1 R aaaaaaaa)
 check "kitty: the repo's first session opens a window" 'grep -q "^kitty @ launch --type=os-window --cwd=.*my app claude --resume" <<< "$out"'
 
+out=$(R --list '../x' 2>&1); code=$?
+check "an id with anything but hex digits and dashes is refused" '[ $code = 2 ] && grep -q "Not a session id" <<< "$out"'
+session 'abc$(touch pwned)' "$T/other" cli "odd file name"
+out=$(R --list)
+check "a transcript whose name is not an id is left out" '! grep -q "odd file name" <<< "$out"'
+rm -f "$P/abc\$(touch pwned).jsonl"
+
 out=$(R --terminal nope aaaaaaaa 2>&1); code=$?
 check "an unknown terminal is refused" '[ $code = 2 ] && grep -q "Unknown terminal" <<< "$out"'
 

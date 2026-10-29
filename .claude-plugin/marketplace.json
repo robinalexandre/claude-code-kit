@@ -158,7 +158,7 @@
     {
       "name": "tab-status",
       "description": "Shows each session's state in its terminal tab (🟡 working, 🔴 waiting for you, 🟢 done, ❌ failed) with its repo and title, and rings the bell when it needs you.",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "category": "productivity",
       "source": ".",
       "strict": false,
@@ -292,7 +292,7 @@
     {
       "name": "reopen-sessions",
       "description": "Reopens in new terminal tabs the sessions that were running before a crash, or those about a topic you name.",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "category": "productivity",
       "source": ".",
       "strict": false,

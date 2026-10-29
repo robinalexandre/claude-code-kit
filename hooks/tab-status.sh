@@ -77,6 +77,7 @@ else
   top=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)
   top=${top:-$cwd}
   if [ "$top" = "$HOME" ]; then repo="~"; else repo=${top##*/}; fi
+  repo=$(printf '%s' "$repo" | tr -d '\000-\037\177')
   printf '%s\n' "$repo" > "$f.repo"
 fi
 
@@ -84,7 +85,7 @@ title=""
 if [ -f "$transcript" ]; then
   title=$(grep -a '"type":"custom-title"' "$transcript" | tail -n 1 | jq -r '.customTitle // empty' 2>/dev/null)
   [ -n "$title" ] || title=$(grep -a '"type":"ai-title"' "$transcript" | tail -n 1 | jq -r '.aiTitle // empty' 2>/dev/null)
-  title=$(printf '%s' "$title" | tr -d '\000-\037' | cut -c1-80)
+  title=$(printf '%s' "$title" | tr -d '\000-\037\177' | cut -c1-80)
 fi
 
 if [ "$state" = end ]; then
