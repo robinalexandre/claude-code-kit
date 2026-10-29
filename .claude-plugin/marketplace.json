@@ -291,8 +291,8 @@
     },
     {
       "name": "reopen-sessions",
-      "description": "Reopens in new terminal tabs the sessions that were running before a crash, or those about a topic you name.",
-      "version": "1.0.1",
+      "description": "Reopens in new terminal tabs the sessions that were running before a crash, or those about a topic you name, in whatever terminal or app you use.",
+      "version": "1.1.0",
       "category": "productivity",
       "source": ".",
       "strict": false,

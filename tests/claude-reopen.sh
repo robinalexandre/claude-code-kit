@@ -6,7 +6,7 @@ KIT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 . "$KIT/hooks/lib/jq.sh"
 T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT
-export HOME="$T/home" CLAUDE_REOPEN_ECHO=1
+export HOME="$T/home" CLAUDE_REOPEN_ECHO=1 CLAUDE_REOPEN_APP=
 unset CLAUDE_CONFIG_DIR TERM_PROGRAM KITTY_WINDOW_ID WT_SESSION GNOME_TERMINAL_SCREEN CLAUDE_REOPEN_TERMINAL
 P="$HOME/.claude/projects/p"
 mkdir -p "$P" "$HOME/.claude/sessions" "$T/my app" "$T/other"
@@ -108,6 +108,15 @@ check "windows terminal: a tab in the repo's named window" 'grep -q "^wt.exe -w 
 
 out=$(KITTY_WINDOW_ID=1 R aaaaaaaa)
 check "kitty: the repo's first session opens a window" 'grep -q "^kitty @ launch --type=os-window --cwd=.*my app claude --resume" <<< "$out"'
+
+out=$(CLAUDE_REOPEN_APP=Ghostty R aaaaaaaa)
+check "no variable: the app it runs under picks the terminal" 'grep -q "new window" <<< "$out"'
+out=$(TERM_PROGRAM=iTerm.app CLAUDE_REOPEN_APP=Ghostty R aaaaaaaa)
+check "the terminal's variables win over the app" 'grep -q "create window" <<< "$out"'
+out=$(CLAUDE_REOPEN_APP=JustSessions R abab7777 aaaaaaaa)
+check "justsessions: says it reopens its own tabs, then the commands" 'grep -q "reopens by itself" <<< "$out" && grep -q "Resume" <<< "$out" && grep -q "^cd .* && claude --resume aaaaaaaa" <<< "$out" && ! grep -q osascript <<< "$out"'
+out=$(CLAUDE_REOPEN_APP=WebStorm R aaaaaaaa)
+check "an app it cannot drive is named, with the commands" 'grep -q "^WebStorm cannot be told to open tabs" <<< "$out" && grep -q "claude --resume aaaaaaaa" <<< "$out"'
 
 out=$(R --list '../x' 2>&1); code=$?
 check "an id with anything but hex digits and dashes is refused" '[ $code = 2 ] && grep -q "Not a session id" <<< "$out"'

@@ -12,10 +12,13 @@
 #   claude-reopen.sh <id>...          these sessions (full id or its first 8 characters)
 #   claude-reopen.sh --find <text>    sessions of any age whose title or prompts mention it
 #   claude-reopen.sh --terminal <t>   ghostty, iterm, terminal (Terminal.app), wezterm, kitty,
-#                                     wt (Windows Terminal), gnome-terminal, or print
+#                                     wt (Windows Terminal), gnome-terminal, justsessions, or print
 #
-# The terminal is the one this runs in, else CLAUDE_REOPEN_TERMINAL; print shows the commands.
-# CLAUDE_REOPEN_ECHO=1 prints what would be launched instead of launching it (tests).
+# The terminal is CLAUDE_REOPEN_TERMINAL, else the one this runs in: from its variables, else from
+# the app this process runs under (macOS), so an IDE, JustSessions or any other app is named too.
+# An app it cannot open tabs in gets the commands to run instead (print).
+# CLAUDE_REOPEN_ECHO=1 prints what would be launched instead of launching it, and
+# CLAUDE_REOPEN_APP stands for the app found above, "" for none (tests).
 set -u
 SK=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 if [ -f "$SK/../../hooks/lib/jq.sh" ]; then
@@ -62,8 +65,35 @@ if [ -z "$terminal" ]; then
   if [ -n "${KITTY_WINDOW_ID:-}" ]; then terminal=kitty
   elif [ -n "${WT_SESSION:-}" ]; then terminal=wt
   elif [ -n "${GNOME_TERMINAL_SCREEN:-}" ]; then terminal=gnome-terminal
-  else terminal=print
   fi
+fi
+
+# The outermost .app of the first ancestor run from an app bundle (macOS)
+parent_app() {
+  local pid=$$ i=0 cmd
+  while [ $i -lt 15 ] && [ "${pid:-0}" -gt 1 ] 2>/dev/null; do
+    cmd=$(ps -o comm= -p "$pid" 2>/dev/null)
+    case "$cmd" in
+      *.app/Contents/*) cmd=${cmd%%.app/*}; printf '%s' "${cmd##*/}"; return ;;
+    esac
+    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+    i=$((i + 1))
+  done
+}
+app=
+if [ -z "$terminal" ]; then
+  if [ -n "${CLAUDE_REOPEN_APP+set}" ]; then app=$CLAUDE_REOPEN_APP
+  elif [ "$(uname -s)" = Darwin ]; then app=$(parent_app)
+  fi
+  case "$app" in
+    Ghostty) terminal=ghostty ;;
+    iTerm|iTerm2) terminal=iterm ;;
+    Terminal) terminal=terminal ;;
+    WezTerm) terminal=wezterm ;;
+    kitty) terminal=kitty ;;
+    JustSessions) terminal=justsessions ;;
+    *) terminal=print ;;
+  esac
 fi
 
 is_live() {
@@ -187,6 +217,14 @@ run() {
 as_quote() { local s=${1//\\/\\\\}; printf '"%s"' "${s//\"/\\\"}"; }
 sh_quote() { local q="'\\''"; printf "'%s'" "${1//\'/$q}"; }
 resume_cmd() { printf '%s --resume %s' "$CLAUDE_BIN" "$1"; }
+print_cmds() {
+  local i=0
+  while [ $i -lt $n ]; do
+    [ "${firsts[$i]}" = 1 ] && echo "# ${groups[$i]/#$HOME/~}"
+    echo "cd $(sh_quote "${dirs[$i]}") && $(resume_cmd "${sids[$i]}")"
+    i=$((i + 1))
+  done
+}
 
 n=${#sids[@]}
 
@@ -347,19 +385,27 @@ tell application \"Terminal\" to do script $(as_quote "$cmd") in selected tab of
       i=$((i + 1))
     done
     ;;
+  justsessions)
+    # JustSessions takes no command from outside (no URL scheme, AppleScript or CLI)
+    echo
+    echo "JustSessions reopens by itself the tabs it had when it quit (Settings > General)."
+    echo "For the others, in Projects: double-click the session, or select it and press Resume."
+    echo "Or run each of these in a plain terminal tab of JustSessions:"
+    print_cmds
+    exit 0
+    ;;
   print)
     echo
-    echo "No terminal I can open tabs in. Run each of these in its own tab:"
-    i=0
-    while [ $i -lt $n ]; do
-      [ "${firsts[$i]}" = 1 ] && echo "# ${groups[$i]/#$HOME/~}"
-      echo "cd $(sh_quote "${dirs[$i]}") && $(resume_cmd "${sids[$i]}")"
-      i=$((i + 1))
-    done
+    if [ -n "$app" ]; then
+      echo "$app cannot be told to open tabs. Run each of these in its own tab:"
+    else
+      echo "No terminal I can open tabs in. Run each of these in its own tab:"
+    fi
+    print_cmds
     exit 0
     ;;
   *)
-    echo "Unknown terminal: $terminal (ghostty, iterm, terminal, wezterm, kitty, wt, gnome-terminal, print)" >&2
+    echo "Unknown terminal: $terminal (ghostty, iterm, terminal, wezterm, kitty, wt, gnome-terminal, justsessions, print)" >&2
     exit 2
     ;;
 esac
