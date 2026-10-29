@@ -156,6 +156,151 @@
       }
     },
     {
+      "name": "tab-status",
+      "description": "Shows each session's state in its terminal tab (🟡 working, 🔴 waiting for you, 🟢 done, ❌ failed) with its repo and title, and rings the bell when it needs you.",
+      "version": "1.0.0",
+      "category": "productivity",
+      "source": ".",
+      "strict": false,
+      "skills": [
+        "./hooks"
+      ],
+      "hooks": {
+        "SessionStart": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/tab-status.sh\" start 2>/dev/null || true",
+                "timeout": 10,
+                "async": true
+              },
+              {
+                "type": "command",
+                "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/tab-status.sh\" check 2>/dev/null || true",
+                "timeout": 5
+              }
+            ]
+          }
+        ],
+        "UserPromptSubmit": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/tab-status.sh\" working 2>/dev/null || true",
+                "timeout": 10,
+                "async": true
+              }
+            ]
+          }
+        ],
+        "PreToolUse": [
+          {
+            "matcher": "AskUserQuestion",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/tab-status.sh\" waiting 2>/dev/null || true",
+                "timeout": 5
+              }
+            ]
+          }
+        ],
+        "PermissionRequest": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/tab-status.sh\" waiting 2>/dev/null || true",
+                "timeout": 5
+              }
+            ]
+          }
+        ],
+        "Notification": [
+          {
+            "matcher": "elicitation_dialog",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/tab-status.sh\" waiting 2>/dev/null || true",
+                "timeout": 5
+              }
+            ]
+          }
+        ],
+        "PostToolUse": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/tab-status.sh\" working 2>/dev/null || true",
+                "timeout": 10,
+                "async": true
+              }
+            ]
+          }
+        ],
+        "PermissionDenied": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/tab-status.sh\" working 2>/dev/null || true",
+                "timeout": 10,
+                "async": true
+              }
+            ]
+          }
+        ],
+        "Stop": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/tab-status.sh\" done 2>/dev/null || true",
+                "timeout": 5
+              }
+            ]
+          }
+        ],
+        "StopFailure": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/tab-status.sh\" error 2>/dev/null || true",
+                "timeout": 5
+              }
+            ]
+          }
+        ],
+        "SessionEnd": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/tab-status.sh\" end 2>/dev/null || true",
+                "timeout": 5
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "reopen-sessions",
+      "description": "Reopens in new terminal tabs the sessions that were running before a crash, or those about a topic you name.",
+      "version": "1.0.0",
+      "category": "productivity",
+      "source": ".",
+      "strict": false,
+      "skills": [
+        "./skills/reopen-sessions"
+      ]
+    },
+    {
       "name": "session-registry",
       "description": "Offers to resume the sessions left open in a terminal tab, by title and brief, with a checkbox picker (zsh, JetBrains or Ghostty terminals).",
       "version": "1.2.2",

@@ -40,11 +40,13 @@ jobs:
         run: bash tests/plugin-versions.sh "${BASE:-origin/main}"
       - name: Every plugin installed and run
         run: bash tests/plugins.sh
-      - name: Reminders, handoffs, inventory and the sync's install
+      - name: Reminders, handoffs, reopen-sessions, tab-status, inventory and the sync's install
         run: |
           bash tests/reminders.sh
           bash tests/reminders-encrypted.sh
           bash tests/handoff.sh
+          bash tests/claude-reopen.sh
+          bash tests/tab-status.sh
           bash tests/inventory.sh
           bash tests/sync-install.sh
           bash tests/kit-answers.sh

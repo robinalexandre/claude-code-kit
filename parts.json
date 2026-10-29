@@ -125,6 +125,18 @@
       "who": "zsh users (JetBrains or Ghostty terminals)."
     },
     {
+      "name": "reopen-sessions",
+      "kind": "skill",
+      "group": "base",
+      "tools": [
+        "jq"
+      ],
+      "what": "Reopens, one terminal tab each, the sessions that were running before the terminal or the IDE crashed, or those about a topic you name, listed newest first by title.",
+      "why": "A crash with five sessions open costs one command instead of five resumes looked up by hand.",
+      "when": "\"Reopen my sessions\", \"my terminal crashed\", or claude-reopen.sh in a terminal.",
+      "who": "Anyone using Ghostty, iTerm, Terminal.app, WezTerm, kitty, Windows Terminal or GNOME Terminal (others get the commands to paste)."
+    },
+    {
       "name": "drift-check",
       "kind": "mod",
       "group": "base",
@@ -141,6 +153,19 @@
       "why": "Same as drift-check, for setups without mods.",
       "when": "After each reply.",
       "who": "Anyone who doesn't load mods."
+    },
+    {
+      "name": "tab-status",
+      "kind": "hook",
+      "group": "base",
+      "os": [
+        "darwin",
+        "linux"
+      ],
+      "what": "Shows each session's state in its terminal tab title, before its repo and title: 🟡 working, 🔴 waiting for you (a permission, a question), 🟢 done, ❌ failed; and rings the bell when it needs you, so Ghostty, iTerm, WezTerm, kitty or tmux mark that tab too.",
+      "why": "With several sessions open, you see at a glance which tab needs you, and which repo each one is in.",
+      "when": "Each time a session starts, works, waits for you or stops.",
+      "who": "Anyone with several sessions in terminal tabs."
     },
     {
       "name": "nocturne-notify",

@@ -29,6 +29,7 @@ extras() {
     session-registry) echo hooks/claude-resume-here.zsh hooks/setup/session-registry.sh ;;
     git-identity-guard) echo hooks/setup/git-identity-guard.sh ;;
     recent-activity) echo hooks/setup/recent-activity.sh ;;
+    tab-status) echo hooks/setup/tab-status.sh ;;
     config-sync) echo sync/ ;;
   esac
 }
