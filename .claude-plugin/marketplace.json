@@ -620,6 +620,20 @@
       }
     },
     {
+      "name": "sprint-demo",
+      "description": "One demo video of what a sprint or a list of tickets delivered, for the sprint review or the product owner: in the order of the user's journey, a short description of each ticket on screen, a chapter per ticket, presenter notes (needs ffmpeg).",
+      "version": "1.0.0",
+      "category": "development",
+      "source": ".",
+      "strict": false,
+      "dependencies": [
+        "test-evidence"
+      ],
+      "skills": [
+        "./skills/sprint-demo"
+      ]
+    },
+    {
       "name": "ci-review",
       "description": "An AI review step on CI that checks each PR/MR, with or without the proof it carries, can approve when it works, and answers @claude (GitHub Actions, GitLab CI).",
       "version": "1.1.2",

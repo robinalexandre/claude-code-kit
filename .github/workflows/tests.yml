@@ -68,6 +68,10 @@ jobs:
           "$py" -I tests/pr-watch-push.py
       - name: Knowledge base
         run: bash tests/kb.sh
+      - name: Sprint demo videos
+        run: |
+          case "$RUNNER_OS" in Linux) sudo apt-get install -y ffmpeg ;; macOS) brew install ffmpeg ;; Windows) choco install -y ffmpeg ;; esac
+          bash tests/sprint-demo.sh
       - name: The sync's minute poll
         run: bash tests/sync-poll.sh
       - name: The sync's encrypted folders

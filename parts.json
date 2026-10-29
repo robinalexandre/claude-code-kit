@@ -230,6 +230,22 @@
       "who": "Web developers (needs the chrome-devtools MCP; video needs ffmpeg)."
     },
     {
+      "name": "sprint-demo",
+      "kind": "skill",
+      "group": "dev",
+      "needs": [
+        "test-evidence"
+      ],
+      "tools": [
+        "ffmpeg",
+        "jq"
+      ],
+      "what": "One demo video of what a sprint (or a list of tickets) delivered: tickets in the order of the user's journey, a short description of each on screen, title cards, a chapter per ticket, and presenter notes.",
+      "why": "The sprint review and the product owner see the features working, in an order that tells one story.",
+      "when": "Before a sprint review or a meeting with the PO: \"sprint demo\", \"demo video of these tickets\".",
+      "who": "Teams that demo web apps (records through test-evidence; needs ffmpeg with drawtext)."
+    },
+    {
       "name": "ci-review",
       "kind": "skill",
       "group": "dev",

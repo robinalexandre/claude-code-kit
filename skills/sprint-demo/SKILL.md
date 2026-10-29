@@ -1,0 +1,90 @@
+---
+name: sprint-demo
+description: Builds a demo video of what a sprint delivered, or of the tickets the user names, to show at the sprint demo or send to the product owner. It lists the sprint's tickets, orders them so the demo tells one story, writes a functional scenario per ticket and gets the user's OK, records each flow in the local app, then edits a single video with a short description of each ticket on screen, title cards and a chapter per ticket, plus presenter notes. Use when the user says "sprint demo", "démo de sprint", "demo video", "vidéo de démo", "show the PO", "montrer au PO", "record the sprint", "scénario de démo", or asks for a video of several tickets for stakeholders rather than a reviewer.
+---
+
+# Sprint demo video
+
+For an audience that wants to see what changed for users (the team at the sprint review, a product owner, stakeholders), not proof for a reviewer: that one is the test-evidence skill. This skill records with test-evidence's capture tools and edits with its own script.
+
+`$SK` is the `scripts/` folder of this skill's base directory. Run `bash $SK/demo.sh doctor` once (ffmpeg with drawtext, fonts), and `bash $SK/selftest.sh` after changing a script. Everything goes in one folder per demo, never in a repo: `${SPRINT_DEMO_DIR:-$HOME/demos}/<sprint-or-date>/`, with `takes/`, `clips/`, `plan.md`, `notes.md` and the final video.
+
+## 1. The tickets
+
+- **The sprint** ("since the start of the sprint"): `bash $SK/demo.sh jira-sprint <PROJECT>` lists the open sprint's tickets (`--sprint "<name or id>"` for a closed one, `--jql` for anything else). When the API refuses (401, 429, or no token), `--url` prints the REST path: run it with `fetch()` from a Jira tab of the user's logged-in browser. For the sprint's name and dates (for the intro card), `fetch('/rest/agile/1.0/board?projectKeyOrId=<PROJECT>')`, then `/rest/agile/1.0/board/<id>/sprint?state=active`. Other trackers: `gh issue list --milestone "<name>" --state all` or a GitHub project iteration; Azure Boards with `az boards query --wiql "... [System.IterationPath] = @CurrentIteration"`.
+- **Named tickets**: read each one (summary, description, acceptance criteria) as test-evidence does (`attach.sh jira-get <KEY>`, or the browser).
+
+Keep the done tickets and the ones in review with a PR open; leave out the rest unless the user asks. Sub-tasks go under their story. Show the list (key, title, status, PRs) and let the user remove or add tickets before going on.
+
+## 2. Ask how the video should look
+
+Every run, in one question set (AskUserQuestion), offering the previous demo's answers first (read the last `plan.md` under the demo folder):
+
+- **Output**: one video with a chapter per ticket (default); one video plus one clip per ticket (the clip can go on the ticket); one clip per ticket only.
+- **Text on screen**: a banner on top of each ticket's part with its key, title and one line on what it brings (default); the banner plus a caption for each step; the banner plus captions in a separate `.srt` (the player turns them on, easy to correct); nothing (the presenter talks over it).
+- **Cards**: an intro card (sprint, team, date) and an end card, or none.
+- **Language** of everything on screen and in the notes: the audience's, by default the tickets' language.
+
+## 3. The order: one story, not a list
+
+The video is watched in order, so it must make sense in order. Arrange the tickets the way someone would use the product, not by key, status or who did what:
+
+- Follow the user's journey: what comes first in the app comes first in the video (create, then find, then change, then share).
+- A ticket that builds on another comes right after it, and together they make one sequence in one take when they share the screen: the viewer sees the flow once instead of twice.
+- Group by user need or by screen; put a short section card (`card --title`) between groups when there are three or more groups.
+- Start with the change that matters most to the audience when there is no natural journey, and end on something visible and positive; bug fixes go next to the feature they touch, or together near the end.
+- A ticket with nothing to see (refactor, CI, an internal API) gets no recording: either a line in the notes, or one card with two lines in plain words ("Pages load faster: the list now answers in 0.3 s instead of 2 s") when it matters to the audience.
+
+## 4. The plan, approved before recording
+
+Write `plan.md` in the audience's language and show it to the user. Record nothing before their OK.
+
+```markdown
+# Démo <sprint> (<date>)
+Format: <answers of step 2>. App: <URL>, <repo@branch commit> for each service.
+
+## 1. <journey or group name>
+### ABC-12 · <title> (done, PR !340)
+Banner: "<what the user can now do, one line, no technical words>"
+Data: <the demo data it needs>
+Steps:
+1. <action> → <what the viewer sees>
+2. ...
+Length: ~40 s
+```
+
+The banner line is the need answered, in the audience's words: "Les conseillers voient l'historique des contrats sur la fiche client", not "Ajout de l'endpoint /contracts/history". Take the steps from the acceptance criteria: each criterion that shows on screen gets a step. Keep each ticket under a minute, the whole video under ten.
+
+## 5. Prepare the stage
+
+- The code: tickets in review are not merged yet, so the stack must run what the demo shows. Run their branches from temporary `git worktree`s (or a local branch merging them) rather than switching the user's checkouts, and put everything back afterwards. Write down each service's branch and commit in `plan.md`, and check them again after recording.
+- The data: believable demo data, never real customers or personal data, never a production environment. Follow the user's rules for testing apps: ask before using a new app and before the first write to its database (creating demo data is a write).
+- The browser: a new tab of its own (test-evidence's browser tools), `resize_page` to 1440×900, zoom 100 %, dev tools closed, no notifications; log in as a demo user whose name can be seen. Nothing personal in the URL bar or on screen.
+
+## 6. Record
+
+One take per ticket, or per sequence of tickets that share a screen, in `takes/NN-<KEY>.mp4` numbered in the plan's order. Use test-evidence's capture: `screencast_start`/`screencast_stop` for a browser page (its notes on trimming the idle end apply), `capture.sh record --window` for a desktop app.
+
+Play the scenario at a human pace: `wait_for` each result, then pause about 1.5 s on it so the viewer reads it; type the text of a form at a typing pace (`type_text`), and scroll rather than jump. Note when each step starts (`date +%s` before the step, minus the take's start; whole seconds are enough) to place captions later. If a step goes wrong, record the take again rather than editing around it.
+
+## 7. Edit
+
+```sh
+bash $SK/demo.sh card  clips/00-intro.mp4 --title "Démo du sprint 12" --text "Équipe X · 29 octobre"
+bash $SK/demo.sh clip  takes/01-ABC-12.mp4 clips/01-ABC-12.mp4 --title "ABC-12 · Historique des contrats" \
+     --text "Les conseillers voient l'historique des contrats sur la fiche client" --from 1.2 --to 38 [--cues cues.txt [--srt]]
+bash $SK/demo.sh card  clips/02-section.mp4 --title "Rendez-vous" --seconds 3
+bash $SK/demo.sh join  demo-sprint-12.mp4 clips/00-intro.mp4 clips/01-ABC-12.mp4 clips/02-section.mp4 ...
+```
+
+`clip` scales the take under the banner (nothing of the app is hidden), trims it and draws the captions; a cue file has one `<start s>|<end s>|<text>` line per step, in the take's time. `join` joins the clips in the order given, which is the plan's, makes one chapter per clip named after its title, and merges the clips' `.srt` files. All sizes default to 1920×1080 (`--size`).
+
+## 8. Check it like the audience will
+
+Before showing anything: extract a frame from the middle of each chapter (`ffprobe -show_chapters`, then `ffmpeg -ss <t> -i <video> -frames:v 1 <png>`) and Read each one. The banner must be readable and match the part it sits on, the result visible, nothing personal or secret on screen. Check the total length and the size (under 100 MB for an e-mail or a Teams message, else share a link).
+
+## 9. Presenter notes and delivery
+
+Write `notes.md` in the audience's language: the running order with each chapter's start time, for each ticket two or three things to say (the need, what changed for users, what's next or what's left), the ticket and PR links, and the questions to ask the product owner.
+
+Show the user the folder: the video, the notes, the plan. Nothing leaves the machine without their yes: when they want a ticket's clip on the ticket, attach it with test-evidence's `attach.sh jira <KEY> <clip>`. Keep the folder; it's the user's to delete.
