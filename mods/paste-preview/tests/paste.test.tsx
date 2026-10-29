@@ -31,7 +31,7 @@ const whiteBmp = (width: number, height: number) => {
   return btoa(String.fromCharCode(...bytes))
 }
 
-const WINDOWS = { OS: 'Windows_NT', TEMP: 'C:\\Temp', TERM_PROGRAM: 'ghostty' }
+const WINDOWS = { OS: 'Windows_NT', SystemRoot: 'C:\\WINDOWS', TEMP: 'C:\\Temp', TERM_PROGRAM: 'ghostty' }
 
 const answerBeneath = (
   on: On,
@@ -46,7 +46,7 @@ const answerBeneath = (
   on('process.run', ($, e) => {
     const [program, ...rest] = e.argv
 
-    if (program === 'powershell.exe') {
+    if (program === 'C:/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe') {
       const script = rest.at(-1) ?? ''
 
       if (script.includes('GetText')) {

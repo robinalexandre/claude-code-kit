@@ -63,10 +63,12 @@ const sizeOf = (width?: string, height?: string): Size | null => {
 
 const quoted = (text: string) => `'${text.replace(/'/g, "''")}'`
 
-const powershell = ($: EngineInterface, lines: string[], stdin?: string) =>
+// By its full path: Windows looks for a bare name in the current folder first, where a repo could
+// plant a powershell.exe.
+const powershell = async ($: EngineInterface, lines: string[], stdin?: string) =>
   $.process.run(
     [
-      'powershell.exe',
+      `${((await $.env.get('SystemRoot')) ?? 'C:\\Windows').replace(/\\/g, '/')}/System32/WindowsPowerShell/v1.0/powershell.exe`,
       '-NoProfile',
       '-NonInteractive',
       '-STA',

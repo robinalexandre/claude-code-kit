@@ -1465,6 +1465,25 @@ test('a failing pr-watch is shown in the pane', async ($, on) => {
   expect(await pane.find({ text: 'pr-watch: Python 3.9+ not found' })).toBeDefined()
 })
 
+test('on Windows Git Bash is run by its full path, never a bare bash a repo could plant', async ($, on) => {
+  const calls: string[][] = []
+  mock.clock(on)
+  on('env.get', ($, e) => ({ value: e.name === 'OS' ? 'Windows_NT' : undefined }))
+  on('process.run', ($, e) => {
+    calls.push([...e.argv])
+
+    return e.argv[0] === 'git' ? ran(0, 'C:/Program Files/Git/mingw64/libexec/git-core\n') : ran(0, '[]')
+  })
+  on('ui.render', () => Fragment({}))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+
+  await $.command.run(RUN)
+  await mountPane($, 'terminal')
+
+  expect(calls[1]).toEqual(['C:/Program Files/Git/bin/bash.exe', '-c', 'exit 0'])
+  expect(calls.some(argv => argv[0] === 'bash')).toBe(false)
+})
+
 test('no Git Bash anywhere is said in the pane and the band shows PRs ?', async ($, on) => {
   mock.clock(on)
   on('env.get', () => ({ value: undefined }))

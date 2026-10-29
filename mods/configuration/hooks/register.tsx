@@ -223,7 +223,8 @@ const loadSync = async ($: EngineInterface, error?: string) => {
 }
 
 // On Windows, Claude Code's own PATH has Git's cmd folder (git) but not bash: Git Bash is found
-// from the variable Claude Code reads for it, then from git's own install folder.
+// from the variable Claude Code reads for it, then from git's own install folder. There a bare name
+// comes last: Windows looks for it in the current folder first, where a repo could plant a bash.exe.
 let bashFound: string | undefined
 
 const runs = async ($: EngineInterface, argv: string[]) => {
@@ -245,12 +246,11 @@ const bash = async ($: EngineInterface) => {
 
     return execPath?.exitCode === 0 && root !== '' ? `${root}/bin/bash.exe` : ''
   }
-  const candidates = [
-    async () => slashed((await $.env.get('CLAUDE_CODE_GIT_BASH_PATH')) ?? ''),
-    async () => 'bash',
-    fromGit,
-    async () => `${slashed((await $.env.get('ProgramFiles')) ?? 'C:/Program Files')}/Git/bin/bash.exe`,
-  ]
+  const fromEnv = async () => slashed((await $.env.get('CLAUDE_CODE_GIT_BASH_PATH')) ?? '')
+  const fromFiles = async () => `${slashed((await $.env.get('ProgramFiles')) ?? 'C:/Program Files')}/Git/bin/bash.exe`
+  const bare = async () => 'bash'
+  const candidates =
+    (await $.env.get('OS')) === 'Windows_NT' ? [fromEnv, fromGit, fromFiles, bare] : [fromEnv, bare, fromGit, fromFiles]
 
   for (const candidate of candidates) {
     const path = await candidate()
@@ -345,7 +345,8 @@ const onBattery = async ($: EngineInterface) => {
   }
 
   if (powerWay === undefined || powerWay === 'windows') {
-    const status = await ran($, ['powershell', '-NoProfile', '-NonInteractive', '-Command', '(Get-CimInstance Win32_Battery).BatteryStatus'])
+    const system = slashed((await $.env.get('SystemRoot')) ?? 'C:/Windows')
+    const status = await ran($, [`${system}/System32/WindowsPowerShell/v1.0/powershell.exe`, '-NoProfile', '-NonInteractive', '-Command', '(Get-CimInstance Win32_Battery).BatteryStatus'])
 
     if (status !== undefined) {
       powerWay = 'windows'

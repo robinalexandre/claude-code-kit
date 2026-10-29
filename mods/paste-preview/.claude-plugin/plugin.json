@@ -1,6 +1,6 @@
 {
   "name": "paste-preview",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Shows pasted text in full in the prompt box and the transcript, and previews pasted images above the prompt and under the sent message.",
   "types": "./types/index.d.ts",
   "author": {
