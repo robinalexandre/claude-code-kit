@@ -62,6 +62,15 @@ From a terminal it's the same with `claude plugin marketplace add …` and `clau
 
 By hand: `claude plugin marketplace update claude-code-kit`, then `claude plugin update <part>@claude-code-kit`.
 
+**Inside a company:** a team that may not run code straight from GitHub can serve the parts it uses from a git repo of its own (Azure DevOps, GitLab, a private GitHub repo…). Copy those parts there, plus a `.claude-plugin/marketplace.json` that keeps only their plugins, under a name of your own:
+
+```sh
+jq '.name = "team-kit" | .plugins |= map(select(.name | IN("drift-check", "learn", "pr-pane")))' \
+  .claude-plugin/marketplace.json > ../team-kit/.claude-plugin/marketplace.json
+```
+
+Every part finds its marketplace by that name, so nothing else changes. Teammates add it with `claude plugin marketplace add https://<your git host>/<repo>` (git asks for the same sign-in as a clone) and turn on its auto-update as above: an update then reaches them only once someone has reviewed it and pushed it to that repo.
+
 **Setup:** a part that needs a few answers (the status line in your settings, the emails for the email guard, where pr-watch looks, the phone for reminders, your private repo for config-sync, the zsh line for session-registry) says so at the first session after install, and Claude gives you the command to run in your terminal; it stops asking once it's done or you say no. Options: the language of the team rules and the opening text of drift-check are asked when you install from `/plugin`, and changed with `claude plugin configure <part>@claude-code-kit`.
 
 ### With install.sh

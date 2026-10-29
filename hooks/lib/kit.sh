@@ -1,8 +1,23 @@
 # Sourced by the parts that look for another part or record their setup, whichever way the kit was
-# installed: copied into ~/.claude by install.sh, or as plugins from the claude-code-kit marketplace.
+# installed: copied into ~/.claude by install.sh, or as plugins from the kit's marketplace.
 # Needs jq (hooks/lib/jq.sh).
 
+# The marketplace's name, from the marketplace.json beside this file (a company's mirror of the kit
+# serves it under its own name); read without jq, since every hook start sources this file. The
+# marketplace's own name is the first "name" in the file. A copy in ~/.claude has none beside it.
 KIT_MARKETPLACE=claude-code-kit
+kit_market_file="${BASH_SOURCE[0]%/*}/../../.claude-plugin/marketplace.json"
+if [ -f "$kit_market_file" ]; then
+  while IFS= read -r kit_line; do
+    case "$kit_line" in *'"name": "'*)
+      kit_line=${kit_line#*\"name\": \"}
+      KIT_MARKETPLACE=${kit_line%%\"*}
+      break
+      ;;
+    esac
+  done < "$kit_market_file"
+fi
+unset kit_market_file kit_line
 
 # kit_plugin_root PART: the folder Claude Code installed PART's plugin in; nothing when it isn't one.
 kit_plugin_root() {

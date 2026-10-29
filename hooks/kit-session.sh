@@ -17,12 +17,14 @@ if [ "${2:-}" = decline ]; then
   exit 0
 fi
 
-# dnd is recommended once, to whoever has a pane it quiets as a plugin and not dnd itself.
-if [ -z "$(kit_setup_state dnd-recommended)" ] && ! kit_plugin_root dnd > /dev/null; then
+# dnd is recommended once, to whoever has a pane it quiets as a plugin and not dnd itself, when
+# this marketplace offers it.
+if [ -z "$(kit_setup_state dnd-recommended)" ] && ! kit_plugin_root dnd > /dev/null &&
+  grep -q '"name": "dnd"' "$ROOT/.claude-plugin/marketplace.json" 2> /dev/null; then
   for pane in recent-prompts pr-pane reminders-handoffs; do
     kit_plugin_root "$pane" > /dev/null || continue
     kit_setup_mark dnd-recommended yes
-    printf 'claude-code-kit: %s It is not installed. Once in this session, when it fits, recommend it to the user (/plugin install dnd@claude-code-kit), saying why from the above; it is not recommended again.\n' "$KIT_DND_WHY"
+    printf '%s: %s It is not installed. Once in this session, when it fits, recommend it to the user (/plugin install dnd@%s), saying why from the above; it is not recommended again.\n' "$KIT_MARKETPLACE" "$KIT_DND_WHY" "$KIT_MARKETPLACE"
     break
   done
 fi
@@ -91,7 +93,7 @@ fi
 
 cmd="bash \"$(kit_path "$ROOT/$setup")\""
 [ -n "$mirror" ] && [ -n "$DATA" ] && cmd="KIT_HOME=\"$(kit_path "$DATA")\" $cmd"
-printf 'claude-code-kit: the %s plugin is installed but not set up on this computer yet. ' "$part"
+printf '%s: the %s plugin is installed but not set up on this computer yet. ' "$KIT_MARKETPLACE" "$part"
 printf 'Early in this session, offer the user to run its setup in their own terminal (it asks a few questions): %s ' "$cmd"
 printf 'If they would rather not, run: bash "%s" %s decline\n' "$(kit_path "$ROOT/hooks/kit-session.sh")" "$part"
 [ -z "$required" ] && kit_setup_mark "$part" offered

@@ -73,7 +73,7 @@ offered() {
 # Installed on this computer before: copied by this installer, or as a plugin of the kit's marketplace.
 BEFORE=$({
   jq -r '.parts // {} | keys[]' "$RECORD" 2> /dev/null
-  jq -r '.plugins // {} | keys[] | select(endswith("@claude-code-kit")) | sub("@.*"; "")' \
+  jq -r --arg m "@$KIT_MARKETPLACE" '.plugins // {} | keys[] | select(endswith($m)) | sub("@.*"; "")' \
     "${CLAUDE_CONFIG_DIR:-$CLAUDE}/plugins/installed_plugins.json" 2> /dev/null
 } | sort -u)
 # with_of PART: the parts PART goes beside, one per line; nothing when it stands alone.
@@ -387,13 +387,13 @@ while :; do
 done
 picked=$(while IFS=$'\t' read -r name _; do if grep -qx "$name" <<< "$picked"; then echo "$name"; fi; done <<< "$PARTS")
 
-# A part already installed as a plugin from the claude-code-kit marketplace stays a plugin: a copy too
+# A part already installed as a plugin from the kit's marketplace stays a plugin: a copy too
 # would run its hooks twice.
-plugins=$(jq -r '.plugins // {} | keys[] | select(endswith("@claude-code-kit")) | sub("@.*"; "")' \
+plugins=$(jq -r --arg m "@$KIT_MARKETPLACE" '.plugins // {} | keys[] | select(endswith($m)) | sub("@.*"; "")' \
   "${CLAUDE_CONFIG_DIR:-$CLAUDE}/plugins/installed_plugins.json" 2> /dev/null || true)
 for p in $plugins; do
   if grep -qx "$p" <<< "$picked"; then
-    echo "Skipping $p: installed as a plugin (claude plugin uninstall $p@claude-code-kit to copy it instead)."
+    echo "Skipping $p: installed as a plugin (claude plugin uninstall $p@$KIT_MARKETPLACE to copy it instead)."
     picked=$(grep -vx "$p" <<< "$picked" || true)
   fi
 done
