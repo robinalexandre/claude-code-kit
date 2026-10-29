@@ -233,10 +233,10 @@
       "name": "ci-review",
       "kind": "skill",
       "group": "dev",
-      "what": "An AI review step on CI that checks each PR/MR against its proof (GitHub Actions, GitLab CI).",
+      "what": "An AI review step on CI that checks each PR/MR, with or without proof, can approve when it works, and answers @claude (GitHub Actions, GitLab CI).",
       "why": "Nobody reviews a PR by hand just to check that it works.",
       "when": "Once per repo: \"set up AI review on CI\".",
-      "who": "Teams with CI and an API key or a cloud provider."
+      "who": "Teams with CI and a Claude seat, an API key or a cloud provider."
     },
     {
       "name": "capability-builder",

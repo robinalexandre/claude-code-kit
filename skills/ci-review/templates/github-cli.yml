@@ -1,52 +1,132 @@
 # .github/workflows/ai-review.yml
-# Review with a proof check, through the CLI in headless mode and review-prompt.md.
-# Secret: ANTHROPIC_API_KEY. The job's own GITHUB_TOKEN reads the PR and posts the comment.
+# Review through the CLI in headless mode and review-prompt.md, with an optional automatic approval.
+#
+# Auth, one secret: CLAUDE_CODE_OAUTH_TOKEN (a Claude Pro, Max, Team or Enterprise seat: `claude setup-token`,
+# valid a year, billed to that person's subscription, stops working if they lose the seat) or ANTHROPIC_API_KEY
+# (Console billing). The job's own GITHUB_TOKEN reads the PR and posts the review.
+# Automatic approval (AUTO_APPROVE "true"): the repo must allow it, Settings > Actions > General >
+# "Allow GitHub Actions to create and approve pull requests". The job approves on "Works", requests changes on
+# "Doesn't work", and withdraws its earlier approval on anything but "Works". It never merges. To keep a human in
+# the loop, make main's protection require one more approval than the bot gives (2 approvals: the bot and a person).
+# The review prompt is read from the base branch, and a PR that changes the workflows, the prompt or the agent's
+# own settings (.github/, CLAUDE.md, .claude/, .mcp.json) is never approved by the bot: a PR could otherwise
+# rewrite the rules it is judged by.
 # Another agent CLI works the same way: replace the "Review" command, keep the prompt file.
-# The PR's text and diff can carry instructions aimed at the agent, so the agent never
-# holds the GitHub token, reads only the workspace, and its reply is checked for the key.
+#
+# The PR's text, diff and files can carry instructions aimed at the agent, so the agent never holds the GitHub
+# token, may only read the workspace, and its reply is checked for the secrets. --bare would also skip the PR
+# branch's own hooks and MCP servers, but it ignores CLAUDE_CODE_OAUTH_TOKEN, so the job deletes them instead.
 name: AI review
 
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
 
+concurrency:
+  group: ai-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   pull-requests: write
 
+env:
+  AUTO_APPROVE: "false"
+
 jobs:
   review:
-    if: ${{ !github.event.pull_request.draft }}
+    # Secrets don't reach PRs from forks, and drafts aren't ready.
+    if: ${{ !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Drop the PR branch's agent settings (hooks, MCP servers)
+        run: rm -rf .claude .mcp.json
       - name: Install the CLI
         run: |
           curl -fsSL https://claude.ai/install.sh | bash
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: Fetch the PR
+      - name: Fetch the PR and the review prompt
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          BASE: ${{ github.event.pull_request.base.ref }}
         run: |
           gh pr view "$PR" --json title,body,comments > pr.json
           gh pr diff "$PR" > pr.diff
+          approvable=true
+          if gh api "repos/$REPO/contents/.github/ai-review/review-prompt.md?ref=$BASE" --jq .content |
+            base64 -d > "$RUNNER_TEMP/review-prompt.md"; then
+            echo "Review prompt read from $BASE."
+          else
+            # First setup only: the base branch has no prompt yet.
+            cp .github/ai-review/review-prompt.md "$RUNNER_TEMP/review-prompt.md"
+            approvable=false
+          fi
+          gh pr diff "$PR" --name-only > "$RUNNER_TEMP/files.txt"
+          if grep -qE '^(\.github/|\.claude/|\.mcp\.json$|CLAUDE\.md$)|/CLAUDE\.md$' "$RUNNER_TEMP/files.txt"; then
+            approvable=false
+          fi
+          echo "$approvable" > "$RUNNER_TEMP/approvable"
       - name: Review
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
-          claude -p --bare --permission-mode dontAsk --max-turns 20 \
-            --allowedTools "Read(./**)" "Grep" "Glob" --disallowedTools "Read(//proc/**)" "Read(~/**)" \
-            "Pull request: read pr.json (title, description with the proof links, comments) and pr.diff. Reply with the comment text only. $(cat .github/ai-review/review-prompt.md)" \
-            > review.md
-          if grep -qF -- "$ANTHROPIC_API_KEY" review.md; then
-            echo "The review quotes the API key; not posted." >&2
+          # A secret that isn't set arrives as an empty variable; leave only the one that is.
+          [ -n "$ANTHROPIC_API_KEY" ] || unset ANTHROPIC_API_KEY
+          [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] || unset CLAUDE_CODE_OAUTH_TOKEN
+          schema='{"type":"object","properties":{"verdict":{"type":"string","enum":["works","doesnt_work","cant_tell"]},"comment":{"type":"string"}},"required":["verdict","comment"]}'
+          claude -p --permission-mode dontAsk --max-turns 30 --output-format json --json-schema "$schema" \
+            --allowedTools "Read(./**)" "Grep" "Glob" \
+            --disallowedTools "Read(//proc/**)" "Read(//sys/**)" "Read(//tmp/**)" "Read(/$RUNNER_TEMP/**)" \
+              "Read(~/.claude/**)" "Read(~/.config/**)" "Read(~/.local/**)" \
+            "Pull request: read pr.json (title, description, comments) and pr.diff. Answer with the verdict and the comment: the comment's first line is the verdict line. $(cat "$RUNNER_TEMP/review-prompt.md")" \
+            > result.json
+          jq -r '.structured_output.comment // empty' result.json > review.md
+          jq -r '.structured_output.verdict // "cant_tell"' result.json > verdict.txt
+          if [ ! -s review.md ]; then
+            echo "The review produced no comment." >&2
+            jq -r '.result // empty' result.json >&2
             exit 1
           fi
+          for secret in "${ANTHROPIC_API_KEY:-}" "${CLAUDE_CODE_OAUTH_TOKEN:-}"; do
+            if [ -n "$secret" ] && grep -qF -- "$secret" review.md; then
+              echo "The review quotes a secret; not posted." >&2
+              exit 1
+            fi
+          done
       - name: Post
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
-        run: gh pr comment "$PR" --body-file review.md
+          REPO: ${{ github.repository }}
+        run: |
+          verdict=$(cat verdict.txt)
+          if [ "$AUTO_APPROVE" != "true" ]; then
+            gh pr comment "$PR" --body-file review.md
+            exit 0
+          fi
+          if [ "$verdict" = "works" ] && [ "$(cat "$RUNNER_TEMP/approvable")" = "true" ]; then
+            gh pr review "$PR" --approve --body-file review.md
+            exit 0
+          fi
+          if [ "$verdict" = "works" ]; then
+            printf '\n\n_Not approved automatically: this PR changes the CI, the review prompt or the agent settings, so a person approves it._\n' >> review.md
+          fi
+          # An approval from an earlier push no longer holds.
+          gh api "repos/$REPO/pulls/$PR/reviews" --paginate \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and .state == "APPROVED") | .id' |
+            while read -r id; do
+              gh api -X PUT "repos/$REPO/pulls/$PR/reviews/$id/dismissals" \
+                -f message="Withdrawn: the AI review of the latest push doesn't approve it." -f event=DISMISS
+            done
+          if [ "$verdict" = "doesnt_work" ]; then
+            gh pr review "$PR" --request-changes --body-file review.md
+          else
+            gh pr comment "$PR" --body-file review.md
+          fi
