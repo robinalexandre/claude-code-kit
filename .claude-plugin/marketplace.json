@@ -636,7 +636,7 @@
     {
       "name": "ci-review",
       "description": "An AI review step on CI that checks each PR/MR, with or without the proof it carries, can approve when it works, and answers @claude (GitHub Actions, GitLab CI).",
-      "version": "1.1.2",
+      "version": "1.1.3",
       "category": "development",
       "source": ".",
       "strict": false,
