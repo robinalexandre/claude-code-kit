@@ -177,6 +177,10 @@ case "$(uname -s)" in
     }
     ;;
   *)
+    # Hooks and launchd start with a bare PATH that misses Homebrew, where git-crypt lives.
+    for d in /opt/homebrew/bin /usr/local/bin /home/linuxbrew/.linuxbrew/bin; do
+      if [ -d "$d" ]; then case ":$PATH:" in *":$d:"*) ;; *) PATH="$PATH:$d" ;; esac; fi
+    done
     HOME_FWD=$HOME
     native_path() { printf '%s' "$1"; }
     unix_path() { printf '%s' "$1"; }
@@ -1314,7 +1318,7 @@ rebase_resolve() {
 }
 
 remote_sync() {
-  local before came
+  local before came out conflicts
   git remote get-url origin > /dev/null 2>&1 || {
     fail "this repo has no remote yet: git -C ~/.claude-sync remote add origin <your private repo's URL>"
     return 1
@@ -1330,9 +1334,14 @@ remote_sync() {
   touch "$STATE/fetched"
   if has_remote_main; then
     before=$(git rev-parse HEAD)
-    if ! git rebase -q origin/main > /dev/null 2>&1 && ! rebase_resolve; then
+    if ! out=$(git rebase -q origin/main 2>&1) && ! rebase_resolve; then
+      conflicts=$(git diff --name-only --diff-filter=U | tr '\n' ' ')
       git rebase --abort > /dev/null 2>&1
-      fail "the same file changed here and on another machine. To fix: in ~/.claude-sync run git rebase origin/main, resolve, git rebase --continue, then bash sync.sh install"
+      if [ -n "$conflicts" ]; then
+        fail "the same file changed here and on another machine (${conflicts% }). To fix: in ~/.claude-sync run git rebase origin/main, resolve, git rebase --continue, then bash sync.sh install"
+      else
+        fail "could not replay this machine's changes on top of the other machines' (not a conflict): $(printf '%s\n' "$out" | grep -v '^ *$' | tail -1)"
+      fi
       return 1
     fi
     if [ "$(git rev-parse HEAD)" != "$before" ]; then
@@ -1493,7 +1502,7 @@ frontmatter() {
 }
 
 start() {
-  local notes="" err="" f from
+  local notes="" err="" hint="" f from
   for f in handoffs/*.md; do
     [ -f "$f" ] || continue
     from=$(frontmatter "$f" from)
@@ -1503,6 +1512,7 @@ start() {
   done
   if [ -f "$STATE/error" ]; then
     err="last failed: $(cat "$STATE/error")"
+    grep -q 'same file changed' "$STATE/error" && hint="First check that it still fails (bash ~/.claude-sync/sync.sh status; a later sync may have settled it). If it does, hand the investigation to a subagent: for each file, find which machine made each side (git log on HEAD and origin/main, the commit subjects name the machine) and what each change does. The subagent resolves what has a clear answer (independent additions on both sides, a generated or state file such as inventory/ or pr-watch/, one side an older copy of the other), finishes the rebase and runs bash sync.sh install. Only conflicts that need a choice (both sides changed the same setting or text differently) come back to the main conversation, with both versions and a recommendation, for the user to decide."
     cp "$STATE/error" "$STATE/told"
   elif [ -f "$STATE/warn" ]; then
     err="warning: $(cat "$STATE/warn")"
@@ -1512,9 +1522,9 @@ start() {
   rm -f "$STATE/pending"
   spawn force
   [ -n "$notes$err" ] || return 0
-  jq -n --arg notes "$notes" --arg err "$err" '
+  jq -n --arg notes "$notes" --arg err "$err" --arg hint "$hint" '
     (if $notes != "" then "Open handoff notes written on another machine. If the user wants to continue one, use the handoff skill." + $notes else "" end) as $ctx
-    | (if $err != "" then "The Claude config sync (~/.claude-sync) " + $err else "" end) as $why
+    | (if $err != "" then "The Claude config sync (~/.claude-sync) " + $err + (if $hint != "" then "\n" + $hint else "" end) else "" end) as $why
     | {hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: ([$ctx, $why] | map(select(. != "")) | join("\n\n"))}}
     + (if $err != "" then {systemMessage: ("⚠️ Claude config sync " + $err)} else {} end)'
 }

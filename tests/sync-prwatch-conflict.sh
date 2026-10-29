@@ -81,6 +81,25 @@ echo "second" > "$B/notes.txt"
 out=$(S "$HB" "$B" now)
 check "a conflict outside pr-watch still stops the sync" '[ -f "$B/.state/error" ] && [[ "$out" == *"the same file changed"* ]]'
 check "and leaves no rebase half done" '! [ -d "$B/.git/rebase-merge" ] && ! [ -d "$B/.git/rebase-apply" ]'
+check "the error names the file" 'grep -q "(notes.txt)" "$B/.state/error"'
+out=$(echo '{}' | S "$HB" "$B" start)
+check "the next session's agent is told to investigate in a subagent and ask only for choices" \
+  'jq -e ".hookSpecificOutput.additionalContext | test(\"subagent\") and test(\"for the user to decide\")" <<< "$out" > /dev/null'
+check "the user's warning stays short" 'jq -e ".systemMessage | test(\"subagent\") | not" <<< "$out" > /dev/null'
+for _ in 1 2 3 4 5 6 7 8 9 10; do sleep 1; [ -d "$B/.state/lock" ] || break; done
+
+git -C "$B" checkout -q -- notes.txt 2> /dev/null
+git -C "$B" reset -q --hard origin/main
+rm -f "$B/.state/error"
+echo "third" > "$A/notes.txt"
+S "$HA" "$A" now > /dev/null
+echo "# More rules" >> "$HB/.claude/CLAUDE.md"
+printf '#!/bin/sh\necho "refusing to rebase" >&2\nexit 1\n' > "$B/.git/hooks/pre-rebase"
+chmod +x "$B/.git/hooks/pre-rebase"
+S "$HB" "$B" now > /dev/null
+check "a rebase that fails without a conflict says so" \
+  'grep -q "not a conflict" "$B/.state/error" && ! grep -q "same file changed" "$B/.state/error"'
+rm "$B/.git/hooks/pre-rebase"
 
 echo "$fails problem(s)"
 exit $((fails > 0))
