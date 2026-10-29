@@ -8,6 +8,8 @@
 #       --cues <file>                             step captions, one per line: <start s>|<end s>|<text>, in the take's time
 #       --srt                                     write the captions to <out>.srt instead of drawing them on the video
 #       --from <s> --to <s>                       trims the take
+#       --pause <s>                               shortens every still screen to <s> seconds (default 1.5: time to read
+#                                                 the result, not to watch the wait between two steps); 0 keeps them
 #   demo.sh card <out.mp4> --title "<title>" [--text "<line>"] [--seconds 4]
 #                                                 a title card (intro, a section, the end)
 #   demo.sh join <out.mp4> <clip.mp4>...          joins the clips, one chapter per clip named after its title; merges
@@ -136,7 +138,7 @@ title_of() { ffprobe -v error -show_entries format_tags=title -of default=nw=1:n
 meta_escape() { printf '%s' "$1" | tr '\n' ' ' | sed 's/[\\=;#]/\\&/g'; }
 
 clip() {
-  local in=${1:?clip needs a take} out=${2:?clip needs an output file} title="" text="" cues="" srt="" from="" to=""
+  local in=${1:?clip needs a take} out=${2:?clip needs an output file} title="" text="" cues="" srt="" from="" to="" pause=1.5
   shift 2
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -146,6 +148,7 @@ clip() {
       --srt) srt=1 ;;
       --from) from=${2?}; shift ;;
       --to) to=${2?}; shift ;;
+      --pause) pause=${2?}; shift ;;
       --size) SIZE=${2?}; shift ;;
       *) die "Unknown option: $1" ;;
     esac
@@ -175,16 +178,44 @@ clip() {
     bh=$(((bh + pad) / 2 * 2))
     filters="$filters,drawbox=x=0:y=$((bh - 4)):w=iw:h=4:color=$ACCENT:t=fill"
   fi
+  local cut=()
+  [ -z "$from" ] || cut+=(-ss "$from")
+  [ -z "$to" ] || cut+=(-to "$to")
+
+  # Still screens longer than $pause (the wait between two steps) keep only their first $pause seconds.
+  # $W/drop lists the cut spans, "start end" in the trimmed take's time.
+  : > "$W/drop"
+  local keep=""
+  if awk -v p="$pause" 'BEGIN { exit !(p > 0) }'; then
+    ffmpeg -hide_banner -nostats ${cut[@]+"${cut[@]}"} -i "$(native "$in")" -map 0:v:0 -vf "fps=$FPS,freezedetect=d=$pause" -f null - 2>&1 |
+      tr -d '\r' | awk -v p="$pause" '
+        /freeze_start:/ { s = $NF + 0; open = 1 }
+        /freeze_end:/ { if (open && $NF - s > p + 0.1) printf "%.3f %.3f\n", s + p, $NF; open = 0 }
+        END { if (open) printf "%.3f 1e9\n", s + p }' > "$W/drop"
+    if [ -s "$W/drop" ]; then
+      keep=$(awk '{ printf "%sbetween(t,%s,%s)", (NR > 1 ? "+" : ""), $1, $2 }' "$W/drop")
+      keep="select='not($keep)',setpts=N/$FPS/TB,"
+    fi
+  fi
+
   ch=$((HEIGHT - bh))
-  vf="scale=$WIDTH:$ch:force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1,pad=$WIDTH:$HEIGHT:(ow-iw)/2:$bh+($ch-ih)/2:color=$BG,fps=$FPS"
+  vf="fps=$FPS,${keep}scale=$WIDTH:$ch:force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1,pad=$WIDTH:$HEIGHT:(ow-iw)/2:$bh+($ch-ih)/2:color=$BG"
   [ -z "$filters" ] || vf="$vf,$filters"
 
   if [ -n "$cues" ]; then
-    tr -d '\r' < "$cues" | awk -F'|' -v from="${from:-0}" 'NF >= 3 {
-      s = $1 - from; e = $2 - from; if (e <= 0) next; if (s < 0) s = 0
-      t = $3; for (i = 4; i <= NF; i++) t = t "|" $i
-      printf "%.3f|%.3f|%s\n", s, e, t
-    }' > "$W/cues"
+    tr -d '\r' < "$cues" | awk -F'|' -v from="${from:-0}" -v dropfile="$W/drop" '
+      BEGIN { while ((getline line < dropfile) > 0) { split(line, d, " "); n++; a[n] = d[1]; b[n] = d[2] } }
+      function moved(t,  i, cut) {
+        cut = 0
+        for (i = 1; i <= n; i++) if (t > a[i]) cut += (t < b[i] ? t : b[i]) - a[i]
+        return t - cut
+      }
+      NF >= 3 {
+        s = $1 - from; e = $2 - from; if (e <= 0) next; if (s < 0) s = 0
+        s = moved(s); e = moved(e); if (e - s < 0.5) e = s + 0.5
+        t = $3; for (i = 4; i <= NF; i++) t = t "|" $i
+        printf "%.3f|%.3f|%s\n", s, e, t
+      }' > "$W/cues"
     if [ -n "$srt" ]; then
       awk -F'|' 'function ts(s,  ms, h, m, x) {
           ms = int(s * 1000 + 0.5); h = int(ms / 3600000); ms -= h * 3600000; m = int(ms / 60000); ms -= m * 60000
@@ -202,9 +233,6 @@ clip() {
   fi
 
   printf ';FFMETADATA1\ntitle=%s\n' "$(meta_escape "${title:-${in##*/}}")" > "$W/meta.txt"
-  local cut=()
-  [ -z "$from" ] || cut+=(-ss "$from")
-  [ -z "$to" ] || cut+=(-to "$to")
   (cd "$W" && ffmpeg -loglevel error -y ${cut[@]+"${cut[@]}"} -i "$(native "$in")" -i meta.txt -map 0:v:0 -map_metadata 1 \
     -vf "$vf" -an -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p -movflags +faststart "$(native "$out")")
   echo "$out"
@@ -314,7 +342,6 @@ jira_sprint() {
       *[!0-9]*) jql="project = \"$project\" AND sprint = \"$sprint\"" ;;
       *) jql="project = \"$project\" AND sprint = $sprint" ;;
     esac
-    jql="$jql ORDER BY Rank ASC"
   fi
   # Jira Cloud retired /rest/api/2/search; Server and Data Center don't have /rest/api/3/search/jql.
   if [ -n "${JIRA_EMAIL:-}" ]; then path=/rest/api/3/search/jql; else path=/rest/api/2/search; fi

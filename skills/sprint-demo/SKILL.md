@@ -24,6 +24,17 @@ Every run, in one question set (AskUserQuestion), offering the previous demo's a
 - **Text on screen**: a banner on top of each ticket's part with its key, title and one line on what it brings (default); the banner plus a caption for each step; the banner plus captions in a separate `.srt` (the player turns them on, easy to correct); nothing (the presenter talks over it).
 - **Cards**: an intro card (sprint, team, date) and an end card, or none.
 - **Language** of everything on screen and in the notes: the audience's, by default the tickets' language.
+- **Environment**: where the demo runs. Local (the user's own stack, default), a shared one (dev, test, staging), or production. Ask for its URL and the account to use. Never assume it: a local app can still point at a shared database, so ask what its data lives on too.
+
+## 2b. Outside a local stack, look and don't touch
+
+On anything but a local stack with its own database, other people work on the same data, and production is real customers:
+
+- **Read-only by default.** Navigate, search, open, filter: yes. Every action that writes (create, save, send, delete, import, invite, anything that triggers a job or an e-mail) waits for the user's explicit yes for that action in that environment, named in the plan before recording. In production, propose a local or shared stack instead of any write, and record on production only with existing data the user points at.
+- **Show what's there.** Build the scenarios on data that already exists; when a flow needs new data, say so in the plan and let the user choose: create it (their yes, with a name that says it's demo data, and how to remove it afterwards), or show that flow on a local stack instead.
+- **Check what's deployed.** A ticket in review is usually not on a shared environment yet: compare the deployed version (an about page, a version endpoint, the last deployment) with the tickets' PRs and say which tickets can't be shown there.
+- **Mind what's on screen.** Real names, e-mails, contract numbers, amounts: pick records that show none, or a test client; the video will travel further than the meeting.
+- Never change the environment itself (configuration, feature flags, users, restarts) to make a demo work: ask its owners.
 
 ## 3. The order: one story, not a list
 
@@ -42,6 +53,7 @@ Write `plan.md` in the audience's language and show it to the user. Record nothi
 ```markdown
 # Démo <sprint> (<date>)
 Format: <answers of step 2>. App: <URL>, <repo@branch commit> for each service.
+Environment: <local | shared: name | production>. Writes approved: <none, or each one by name>.
 
 ## 1. <journey or group name>
 ### ABC-12 · <title> (done, PR !340)
@@ -58,14 +70,14 @@ The banner line is the need answered, in the audience's words: "Les conseillers 
 ## 5. Prepare the stage
 
 - The code: tickets in review are not merged yet, so the stack must run what the demo shows. Run their branches from temporary `git worktree`s (or a local branch merging them) rather than switching the user's checkouts, and put everything back afterwards. Write down each service's branch and commit in `plan.md`, and check them again after recording.
-- The data: believable demo data, never real customers or personal data, never a production environment. Follow the user's rules for testing apps: ask before using a new app and before the first write to its database (creating demo data is a write).
+- The data: believable demo data, never real customers or personal data. Follow the user's rules for testing apps: ask before using a new app and before the first write to its database (creating demo data is a write). Outside a local stack, step 2b applies.
 - The browser: a new tab of its own (test-evidence's browser tools), `resize_page` to 1440×900, zoom 100 %, dev tools closed, no notifications; log in as a demo user whose name can be seen. Nothing personal in the URL bar or on screen.
 
 ## 6. Record
 
 One take per ticket, or per sequence of tickets that share a screen, in `takes/NN-<KEY>.mp4` numbered in the plan's order. Use test-evidence's capture: `screencast_start`/`screencast_stop` for a browser page (its notes on trimming the idle end apply), `capture.sh record --window` for a desktop app.
 
-Play the scenario at a human pace: `wait_for` each result, then pause about 1.5 s on it so the viewer reads it; type the text of a form at a typing pace (`type_text`), and scroll rather than jump. Note when each step starts (`date +%s` before the step, minus the take's start; whole seconds are enough) to place captions later. If a step goes wrong, record the take again rather than editing around it.
+Play the scenario at a human pace: `wait_for` each result, type the text of a form at a typing pace (`type_text`), and scroll rather than jump. The time you take to think between two steps is recorded as a still screen: no need to hurry, `clip` shortens every still screen to `--pause` seconds (1.5 by default, time to read the result). Don't leave an animation running while you think (a spinner, a hovered tooltip that fades): it isn't still, so it stays in the video. Note when each step starts (`date +%s` before the step, minus the take's start; whole seconds are enough) to place captions later. If a step goes wrong, record the take again rather than editing around it.
 
 ## 7. Edit
 
@@ -77,7 +89,7 @@ bash $SK/demo.sh card  clips/02-section.mp4 --title "Rendez-vous" --seconds 3
 bash $SK/demo.sh join  demo-sprint-12.mp4 clips/00-intro.mp4 clips/01-ABC-12.mp4 clips/02-section.mp4 ...
 ```
 
-`clip` scales the take under the banner (nothing of the app is hidden), trims it and draws the captions; a cue file has one `<start s>|<end s>|<text>` line per step, in the take's time. `join` joins the clips in the order given, which is the plan's, makes one chapter per clip named after its title, and merges the clips' `.srt` files. All sizes default to 1920×1080 (`--size`).
+`clip` scales the take under the banner (nothing of the app is hidden), trims it, shortens the still screens (`--pause <s>`, `0` keeps them; a still screen at the end goes too) and draws the captions, moved with the cuts; a cue file has one `<start s>|<end s>|<text>` line per step, in the take's time. `join` joins the clips in the order given, which is the plan's, makes one chapter per clip named after its title, and merges the clips' `.srt` files. All sizes default to 1920×1080 (`--size`).
 
 ## 8. Check it like the audience will
 

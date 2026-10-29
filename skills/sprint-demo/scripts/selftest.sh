@@ -55,6 +55,16 @@ check "--srt writes captions beside the clip" "grep -q '00:00:01,000 --> 00:00:0
 check "--srt shifts and clips the cues to the trim" "grep -q '00:00:00,000 --> 00:00:00,500' '$D/02-ABC-2.srt'"
 check "metadata special characters survive" "[ \"\$(probe -show_entries format_tags=title -of default=nw=1:nk=1 '$(native "$D/02-ABC-2.mp4")')\" = 'ABC-2 = test; #2' ]"
 
+# A take with the screen still for 5 s between two steps, and still again at the end.
+ffmpeg -loglevel error -y -f lavfi -i "testsrc=size=640x400:rate=15:duration=2,tpad=stop_mode=clone:stop_duration=5[a];testsrc=size=640x400:rate=15:duration=2,tpad=stop_mode=clone:stop_duration=3[b];[a][b]concat=n=2:v=1" \
+  -c:v libx264 -pix_fmt yuv420p "$(native "$D/still.mp4")"
+printf '%s\n' '7.5|8.5|Après la pause' > "$D/still-cues.txt"
+bash "$SK/demo.sh" clip "$D/still.mp4" "$D/04-still.mp4" --size 1280x720 --pause 1 --cues "$D/still-cues.txt" --srt > /dev/null
+check "--pause shortens the still screens" "awk -v d=\"\$(probe -show_entries format=duration -of default=nw=1:nk=1 '$(native "$D/04-still.mp4")')\" 'BEGIN { exit !(d > 5.5 && d < 6.6) }'"
+check "--pause moves the captions with the cut" "awk '/ --> / { split(\$1, a, /[:,]/); s = a[3] + a[4] / 1000; exit !(s > 3.0 && s < 4.0) }' '$D/04-still.srt'"
+bash "$SK/demo.sh" clip "$D/still.mp4" "$D/05-still.mp4" --size 1280x720 --pause 0 > /dev/null
+check "--pause 0 keeps the take whole" "awk -v d=\"\$(probe -show_entries format=duration -of default=nw=1:nk=1 '$(native "$D/05-still.mp4")')\" 'BEGIN { exit !(d > 11.8) }'"
+
 bash "$SK/demo.sh" clip "$D/take 1.mp4" "$D/03-plain.mp4" --size 1280x720 --to 1 > /dev/null
 check "a clip without a title has no banner" "[ -s '$D/03-plain.mp4' ]"
 
