@@ -20,9 +20,9 @@ ai-review:
       git fetch -q origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
       git diff "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME...HEAD" > mr.diff
       env -i HOME="$HOME" PATH="$PATH" ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
-        claude -p --bare --permission-mode dontAsk --max-turns 20 \
+        claude -p "Merge request: read mr.json (title, description with the proof links) and mr.diff. Reply with the comment text only. $(cat ci/ai-review/review-prompt.md)" \
+        --bare --permission-mode dontAsk --max-turns 20 \
         --allowedTools "Read(./**)" "Grep" "Glob" --disallowedTools "Read(//proc/**)" "Read(~/**)" \
-        "Merge request: read mr.json (title, description with the proof links) and mr.diff. Reply with the comment text only. $(cat ci/ai-review/review-prompt.md)" \
         > review.md
       for secret in "$ANTHROPIC_API_KEY" "$GITLAB_REVIEW_TOKEN" "$CI_JOB_TOKEN"; do
         if [ -n "$secret" ] && grep -qF -- "$secret" review.md; then
