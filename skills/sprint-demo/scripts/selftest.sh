@@ -22,9 +22,9 @@ probe() { ffprobe -v error "$@" | tr -d '\r'; }
 
 bash "$SK/demo.sh" doctor | sed 's/^/     /'
 
-out=$(DRY_RUN=1 JIRA_BASE_URL=https://jira.example.com JIRA_PAT=x bash "$SK/demo.sh" jira-sprint ABC 2>&1)
+out=$(DRY_RUN=1 JIRA_BASE_URL=https://jira.example.com JIRA_PAT='<token>' bash "$SK/demo.sh" jira-sprint ABC 2>&1)
 check "jira-sprint on Server asks the open sprint" "printf '%s' \"\$out\" | grep -q 'GET https://jira.example.com/rest/api/2/search?.*jql=project%20%3D%20%22ABC%22%20AND%20sprint%20in%20openSprints%28%29'"
-out=$(DRY_RUN=1 JIRA_BASE_URL=https://x.atlassian.net JIRA_EMAIL=a@example.com JIRA_API_TOKEN=x bash "$SK/demo.sh" jira-sprint ABC --sprint 42 2>&1)
+out=$(DRY_RUN=1 JIRA_BASE_URL=https://x.atlassian.net JIRA_EMAIL=a@example.com JIRA_API_TOKEN='<token>' bash "$SK/demo.sh" jira-sprint ABC --sprint 42 2>&1)
 check "jira-sprint on Cloud uses search/jql and a sprint id" "printf '%s' \"\$out\" | grep -q '/rest/api/3/search/jql?.*sprint%20%3D%2042'"
 out=$(bash "$SK/demo.sh" jira-sprint ABC --sprint "Sprint 12" --url 2>&1)
 check "jira-sprint --url prints the path only" "printf '%s' \"\$out\" | grep -q '^/rest/api/2/search?.*sprint%20%3D%20%22Sprint%2012%22'"

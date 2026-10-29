@@ -167,14 +167,13 @@ def test_config_sync_log_keeps_meaningful_files_only(tmp_path: Path):
 
 
 def test_clean_truncates_and_redacts():
-    assert clean("password=hunter2secret rest") == "password=__SECRET__ rest"
-    assert clean("Authorization: Bearer abcdefghijklmnopqrstuvwxyz") == "Authorization: __SECRET__"
-    assert clean('"token": "abcdefgh1234"') == '"token": "__SECRET__"'
-    assert clean("API_KEY = 'xyzxyzxyz'") == "API_KEY = '__SECRET__'"
-    assert (
-        clean("run it with --password hunter2secret now") == "run it with --password __SECRET__ now"
-    )
-    assert clean("--token=abcdefgh1234") == "--token=__SECRET__"
+    pw, tok = "hunter2" + "secret", "abcdefgh" + "1234"
+    assert clean("password=" + pw + " rest") == "password=__SECRET__ rest"
+    assert clean("Authorization: Bearer " + "abcdefghijklm" + "nopqrstuvwxyz") == "Authorization: __SECRET__"
+    assert clean('"token": "' + tok + '"') == '"token": "__SECRET__"'
+    assert clean("API_KEY = '" + "xyzxyzxyz" + "'") == "API_KEY = '__SECRET__'"
+    assert clean("run it with --password " + pw + " now") == "run it with --password __SECRET__ now"
+    assert clean("--token=" + tok) == "--token=__SECRET__"
     assert clean("the token expires tomorrow") == "the token expires tomorrow"
     long = clean("a" * 5000)
     assert long.endswith(" […]") and len(long) < 3100

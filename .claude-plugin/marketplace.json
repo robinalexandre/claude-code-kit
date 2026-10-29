@@ -622,7 +622,7 @@
     {
       "name": "sprint-demo",
       "description": "One demo video of what a sprint or a list of tickets delivered, for the sprint review or the product owner: in the order of the user's journey, a short description of each ticket on screen, a chapter per ticket, presenter notes (needs ffmpeg).",
-      "version": "1.2.1",
+      "version": "1.2.2",
       "category": "development",
       "source": ".",
       "strict": false,
@@ -788,7 +788,7 @@
     {
       "name": "kb",
       "description": "A personal knowledge base: Markdown notes with links, curated every morning from your Claude Code sessions, recalled at session start and on each prompt; text, semantic and graph search; notes that read alike linked by themselves; a local page with the graph, hubs and health; a server for your other agents.",
-      "version": "1.6.3",
+      "version": "1.6.4",
       "category": "productivity",
       "source": ".",
       "strict": false,

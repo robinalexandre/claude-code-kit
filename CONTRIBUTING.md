@@ -17,6 +17,7 @@ A part earns its place when it answers a request people keep making, works on it
 ## Rules for every file
 
 - **Nothing personal**: no names, emails, hosts, home paths, companies or dates of your own. What was personal becomes a setting or a setup question.
+- **Fake secrets look like placeholders**: a dummy token, password or key in a test or an example is written as a reference (`JIRA_API_TOKEN='<token>'`, `password=$FAKE_PASSWORD`), never as a bare value like `x` or `hunter2`. The sync engine masks any value after a secret-looking name as `__SECRET__` in its repo and fills it back only on a computer that already has the file, so on the next computer the file arrives with `__SECRET__` in it and differs from the kit. A test that needs a realistic value (a secret detector's) builds it at run time: `"hunter2" + "secret"`.
 - **Portable shell**: bash 3.2 (macOS), no `sed -i`, `grep -P`, `readlink -f`, `date -d`, `timeout`, associative arrays. Quote every path. `cygpath -m` (`kit_path`) before handing a path to a Windows program. Source `hooks/lib/jq.sh` for jq.
 - **LF line endings** and the executable bit on scripts (`.gitattributes` handles the first).
 - **Hooks are fast and fail silent**: they run on every event; a broken hook must never block a session.
