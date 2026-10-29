@@ -67,17 +67,24 @@ Length: ~40 s
 
 The banner line is the need answered, in the audience's words: "Les conseillers voient l'historique des contrats sur la fiche client", not "Ajout de l'endpoint /contracts/history". Take the steps from the acceptance criteria: each criterion that shows on screen gets a step. Keep each ticket under a minute, the whole video under ten.
 
+Give the user a time estimate with the plan (about 5 minutes per recorded ticket, plus the editing) and ask if they have a deadline. When time is short, film only what the ticket is about and turn the tickets that are slow to stage into cards (two lines on what changed). The user can always say "faster": switch to that mode at once and say which tickets became cards.
+
 ## 5. Prepare the stage
 
 - The code: tickets in review are not merged yet, so the stack must run what the demo shows. Run their branches from temporary `git worktree`s (or a local branch merging them) rather than switching the user's checkouts, and put everything back afterwards. Write down each service's branch and commit in `plan.md`, and check them again after recording.
 - The data: believable demo data, never real customers or personal data. Follow the user's rules for testing apps: ask before using a new app and before the first write to its database (creating demo data is a write). Outside a local stack, step 2b applies.
 - The browser: a new tab of its own (test-evidence's browser tools), `resize_page` to 1440×900, zoom 100 %, dev tools closed, no notifications; log in as a demo user whose name can be seen. Nothing personal in the URL bar or on screen.
+- Off camera, set up everything the takes start from, so each take films only what its ticket shows: create the demo records, approve what must be approved, and provoke the failures (stop a service, use the input a mock fails on) before you press record. The fastest way to create data is the app's own API from the logged-in tab (`fetch` with the session): go through the form once, catch the request it sends (hook `XMLHttpRequest`/`fetch` in the page, or the network list), then replay it with other names. Only the user's local stack; elsewhere step 2b applies.
+- Showing the app as another role: change the role where the app reads it (its API or database, local only), reload, and check that the role held. Apps that sync roles from an identity provider at login undo the change on every page load: neutralise that sync for the take (a local setting or environment variable), and put everything back afterwards.
+- Rehearse a step you have never driven (a form with an autocomplete, a dialog) before recording it, without submitting. Fields bound to a framework often ignore a value set by script: focus them and type (`type_text`), or use `fill`.
 
 ## 6. Record
 
 One take per ticket, or per sequence of tickets that share a screen, in `takes/NN-<KEY>.mp4` numbered in the plan's order. Use test-evidence's capture: `screencast_start`/`screencast_stop` for a browser page (its notes on trimming the idle end apply), `capture.sh record --window` for a desktop app.
 
 Play the scenario at a human pace: `wait_for` each result, type the text of a form at a typing pace (`type_text`), and scroll rather than jump. The time you take to think between two steps is recorded as a still screen: no need to hurry, `clip` shortens every still screen to `--pause` seconds (1.5 by default, time to read the result). Don't leave an animation running while you think (a spinner, a hovered tooltip that fades): it isn't still, so it stays in the video. Note when each step starts (`date +%s` before the step, minus the take's start; whole seconds are enough) to place captions later. If a step goes wrong, record the take again rather than editing around it.
+
+Chain the steps of a take in one `evaluate_script` (click, wait for the result, pause, click) where you can: each tool call adds seconds of still screen, and a script is also the surest way to wait for a long action to finish (poll the page text). The browser screencast records the page only, not the URL bar: a step like "type a forbidden address" is invisible, so the banner has to say it. One take can serve two tickets that follow each other on screen: cut it in two clips with `--from`/`--to` (find the cut with `ffmpeg -i <take> -vf "select='gt(scene,0.04)',showinfo" -f null -`; dark interfaces need a low threshold).
 
 ## 7. Edit
 
@@ -91,12 +98,14 @@ bash $SK/demo.sh join  demo-sprint-12.mp4 clips/00-intro.mp4 clips/01-ABC-12.mp4
 
 `clip` scales the take under the banner (nothing of the app is hidden), trims it, shortens the still screens (`--pause <s>`, `0` keeps them; a still screen at the end goes too) and draws the captions, moved with the cuts; a cue file has one `<start s>|<end s>|<text>` line per step, in the take's time. `join` joins the clips in the order given, which is the plan's, makes one chapter per clip named after its title, and merges the clips' `.srt` files. All sizes default to 1920×1080 (`--size`).
 
+Pick `--pause` per clip: a take where the viewer has to read a still screen (a menu, an error explanation) needs 2.5 to 3 s, or `--pause 0` on a short `--from`/`--to` range; the default 1.5 s suits takes that keep moving. Put every `card`, `clip` and `join` line in a `build.sh` in the demo folder: changing a banner or a cut is then one edit and one run (in the background: a few minutes for ten clips).
+
 ## 8. Check it like the audience will
 
-Before showing anything: extract a frame from the middle of each chapter (`ffprobe -show_chapters`, then `ffmpeg -ss <t> -i <video> -frames:v 1 <png>`) and Read each one. The banner must be readable and match the part it sits on, the result visible, nothing personal or secret on screen. Check the total length and the size (under 100 MB for an e-mail or a Teams message, else share a link).
+When the user is waiting for the video, give them its path as soon as `join` has written it, then check it. Check: extract a frame from the middle of each chapter (`ffprobe -show_chapters`, then `ffmpeg -ss <t> -i <video> -frames:v 1 <png>`) and Read each one. and one from its end (a grid of them with ffmpeg's `xstack` costs one Read). The banner must be readable and match the part it sits on, the result visible, nothing personal or secret on screen. Check the total length and the size (under 100 MB for an e-mail or a Teams message, else share a link).
 
 ## 9. Presenter notes and delivery
 
-Write `notes.md` in the audience's language: the running order with each chapter's start time, for each ticket two or three things to say (the need, what changed for users, what's next or what's left), the ticket and PR links, and the questions to ask the product owner.
+Write `notes.md` in the audience's language: the running order with each chapter's start time, for each ticket two or three things to say (the need, what changed for users, what's next or what's left), the ticket and PR links, and the questions to ask the product owner. Add the questions the audience is likely to ask, functional and technical, with short answers taken from the tickets, the PRs and the code (how it works, its limits, who can do what), and what the viewer may notice on screen that isn't part of the demo (a display glitch, test data).
 
 Show the user the folder: the video, the notes, the plan. Nothing leaves the machine without their yes: when they want a ticket's clip on the ticket, attach it with test-evidence's `attach.sh jira <KEY> <clip>`. Keep the folder; it's the user's to delete.
