@@ -4,10 +4,13 @@
 # Auth, one secret: CLAUDE_CODE_OAUTH_TOKEN (a Claude Pro, Max, Team or Enterprise seat: `claude setup-token`,
 # valid a year, billed to that person's subscription, stops working if they lose the seat) or ANTHROPIC_API_KEY
 # (Console billing). The job's own GITHUB_TOKEN reads the PR and posts the review.
+# The review lives in one comment per PR, edited by every run instead of stacking a new one on each push. An issue
+# tied to specific lines also gets a line comment there; the next run edits it, or marks it resolved once fixed.
 # Automatic approval (AUTO_APPROVE "true"): the repo must allow it, Settings > Actions > General >
 # "Allow GitHub Actions to create and approve pull requests". The job approves on "Works", requests changes on
-# "Doesn't work", and withdraws its earlier approval on anything but "Works". It never merges. To keep a human in
-# the loop, make main's protection require one more approval than the bot gives (2 approvals: the bot and a person).
+# "Doesn't work", and withdraws its earlier review when the verdict changes; a review that still holds is kept, so a
+# new one (a short line linking to the comment) only appears when the state changes. It never merges. To keep a
+# human in the loop, make main's protection require one more approval than the bot gives (the bot and a person).
 # The review prompt is read from the default branch, only PRs into it can be approved, the approval is pinned to
 # the reviewed commit, and a PR that changes the workflows, the prompt or the agent's own settings (.github/,
 # CLAUDE.md, CLAUDE.local.md, .claude/, .mcp.json) is never approved by the bot: a PR could otherwise rewrite
@@ -30,6 +33,11 @@ permissions:
 
 env:
   AUTO_APPROVE: "false"
+
+# The runner's default is "bash -e" without pipefail: a failed gh call piped into another command would go unnoticed.
+defaults:
+  run:
+    shell: bash
 
 jobs:
   review:
@@ -63,10 +71,15 @@ jobs:
         run: |
           gh pr view "$PR" --json title,body,comments > pr.json
           gh pr diff "$PR" > pr.diff
+          # The bot's line comments from earlier runs, so the agent reuses their keys instead of posting them again.
+          gh api "repos/$REPO/pulls/$PR/comments" --paginate --slurp |
+            jq '[.[][] | select(.user.login == "github-actions[bot]") | . as $c
+              | (.body | capture("<!-- ai-review-finding:(?<key>[a-z0-9-]+) -->"))
+              | {key, path: $c.path, line: ($c.line // $c.original_line), comment: $c.body}]' > ai-review-findings.json
           approvable=true
           # The rules come from the default branch: a PR could point at a base branch whose prompt its author wrote.
           if gh api "repos/$REPO/contents/.github/ai-review/review-prompt.md?ref=$DEFAULT_BRANCH" --jq .content |
-            base64 -d > "$RUNNER_TEMP/review-prompt.md"; then
+            base64 -d > "$RUNNER_TEMP/review-prompt.md" && [ -s "$RUNNER_TEMP/review-prompt.md" ]; then
             echo "Review prompt read from $DEFAULT_BRANCH."
           else
             # First setup only: the default branch has no prompt yet.
@@ -89,8 +102,8 @@ jobs:
           # A secret that isn't set arrives as an empty variable; leave only the one that is.
           [ -n "$ANTHROPIC_API_KEY" ] || unset ANTHROPIC_API_KEY
           [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] || unset CLAUDE_CODE_OAUTH_TOKEN
-          schema='{"type":"object","properties":{"verdict":{"type":"string","enum":["works","doesnt_work","cant_tell"]},"comment":{"type":"string"}},"required":["verdict","comment"]}'
-          prompt="Pull request: read pr.json (title, description, comments) and pr.diff. Answer with the verdict and the comment: the comment's first line is the verdict line. $(cat "$RUNNER_TEMP/review-prompt.md")"
+          schema='{"type":"object","properties":{"verdict":{"type":"string","enum":["works","doesnt_work","cant_tell"]},"comment":{"type":"string"},"findings":{"type":"array","maxItems":10,"items":{"type":"object","properties":{"key":{"type":"string","pattern":"^[a-z0-9-]{1,40}$"},"path":{"type":"string"},"line":{"type":"integer","minimum":1},"body":{"type":"string"}},"required":["key","path","line","body"]}}},"required":["verdict","comment"]}'
+          prompt="Pull request: read pr.json (title, description, comments) and pr.diff. Answer with the verdict, the comment (its first line is the verdict line) and the findings: one per issue that sits on specific lines, posted as a line comment on 'line' of 'path' in the PR's version of the file, a line inside the diff. ai-review-findings.json holds your line comments from earlier runs: for the same issue, even if its line moved, reuse its key so that comment is edited instead of posted again; leave out an issue that is fixed and its comment is marked resolved. A new issue gets a new short key (lowercase words and dashes). $(cat "$RUNNER_TEMP/review-prompt.md")"
           # The prompt comes first: --allowedTools and --disallowedTools take every argument after them.
           claude -p "$prompt" --permission-mode dontAsk --max-turns 30 --output-format json --json-schema "$schema" \
             --allowedTools "Read(./**)" "Grep" "Glob" \
@@ -99,13 +112,16 @@ jobs:
             > result.json
           jq -r '.structured_output.comment // empty' result.json > review.md
           jq -r '.structured_output.verdict // "cant_tell"' result.json > verdict.txt
+          jq '[.structured_output.findings // [] | .[:10][]
+            | select((.key | test("^[a-z0-9-]{1,40}$")) and (.path | type == "string") and (.line | type == "number"))]
+            | unique_by([.key, .path])' result.json > findings.json
           if [ ! -s review.md ]; then
             echo "The review produced no comment." >&2
             jq -r '.result // empty' result.json >&2
             exit 1
           fi
           for secret in "${ANTHROPIC_API_KEY:-}" "${CLAUDE_CODE_OAUTH_TOKEN:-}"; do
-            if [ -n "$secret" ] && grep -qF -- "$secret" review.md; then
+            if [ -n "$secret" ] && grep -qF -- "$secret" review.md findings.json; then
               echo "The review quotes a secret; not posted." >&2
               exit 1
             fi
@@ -118,33 +134,113 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           verdict=$(cat verdict.txt)
-          if [ "$AUTO_APPROVE" != "true" ]; then
-            gh pr comment "$PR" --body-file review.md
-            exit 0
-          fi
-          # The approval must land on the commit that was reviewed: a later push gets its own run.
+          # The review must speak for the commit that was reviewed: a later push gets its own run.
           if [ "$(gh pr view "$PR" --json headRefOid --jq .headRefOid)" != "$HEAD_SHA" ]; then
             echo "The PR moved on during the review; the run for the new commit decides." >&2
             exit 0
           fi
-          if [ "$verdict" = "works" ] && [ "$(cat "$RUNNER_TEMP/approvable")" = "true" ]; then
-            if gh api "repos/$REPO/pulls/$PR/reviews" -f commit_id="$HEAD_SHA" -f event=APPROVE -F body=@review.md >/dev/null; then
-              exit 0
+          bot='github-actions[bot]'
+          marker='<!-- ai-review -->'
+          comment_id=$(gh api "repos/$REPO/issues/$PR/comments" --paginate --slurp |
+            jq -r --arg bot "$bot" --arg marker "$marker" \
+              '[.[][] | select(.user.login == $bot and (.body | contains($marker)))][0].id // empty')
+          post_comment() {
+            { cat review.md; printf '\n\n_Reviewed commit %s._\n\n%s\n' "${HEAD_SHA:0:7}" "$marker"; } > comment.md
+            if [ -n "$comment_id" ]; then
+              comment_url=$(gh api -X PATCH "repos/$REPO/issues/comments/$comment_id" -F body=@comment.md --jq .html_url)
+            else
+              created=$(gh api "repos/$REPO/issues/$PR/comments" -F body=@comment.md --jq '"\(.id) \(.html_url)"')
+              comment_id=${created%% *}
+              comment_url=${created#* }
             fi
-            echo "::warning::GitHub refused the approval (Settings > Actions > General: allow GitHub Actions to create and approve pull requests); posting the review as a comment."
-            printf '\n\n_Not approved automatically: GitHub refused the approval (this repo does not let GitHub Actions approve pull requests), so a person approves it._\n' >> review.md
-          elif [ "$verdict" = "works" ]; then
-            printf '\n\n_Not approved automatically: this PR targets another branch than the default one, or changes the CI, the review prompt or the agent settings, so a person approves it._\n' >> review.md
+          }
+
+          # The review state the bot should hold on the PR after this run.
+          target=none
+          if [ "$AUTO_APPROVE" = "true" ]; then
+            if [ "$verdict" = "works" ] && [ "$(cat "$RUNNER_TEMP/approvable")" = "true" ]; then
+              target=APPROVED
+            elif [ "$verdict" = "works" ]; then
+              printf '\n\n_Not approved automatically: this PR targets another branch than the default one, or changes the CI, the review prompt or the agent settings, so a person approves it._\n' >> review.md
+            elif [ "$verdict" = "doesnt_work" ]; then
+              target=CHANGES_REQUESTED
+            fi
           fi
-          # An approval from an earlier push no longer holds.
-          gh api "repos/$REPO/pulls/$PR/reviews" --paginate \
-            --jq '.[] | select(.user.login == "github-actions[bot]" and .state == "APPROVED") | .id' |
+
+          # Resolving a thread is a nicety: when the token may not, the comment's own text still says it.
+          threads=$(gh api graphql -f owner="${REPO%/*}" -f name="${REPO#*/}" -F number="$PR" -f query='
+            query($owner: String!, $name: String!, $number: Int!) {
+              repository(owner: $owner, name: $name) { pullRequest(number: $number) {
+                reviewThreads(first: 100) { nodes { id isResolved comments(first: 1) { nodes { databaseId } } } } } } }' \
+            --jq '[.data.repository.pullRequest.reviewThreads.nodes[]
+              | {thread: .id, resolved: .isResolved, id: .comments.nodes[0].databaseId}]' 2>/dev/null || echo '[]')
+          set_thread() {
+            local thread
+            thread=$(jq -r --arg action "$1" --argjson id "$2" \
+              '.[] | select(.id == $id and .resolved == ($action == "unresolve")) | .thread' <<< "$threads")
+            [ -z "$thread" ] || gh api graphql -f id="$thread" \
+              -f query="mutation(\$id: ID!) { ${1}ReviewThread(input: {threadId: \$id}) { thread { id } } }" >/dev/null 2>&1 || true
+          }
+
+          # Line comments: one per finding, found again by its key on the next run and edited, never posted twice.
+          existing=$(gh api "repos/$REPO/pulls/$PR/comments" --paginate --slurp |
+            jq -c --arg bot "$bot" '[.[][] | select(.user.login == $bot) | . as $c
+              | (.body | capture("<!-- ai-review-finding:(?<key>[a-z0-9-]+) -->"))
+              | {key, id: $c.id, path: $c.path, resolved: ($c.body | startswith("✅ Resolved"))}]')
+          : > off-diff.md
+          while read -r finding; do
+            key=$(jq -r .key <<< "$finding")
+            path=$(jq -r .path <<< "$finding")
+            line=$(jq -r .line <<< "$finding")
+            { jq -r .body <<< "$finding"; printf '\n<!-- ai-review-finding:%s -->\n' "$key"; } > finding.md
+            id=$(jq -r --arg key "$key" --arg path "$path" \
+              '[.[] | select(.key == $key and .path == $path)][0].id // empty' <<< "$existing")
+            if [ -n "$id" ]; then
+              gh api -X PATCH "repos/$REPO/pulls/comments/$id" -F body=@finding.md >/dev/null
+              set_thread unresolve "$id"
+            elif ! gh api "repos/$REPO/pulls/$PR/comments" -f commit_id="$HEAD_SHA" -f path="$path" -F line="$line" \
+              -f side=RIGHT -F body=@finding.md >/dev/null 2>&1; then
+              # GitHub takes line comments only on lines of the diff: the others go in the review comment.
+              { printf '\n**`%s:%s`**\n\n' "$path" "$line"; jq -r .body <<< "$finding"; } >> off-diff.md
+            fi
+          done < <(jq -c '.[]' findings.json)
+          # A finding this run left out is fixed: its comment says so and its thread is resolved.
+          jq -r --slurpfile now findings.json '.[] | select(.resolved | not) | . as $old
+            | select([$now[0][] | select(.key == $old.key and .path == $old.path)] | length == 0) | .id' <<< "$existing" |
             while read -r id; do
-              gh api -X PUT "repos/$REPO/pulls/$PR/reviews/$id/dismissals" \
-                -f message="Withdrawn: the AI review of the latest push doesn't approve it." -f event=DISMISS
+              body=$(gh api "repos/$REPO/pulls/comments/$id" --jq .body)
+              printf '✅ Resolved in %s.\n\n<details><summary>Earlier finding</summary>\n\n%s\n\n</details>\n' \
+                "${HEAD_SHA:0:7}" "$body" > resolved.md
+              gh api -X PATCH "repos/$REPO/pulls/comments/$id" -F body=@resolved.md >/dev/null
+              set_thread resolve "$id"
             done
-          if [ "$verdict" = "doesnt_work" ]; then
-            gh pr review "$PR" --request-changes --body-file review.md
-          else
-            gh pr comment "$PR" --body-file review.md
+          if [ -s off-diff.md ]; then
+            printf '\n\n**Outside the changed lines**\n' >> review.md
+            cat off-diff.md >> review.md
           fi
+          post_comment
+
+          # Keep the bot's earlier review when it already says the same thing; withdraw the others.
+          kept=false
+          reviews=$(gh api "repos/$REPO/pulls/$PR/reviews" --paginate --slurp |
+            jq -r --arg bot "$bot" \
+              '.[][] | select(.user.login == $bot and (.state == "APPROVED" or .state == "CHANGES_REQUESTED")) | "\(.id) \(.state)"')
+          grep -q " $target\$" <<< "$reviews" && kept=true
+
+          # The new review goes first: if posting it fails, the earlier one still stands.
+          if [ "$kept" = "false" ] && [ "$target" = "APPROVED" ]; then
+            if ! gh api "repos/$REPO/pulls/$PR/reviews" -f commit_id="$HEAD_SHA" -f event=APPROVE \
+              -f body="✅ Works: $comment_url" >/dev/null; then
+              echo "::warning::GitHub refused the approval (Settings > Actions > General: allow GitHub Actions to create and approve pull requests)."
+              printf '\n\n_Not approved automatically: GitHub refused the approval (this repo does not let GitHub Actions approve pull requests), so a person approves it._\n' >> review.md
+              post_comment
+            fi
+          elif [ "$kept" = "false" ] && [ "$target" = "CHANGES_REQUESTED" ]; then
+            gh api "repos/$REPO/pulls/$PR/reviews" -f commit_id="$HEAD_SHA" -f event=REQUEST_CHANGES \
+              -f body="❌ Doesn't work: $comment_url" >/dev/null
+          fi
+          while read -r id state; do
+            [ -n "$id" ] && [ "$state" != "$target" ] || continue
+            gh api -X PUT "repos/$REPO/pulls/$PR/reviews/$id/dismissals" \
+              -f message="Withdrawn: the AI review of the latest push says otherwise ($comment_url)." -f event=DISMISS >/dev/null
+          done <<< "$reviews"
