@@ -634,9 +634,23 @@
       ]
     },
     {
+      "name": "tech-watch",
+      "description": "A recurring tech watch on your stacks: releases, RFCs, deprecations and tools worth a try, mapped from your active repos and sent by your assistant at the frequency you pick, or done on demand.",
+      "version": "1.0.0",
+      "category": "development",
+      "source": ".",
+      "strict": false,
+      "dependencies": [
+        "handoff"
+      ],
+      "skills": [
+        "./skills/tech-watch"
+      ]
+    },
+    {
       "name": "ci-review",
       "description": "An AI review step on CI that checks each PR/MR, with or without the proof it carries, can approve when it works, and answers @claude (GitHub Actions, GitLab CI).",
-      "version": "1.2.0",
+      "version": "1.2.1",
       "category": "development",
       "source": ".",
       "strict": false,

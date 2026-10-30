@@ -246,6 +246,21 @@
       "who": "Teams that demo web apps (records through test-evidence; needs ffmpeg with drawtext)."
     },
     {
+      "name": "tech-watch",
+      "kind": "skill",
+      "group": "dev",
+      "needs": [
+        "handoff"
+      ],
+      "tools": [
+        "jq"
+      ],
+      "what": "A recurring digest of what came out on your stacks (releases, RFCs, deprecations, tools worth a try), mapped from your active repos' manifests and sent by your assistant at the frequency you pick, or done on demand.",
+      "why": "You hear about the releases that matter to your projects without reading every changelog.",
+      "when": "\"set up my tech watch\", \"what's new in React?\", \"add Angular to my watch\".",
+      "who": "Developers with an assistant that runs scheduled tasks (handoff), or a scheduled Claude Code run."
+    },
+    {
       "name": "ci-review",
       "kind": "skill",
       "group": "dev",
