@@ -335,26 +335,32 @@ test('a lone row still shows its group, and a long body wraps instead of being c
   expect(await pane.find({ text: /the end\.$/ })).toBeDefined()
 })
 
-test("an assistant's task is filed under its name, with cancel only", async ($, on) => {
+test("an assistant's task is in the handoffs tab under its name, with cancel only, and counts as no open note", async ($, on) => {
   const calls: string[][] = []
   const task = { id: 'max/tasks/plants', state: 'later', title: 'Water the plants', on: '2026-11-02 18:00', agent: 'Max', group: 'Max' }
-  answerBeneath(on, { reminders: [LATER, task], handoffs: [], installed: [REMINDERS] }, calls)
+  answerBeneath(on, { reminders: [LATER], handoffs: [NOTE, task], installed: [REMINDERS, HANDOFF] }, calls)
 
   await $.session.start(START)
-  await $.command.run(command('reminders-pane'))
+  await $.command.run(command('handoffs-pane'))
   const pane = await mountPane($)
 
-  await pane.press({ key: 'upcoming' })
-  await pane.press({ key: 'group-upcoming-Max' })
+  expect(await pane.find({ key: 'tab-handoffs', text: 'Handoffs (1 open)' })).toBeDefined()
+
+  await pane.press({ key: 'tasks' })
+  await pane.press({ key: 'group-tasks-Max' })
   await pane.press({ key: 'toggle-max/tasks/plants' })
 
   expect(await pane.find({ text: /Run by Max on its own/ })).toBeDefined()
   expect(await pane.find({ key: 'pick-max/tasks/plants' })).toBeUndefined()
 
-  await pane.press({ key: 'stop-max/tasks/plants' })
-  await pane.press({ key: 'stop-max/tasks/plants' })
+  await pane.press({ key: 'cancel-max/tasks/plants' })
+  await pane.press({ key: 'cancel-max/tasks/plants' })
 
-  expect(calls).toContainEqual(['bash', REMINDERS, 'stop', 'max/tasks/plants'])
+  expect(calls).toContainEqual(['bash', HANDOFF, 'cancel', 'max/tasks/plants'])
+
+  await pane.press({ key: 'tab-reminders' })
+
+  expect(await pane.find({ text: /Water the plants/ })).toBeUndefined()
 })
 
 test("an assistant's digest shows the tasks due at its time, folded into its one message", async ($, on) => {
@@ -363,14 +369,14 @@ test("an assistant's digest shows the tasks due at its time, folded into its one
   const check = { ...assistant, id: 'max/tasks/check', title: 'Server check', on: '2026-11-02 09:00' }
   const mail = { ...assistant, id: 'max/tasks/mail', title: 'Mail watch', on: '2026-11-02', times: '09:00, 13:00' }
   const alone = { ...assistant, id: 'max/tasks/waves', title: 'Waves', on: '2026-11-02 18:00' }
-  answerBeneath(on, { reminders: [digest, check, mail, alone], handoffs: [], installed: [REMINDERS] }, [])
+  answerBeneath(on, { reminders: [], handoffs: [digest, check, mail, alone], installed: [HANDOFF] }, [])
 
   await $.session.start(START)
-  await $.command.run(command('reminders-pane'))
+  await $.command.run(command('handoffs-pane'))
   const pane = await mountPane($)
 
-  await pane.press({ key: 'upcoming' })
-  await pane.press({ key: 'group-upcoming-Max' })
+  await pane.press({ key: 'tasks' })
+  await pane.press({ key: 'group-tasks-Max' })
 
   expect(await pane.find({ text: /digest of 2/ })).toBeDefined()
   expect((await pane.find({ key: 'row-max/tasks/check' }))?.props.paddingLeft).toBe(4)
@@ -392,14 +398,14 @@ test('a task folded into two digests shows under each, naming the other; short o
   const evening = { ...assistant, id: 'max/tasks/evening', title: 'Evening recap', on: '2026-11-02 20:00', digest: 'yes' }
   const check = { ...assistant, id: 'max/tasks/check', title: 'Check of the servers', on: '2026-11-02 09:00' }
   const parcels = { ...assistant, id: 'max/tasks/parcels', title: 'Parcels and mail follow-up', on: '2026-11-02', times: '09:00, 20:00' }
-  answerBeneath(on, { reminders: [morning, evening, check, parcels], handoffs: [], installed: [REMINDERS] }, [])
+  answerBeneath(on, { reminders: [], handoffs: [morning, evening, check, parcels], installed: [HANDOFF] }, [])
 
   await $.session.start(START)
-  await $.command.run(command('reminders-pane'))
+  await $.command.run(command('handoffs-pane'))
   const pane = await mountPane($)
 
-  await pane.press({ key: 'upcoming' })
-  await pane.press({ key: 'group-upcoming-Max' })
+  await pane.press({ key: 'tasks' })
+  await pane.press({ key: 'group-tasks-Max' })
 
   expect(await pane.findAll({ key: 'row-max/tasks/parcels' })).toHaveLength(2)
   expect(await pane.findAll({ key: 'row-max/tasks/check' })).toHaveLength(1)
@@ -476,6 +482,36 @@ test('with both skills, a tab each; pick hands the note to the session, cancel a
   await pane.press({ key: 'group-upcoming-General' })
 
   expect(await pane.find({ text: /Dentist/ })).toBeDefined()
+})
+
+test('a run sent elsewhere shows its status; back with a question, it is answered or closed; one for here is only canceled', async ($, on) => {
+  const submitted: string[] = []
+  const calls: string[][] = []
+  const sent = { ...NOTE, id: 'import', title: 'Run the import', isMine: true, for: 'pc', run: 'now', scope: 'edit', status: 'needs-you', run_by: 'pc' }
+  const here = { ...NOTE, id: 'logs', title: 'Read the logs', for: 'mac', run: 'now', isForHere: true }
+  answerBeneath(on, { reminders: [], handoffs: [sent, here], installed: [HANDOFF] }, calls, submitted)
+
+  await $.session.start(START)
+  await $.command.run(command('handoffs-pane'))
+  const pane = await mountPane($)
+  await pane.press({ key: 'open-notes' })
+  await pane.press({ key: 'group-open-notes-app' })
+
+  expect(await pane.find({ text: /needs-you/ })).toBeDefined()
+  expect(await pane.find({ text: /waiting/ })).toBeDefined()
+  expect(await pane.find({ key: 'pick-logs' })).toBeUndefined()
+  expect(await pane.find({ key: 'cancel-logs' })).toBeDefined()
+
+  await pane.press({ key: 'pick-import' })
+
+  expect(submitted).toEqual(['Show me what the run of the handoff import gave: "Run the import".'])
+
+  await pane.press({ key: 'done-import' })
+  await pane.press({ key: 'done-import' })
+
+  expect(calls).toContainEqual(['bash', HANDOFF, 'done', 'import'])
+  // Only the run that came back waits for the user.
+  expect(await (await mountBand($)).find({ key: 'reminders-handoffs', text: 'Handoffs 2' })).toBeDefined()
 })
 
 test('the band is named after the skills installed, and stays with nothing in them', async ($, on) => {

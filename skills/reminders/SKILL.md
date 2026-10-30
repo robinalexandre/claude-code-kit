@@ -1,9 +1,11 @@
 ---
 name: reminders
-description: Leaves a reminder for a later Claude Code session, on this computer or another one, and notifies the user on the desktop and on the phone (Claude mobile app through a scheduled task, or ntfy) every morning and at the first session of the day; also leaves a task for the user's personal assistant to run by itself at a set time. Use when the user says "remind me", "rappelle-moi", "tomorrow when I open a session, tell me…", "don't let me forget", "list my reminders", "that reminder is done", "a task for <assistant>", "ask <assistant> to … at …", or when a SessionStart message lists reminders.
+description: Leaves a reminder for the user, shown in a later Claude Code session on this computer or another one, and notifies them on the desktop and on the phone (Claude mobile app through a scheduled task, or ntfy) every morning and at the first session of the day. Use when the user says "remind me", "rappelle-moi", "tomorrow when I open a session, tell me…", "don't let me forget", "list my reminders", "that reminder is done", or when a SessionStart message lists reminders.
 ---
 
 # Reminders
+
+A reminder is for the user to remember: it never runs anything by itself, and the user always picks it up. Work for Claude to do on another computer, or a task for the user's assistant to run by itself ("ask <assistant> to … at …"), is a handoff: use the handoff skill.
 
 A reminder is one Markdown file in `~/.claude-sync/reminders/` (or `$CLAUDE_REMINDERS_DIR`), the config sync repo, so every computer of the user gets it. Scripts are in this skill's base directory (`~/.claude/skills/reminders/` when installed by install.sh; `$SK` below).
 
@@ -45,15 +47,6 @@ Enough for a session in a few days, without this conversation, to help.>
 - Never put secrets in it: the file goes to GitHub.
 - Then run `bash ~/.claude-sync/sync.sh now` so the other computers get it, and tell the user when and where it will show up.
 
-## A task for an assistant that runs it by itself
-
-Some users have a personal assistant (an agent on a server, reading the sync repo) that starts tasks on its own at a set time. `bash $SK/reminders.sh agents` lists them, one line each: the assistant's name, a tab, its tasks folder. They come from `agents.json` next to the reminders, `[{"name": "<assistant>", "dir": "<folder from the sync repo's root>"}]`; with none listed, this section doesn't apply.
-
-- When the user asks for something the assistant should do or say at a set time ("ask <assistant> to…", "a task for <assistant>", "have <assistant> remind me on WhatsApp"), write `<its folder>/<YYYY-MM-DD>-<short-slug>.md` in the reminders' format: `title`, `on` (the time it starts), `until` (optional: last day it may still start if it was missed), `created`. A recurring job ("every 3 days", "each morning", "several times a day") takes `every` and `times` as above, when the assistant runs repeating tasks; ask it to write only when something is new, so it stays quiet otherwise. No `where`, `machine` or `group`.
-- A repeating task with `digest: yes` (a morning briefing, an evening recap) takes in the assistant's other repeating tasks due at one of its times: they run first, and it sends what they found in its one message. To link a recurring check to a digest, give it the digest's time (in `on:` or `times:`); when the user asks for several checks at about the same moment, offer to fold them into a digest instead of a message each. The pane lists each linked task under its digest (`digest of N`), and a task joining several digests shows under each, naming the others (`⤷ <digest>`).
-- The body is the request itself, as the user would write it to the assistant, in their language, with every detail it needs (paths, names, dates, the order of the steps): it gets nothing else.
-- Then `bash ~/.claude-sync/sync.sh now`, and tell the user when it will start. The assistant moves each task to `past/` once it ran; the pane shows them under the assistant's name.
-
 ## Manage them
 
 - `bash $SK/reminders.sh list`: every reminder with its state (`due`, `later`, `expired`), and for a repeating one when it shows next.
@@ -61,14 +54,13 @@ Some users have a personal assistant (an agent on a server, reading the sync rep
 - When the user says a reminder is done: `bash $SK/reminders.sh done <id>` (the file name without `.md`); a repeating one is closed for today only. When they no longer want a repeating one: `stop <id>`. Then `bash ~/.claude-sync/sync.sh now`. Offer to close expired ones when you see them.
 - Closed reminders move to `past/` with a `closed:` line and stay there 60 days; `restore <id>` puts one back as it was (its dates and repeat days), `delete <id>` removes one for good.
 - When the user wants to do a reminder now ("let's do the reminder <id> now", the pane's `pick`): read its file and help with it; once it's done, close it with `done`.
-- An assistant's task has the id `<its folder>/<file name>`: `done` cancels it (it won't run), `restore` and `delete` work as for a reminder.
-- `bash $SK/reminders.sh json [DIR]`: all of them, past ones and assistants' tasks included, as JSON. The [reminders-handoffs](../../mods/reminders-handoffs) mod reads it: `/reminders-pane` or the band button above the prompt.
+- `bash $SK/reminders.sh json [DIR]`: all of them, past ones included, as JSON. The [reminders-handoffs](../../mods/reminders-handoffs) mod reads it: `/reminders-pane` or the band button above the prompt.
 
 ## Notifications
 
 - **Desktop**: macOS notification, Windows toast, `notify-send` on Linux.
 - **First check whether the reminders are encrypted**: `bash $SK/reminders.sh encrypted`. When it says `encrypted` (the sync repo encrypts the folder with git-crypt), a cloud routine reads only ciphertext from GitHub, so the Claude app option below can't work as it is. Propose instead, in this order, with what each costs:
-  1. **The user's assistant**, when `reminders.sh agents` lists one that holds the key (it runs on a server that reads the sync repo): a repeating task in its folder, every day at the morning time, asking it to list the due reminders (or adding them to a morning briefing it already gives). Nothing to install, and it works with every computer off.
+  1. **The user's assistant**, when `reminders.sh agents` lists one that holds the key (it runs on a server that reads the sync repo): a repeating task for it (written with the handoff skill), every day at the morning time, asking it to list the due reminders (or adding them to a morning briefing it already gives). Nothing to install, and it works with every computer off.
   2. **ntfy from the computers** (below): each computer reads its own decrypted copy and the morning sync pushes. It only works when one of them is on at that time, and what it pushes goes through the ntfy server in clear: set it to send only the count (below), or use a self-hosted server.
   3. **The cloud routine with the key**: the key, as a secret in the cloud environment, lets the session run `git-crypt unlock`. The key then leaves the user's computers, which undoes much of the encryption: only on their explicit choice.
 

@@ -125,7 +125,7 @@ const dndView = async ($: EngineInterface) => {
     on,
     found: (await read($, enabled)).filter(source => dndRule(on, source)?.mode !== 'hide'),
     reminders: all.reminders?.filter(one => dndShows(on, 'reminders', [reminderGroup(one), one.where ?? ''])) ?? null,
-    handoffs: all.handoffs?.filter(note => dndShows(on, 'handoffs', [handoffGroup(note), note.repo ?? ''])) ?? null,
+    handoffs: all.handoffs?.filter(note => dndShows(on, 'handoffs', [note.agent ?? handoffGroup(note), note.repo ?? ''])) ?? null,
     isFiltered: (['reminders', 'handoffs'] as Source[]).some(source => dndRule(on, source)?.mode === 'only'),
   }
 }
@@ -424,11 +424,13 @@ const act = async ($: EngineInterface, source: Source, action: Action, id: strin
 }
 
 // The handoff skill picks the note up in this session, as if the user had asked.
-const pick = async ($: EngineInterface, source: Source, item: { id: string; title: string }) => {
+const pick = async ($: EngineInterface, source: Source, item: { id: string; title: string; status?: string; run?: string }) => {
   const text =
     source === 'reminders'
       ? `Let's do the reminder ${item.id} now: "${item.title}".`
-      : `Pick up the handoff ${item.id}: "${item.title}".`
+      : item.run !== undefined && item.status !== undefined
+        ? `Show me what the run of the handoff ${item.id} gave: "${item.title}".`
+        : `Pick up the handoff ${item.id}: "${item.title}".`
   await $.prompt.submit({ text })
 }
 
@@ -533,8 +535,15 @@ const counts = (shownReminders: Reminder[] | null, shownHandoffs: Handoff[] | nu
   due: (shownReminders ?? []).filter(one => one.state === 'due').length,
   current: (shownReminders ?? []).filter(one => reminderSection(one) !== 'past').length,
   open: (shownHandoffs ?? []).filter(note => note.state === 'open').length,
-  fromElsewhere: (shownHandoffs ?? []).filter(note => note.state === 'open' && note.isMine !== true).length,
+  fromElsewhere: (shownHandoffs ?? []).filter(waitsForYou).length,
 })
+
+// A run another computer does by itself waits for no one here; one this computer sent waits for
+// the user once it is back (done, a question, a failure).
+const isRun = (note: Handoff) => note.run !== undefined && note.for !== undefined
+const isBack = (note: Handoff) => ['done', 'needs-you', 'failed'].includes(note.status ?? '')
+const waitsForYou = (note: Handoff) =>
+  note.state === 'open' && (isRun(note) ? note.isMine === true && isBack(note) : note.isMine !== true)
 
 const start = async ($: EngineInterface) => {
   // A name already taken (a skill or command of the user's) costs that command only.
@@ -641,8 +650,10 @@ export const register: Register = on => {
     const picked = await read($, tab)
     const current = found.includes(picked) ? picked : (found[0] ?? picked)
     const shownReminders = view.reminders
-    const folded = foldedInto(shownReminders ?? [])
-    const shownHandoffs = view.handoffs
+    // The handoff skill lists the notes and the tasks the assistants run by themselves.
+    const shownHandoffs = view.handoffs === null ? null : view.handoffs.filter(note => !note.agent)
+    const shownTasks = (view.handoffs ?? []).filter(note => note.agent) as unknown as Reminder[]
+    const folded = foldedInto(shownTasks)
     const trouble = (await read($, problems))[current] ?? ''
     const unfolded = await read($, openIds)
     const sections = await read($, openSections)
@@ -794,13 +805,14 @@ export const register: Register = on => {
         )
       }
 
+      // An assistant's task is the handoff skill's: it runs by itself, so it is only canceled.
       const { buttons, labels } = buttonsFor(
-        'reminders',
+        one.agent ? 'handoffs' : 'reminders',
         one,
         one.state === 'past'
           ? [['restore', 'restore'], ['delete', 'delete']]
           : one.agent
-            ? [['stop', 'cancel']]
+            ? [['cancel', 'cancel']]
             : one.state === 'due'
             ? isRepeating(one)
               ? [['pick', 'pick'], ['done', 'done today'], ['stop', 'stop']]
@@ -809,7 +821,7 @@ export const register: Register = on => {
       )
 
       const joins = joinsHere.filter(join => join.id !== under)
-      const gathered = isDigest(one) && one.state !== 'past' ? (shownReminders ?? []).filter(other => (folded.get(other.id) ?? []).some(join => join.id === one.id)) : []
+      const gathered = isDigest(one) && one.state !== 'past' ? shownTasks.filter(other => (folded.get(other.id) ?? []).some(join => join.id === one.id)) : []
       const link = joins.length > 0 ? `⤷ ${joins.map(join => join.title).join(', ')}` : gathered.length > 0 ? `digest of ${gathered.length}` : ''
       const shortLink = joins.length > 1 ? `⤷ ${joins.length} digests` : link
       // Short of room, the repeat goes first (its details give it), then the link's titles, then the day.
@@ -845,16 +857,28 @@ export const register: Register = on => {
 
     const handoffRow = (note: Handoff, color: string, closedBy: string) => {
       const isOpenNote = note.state === 'open'
-      const when = [note.from ? (note.isMine ? 'from this computer' : `from ${note.from}`) : '', note.date ? dayText(note.date) : '', note.state === 'canceled' ? 'canceled' : '']
+      const target = isRun(note) ? (note.isForHere ? 'runs here' : `→ ${note.for}`) : ''
+      const status = isRun(note) ? (note.status ?? (note.run === 'now' ? 'waiting' : `at ${note.run}`)) : ''
+      const when = [note.from ? (note.isMine ? 'from this computer' : `from ${note.from}`) : '', target, status, note.date ? dayText(note.date) : '', note.state === 'canceled' ? 'canceled' : '']
         .filter(part => part !== '')
         .join(' · ')
+      // A note this computer runs by itself is not for picking up; one that came back is read with pick.
       const { buttons, labels } = buttonsFor(
         'handoffs',
         note,
-        isOpenNote ? [['pick', 'pick'], ['cancel', 'cancel']] : [['restore', 'restore'], ['delete', 'delete']]
+        !isOpenNote
+          ? [['restore', 'restore'], ['delete', 'delete']]
+          : isRun(note) && note.isForHere && !note.isMine
+            ? [['cancel', 'cancel']]
+            : isRun(note) && isBack(note)
+              ? [['pick', note.status === 'needs-you' ? 'answer' : 'read'], ['done', 'done']]
+              : [['pick', 'pick'], ['cancel', 'cancel']]
       )
 
-      return row(note.id, note.title, [when], color, isOpenNote && note.isMine !== true, !isOpenNote, buttons, labels, () =>
+      // Short of room, the run's target and status stay, then the status alone.
+      const whens = [when, [target, status].filter(part => part !== '').join(' · '), status].filter(part => part !== '')
+
+      return row(note.id, note.title, whens.length > 0 ? whens : [''], note.status === 'needs-you' || note.status === 'failed' ? 'red' : color, waitsForYou(note), !isOpenNote, buttons, labels, () =>
         textLines(
           note.id,
           [
@@ -862,6 +886,8 @@ export const register: Register = on => {
             note.date ? `Written: ${note.date}` : '',
             note.repo ? `Repo: ${note.repo}` : '',
             note.branch ? `Branch: ${note.branch}` : '',
+            isRun(note) ? `Runs on: ${note.for}, ${note.run === 'now' ? 'at its next sync' : note.run} · scope ${note.scope ?? 'edit'}` : '',
+            note.status ? `Status: ${note.status}${note.run_by ? ` on ${note.run_by}` : ''}${note.ended ? ` · ${note.ended}` : note.started ? ` · since ${note.started}` : ''}` : '',
             note.closed ? `${note.state === 'canceled' ? 'Canceled' : 'Done'}: ${note.closed}` : '',
           ],
           note.body ?? ''
@@ -1008,13 +1034,24 @@ export const register: Register = on => {
       const byDate = (one: Handoff, other: Handoff) => (other.date ?? '').localeCompare(one.date ?? '')
       const openNotes = all.filter(note => note.state === 'open').sort(byDate)
       const doneNotes = all.filter(note => note.state !== 'open').sort(byClosed)
+      const liveTasks = shownTasks.filter(one => reminderSection(one) !== 'past').sort(byNext)
+      const pastTasks = shownTasks.filter(one => reminderSection(one) === 'past').sort(byClosed)
+      const tasksToo = shownTasks.length > 0
 
       return {
         drawn: [
           section('open-notes', 'Open', openNotes, handoffGroup, (note, closedBy) => handoffRow(note, 'yellow', closedBy)),
+          tasksToo &&
+            section('tasks', 'Assistant tasks', liveTasks, reminderGroup, (one, closedBy, members) => reminderRow(one, 'cyan', closedBy, members)),
           section('done-notes', 'Done', doneNotes, handoffGroup, (note, closedBy) => handoffRow(note, 'gray', closedBy)),
+          tasksToo && section('past-tasks', 'Tasks run', pastTasks, reminderGroup, (one, closedBy) => reminderRow(one, 'gray', closedBy)),
+        ].filter(part => part !== false),
+        folds: [
+          foldsOf('open-notes', openNotes, handoffGroup),
+          ...(tasksToo ? [foldsOf('tasks', liveTasks, reminderGroup)] : []),
+          foldsOf('done-notes', doneNotes, handoffGroup),
+          ...(tasksToo ? [foldsOf('past-tasks', pastTasks, reminderGroup)] : []),
         ],
-        folds: [foldsOf('open-notes', openNotes, handoffGroup), foldsOf('done-notes', doneNotes, handoffGroup)],
       }
     }
 

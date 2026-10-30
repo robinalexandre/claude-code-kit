@@ -1415,11 +1415,30 @@ unlock() {
 }
 
 run() {
+  local rc
   lock "${2:-0}" || {
     say "another sync is running"
     return 0
   }
   sync_retry "${1:-}"
+  rc=$?
+  unlock
+  after_sync
+  return $rc
+}
+
+# after_sync: each skill's on-sync.sh, in the background once the lock is free: a handoff run it
+# starts syncs again by itself.
+after_sync() {
+  local f
+  {
+    for f in "$CLAUDE"/skills/*/on-sync.sh; do printf '%s\n' "$f"; done
+    plugin_hooks on-sync.sh
+  } | while IFS= read -r f; do
+    [ -f "$f" ] || continue
+    (nohup bash "$f" >> "$STATE/log" 2>&1 < /dev/null &)
+  done
+  return 0
 }
 
 # sync_retry [force]: sync_once, tried RETRIES more times when it fails.
@@ -1449,9 +1468,10 @@ morning() {
   lock 60 || return 0
   sync_retry force
   unlock
+  after_sync
   {
     for f in "$CLAUDE"/skills/*/morning.sh; do printf '%s\n' "$f"; done
-    plugin_mornings
+    plugin_hooks morning.sh
   } | while IFS= read -r f; do
     [ -f "$f" ] || continue
     say "morning: ${f#"$CLAUDE"/}"
@@ -1460,17 +1480,17 @@ morning() {
   return 0
 }
 
-# The morning.sh of each skill installed as a plugin from the claude-code-kit marketplace, unless
-# a copy in ~/.claude/skills already runs.
-plugin_mornings() {
+# plugin_hooks FILE: the FILE (morning.sh, on-sync.sh) of each skill installed as a plugin from the
+# claude-code-kit marketplace, unless a copy in ~/.claude/skills already runs.
+plugin_hooks() {
   local name root
   jq -r '.plugins // {} | to_entries[] | select(.key | endswith("@claude-code-kit"))
     | [(.key | sub("@.*"; "")), ((.value | map(select(.scope == "user")) + .value)[0].installPath // "")] | @tsv' \
     "${CLAUDE_CONFIG_DIR:-$CLAUDE}/plugins/installed_plugins.json" 2> /dev/null |
     while IFS=$'\t' read -r name root; do
-      [ -f "$CLAUDE/skills/$name/morning.sh" ] && continue
+      [ -f "$CLAUDE/skills/$name/$1" ] && continue
       command -v cygpath > /dev/null 2>&1 && root=$(cygpath -u "$root")
-      [ -f "$root/skills/$name/morning.sh" ] && printf '%s\n' "$root/skills/$name/morning.sh"
+      [ -f "$root/skills/$name/$1" ] && printf '%s\n' "$root/skills/$name/$1"
     done
   return 0
 }
@@ -1502,14 +1522,26 @@ frontmatter() {
 }
 
 start() {
-  local notes="" err="" hint="" f from
+  local notes="" sent="" err="" hint="" f from for st
   for f in handoffs/*.md; do
     [ -f "$f" ] || continue
     from=$(frontmatter "$f" from)
-    [ "$from" = "$MACHINE" ] && continue
+    for=$(frontmatter "$f" for)
+    st=$(frontmatter "$f" status)
+    if [ "$from" = "$MACHINE" ]; then
+      [ -n "$st" ] && sent="$sent
+- $st on $(frontmatter "$f" run_by) · $(frontmatter "$f" title) → ~/.claude-sync/$f"
+      continue
+    fi
+    # A note for another computer, or one this computer runs by itself, is not for picking up.
+    [ -n "$for" ] && [ "$for" != "$MACHINE" ] && continue
+    [ -n "$for" ] && [ -n "$(frontmatter "$f" run)" ] && continue
     notes="$notes
 - $(frontmatter "$f" date) · from ${from:-?} · $(frontmatter "$f" title) → ~/.claude-sync/$f"
   done
+  [ -n "$sent" ] && notes="$notes${notes:+
+
+}Handoffs this computer sent to run elsewhere, with their status (handoff skill: a needs-you one waits for the user's answer, given with handoff.sh reply; a done one is closed with handoff.sh done once the user has seen its report):$sent"
   if [ -f "$STATE/error" ]; then
     err="last failed: $(cat "$STATE/error")"
     grep -q 'same file changed' "$STATE/error" && hint="First check that it still fails (bash ~/.claude-sync/sync.sh status; a later sync may have settled it). If it does, hand the investigation to a subagent: for each file, find which machine made each side (git log on HEAD and origin/main, the commit subjects name the machine) and what each change does. The subagent resolves what has a clear answer (independent additions on both sides, a generated or state file such as inventory/ or pr-watch/, one side an older copy of the other), finishes the rebase and runs bash sync.sh install. Only conflicts that need a choice (both sides changed the same setting or text differently) come back to the main conversation, with both versions and a recommendation, for the user to decide."
@@ -1523,7 +1555,8 @@ start() {
   spawn force
   [ -n "$notes$err" ] || return 0
   jq -n --arg notes "$notes" --arg err "$err" --arg hint "$hint" '
-    (if $notes != "" then "Open handoff notes written on another machine. If the user wants to continue one, use the handoff skill." + $notes else "" end) as $ctx
+    (if $notes == "" then "" elif ($notes | startswith("Handoffs this computer sent")) then $notes
+      else "Open handoff notes written on another machine. If the user wants to continue one, use the handoff skill." + $notes end) as $ctx
     | (if $err != "" then "The Claude config sync (~/.claude-sync) " + $err + (if $hint != "" then "\n" + $hint else "" end) else "" end) as $why
     | {hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: ([$ctx, $why] | map(select(. != "")) | join("\n\n"))}}
     + (if $err != "" then {systemMessage: ("⚠️ Claude config sync " + $err)} else {} end)'

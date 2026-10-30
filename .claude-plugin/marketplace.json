@@ -585,7 +585,7 @@
     },
     {
       "name": "reminders-handoffs",
-      "description": "One pane with a tab for each of reminders and handoff you have: reminders due now, upcoming and past; handoff notes open and done; filed by group, with done, stop, pick, cancel and delete.",
+      "description": "One pane with a tab for each of reminders and handoff you have: reminders due now, upcoming and past; handoff notes open and done, with the status of the runs sent to another computer; filed by group, with done, stop, pick, cancel and delete.",
       "category": "productivity",
       "source": "./mods/reminders-handoffs"
     },
@@ -658,7 +658,7 @@
     {
       "name": "config-sync",
       "description": "Keeps your Claude Code config the same on all your computers through a private git repo of your own (any host); sets it up at the first session and keeps the engine current. Each computer also records what it runs (system, Claude Code, plugins, kits) for the others to see.",
-      "version": "1.8.4",
+      "version": "1.9.0",
       "category": "productivity",
       "source": ".",
       "strict": false,
@@ -681,8 +681,8 @@
     },
     {
       "name": "handoff",
-      "description": "Handoff notes between your computers: continue on the other one without explaining everything again.",
-      "version": "1.2.2",
+      "description": "Hands work over to another computer: where it stands (branch, what's done, decisions, next steps) for a session there to resume, or a task that computer runs by itself at its next sync, in a worktree and within the scope you set, sending its status and report back to you; and tasks your own assistant runs by itself at a set time. For to-dos with a date, see reminders.",
+      "version": "1.3.0",
       "category": "productivity",
       "source": ".",
       "strict": false,
@@ -695,8 +695,8 @@
     },
     {
       "name": "daily-sync",
-      "description": "Syncs your config before the first session of the day and every morning at a time you pick, even with no session open.",
-      "version": "1.1.3",
+      "description": "Syncs your config before the first session of the day, every morning at a time you pick and when you log in, even with no session open.",
+      "version": "1.2.0",
       "category": "productivity",
       "source": ".",
       "strict": false,
@@ -722,8 +722,8 @@
     },
     {
       "name": "reminders",
-      "description": "Reminders for a later session, on any of your computers, notified on the desktop and the phone every morning; one-off or repeating, filed by group; and tasks your own assistant runs by itself at a set time.",
-      "version": "1.7.2",
+      "description": "One-line to-dos with a date or a repeat, sent to the desktop and the phone and shown at the first session of that day on any computer; filed by group. Never runs anything: to hand over work, to another computer or to your assistant, see handoff.",
+      "version": "1.8.0",
       "category": "productivity",
       "source": ".",
       "strict": false,

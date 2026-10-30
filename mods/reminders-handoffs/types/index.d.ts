@@ -42,9 +42,25 @@ export type Handoff = {
   repo?: string
   branch?: string
   closed?: string
+  /** The computer that runs it by itself, with `run`. */
+  for?: string
+  /** When that computer runs it: now, or a date and time. */
+  run?: string
+  /** What the run may do: read, edit or push. */
+  scope?: string
+  /** The run's state: queued, running, done, needs-you or failed. */
+  status?: string
+  /** The computer that ran it. */
+  run_by?: string
+  started?: string
+  ended?: string
   /** Written on this computer. */
   isMine?: boolean
+  /** For this computer. */
+  isForHere?: boolean
   body?: string
+  /** Set on an assistant's task, listed beside the notes: then the rest is a Reminder's. */
+  agent?: string
 }
 
 /**

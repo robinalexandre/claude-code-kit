@@ -307,9 +307,9 @@
       "needs": [
         "config-sync"
       ],
-      "what": "Handoff notes between computers.",
-      "why": "You continue on the other computer without explaining everything again.",
-      "when": "\"I'll continue on the other computer\".",
+      "what": "Saves where a task in progress stands (branch, what's done, decisions, next steps) for the next session on your other computer, or has that computer run it by itself and report back; and leaves tasks for your own assistant to run at a set time.",
+      "why": "You stop mid-task, and Claude carries on elsewhere without you explaining everything again. Not for to-dos with a date: that's reminders.",
+      "when": "\"I'll continue on the other computer\", \"have the PC do it now\", \"ask my assistant to … every morning\".",
       "who": "People working on two computers or more."
     },
     {
@@ -321,9 +321,9 @@
         "config-sync"
       ],
       "setup": "skills/daily-sync/setup.sh",
-      "what": "Syncs before the first session of the day and every morning at a time you pick.",
-      "why": "Each computer starts the day with what the others left.",
-      "when": "Every morning, by itself.",
+      "what": "Syncs before the first session of the day, every morning at a time you pick, and at login.",
+      "why": "Each computer starts the day with what the others left, and runs the handoffs left for it.",
+      "when": "Every morning and at login, by itself.",
       "who": "Sync engine users."
     },
     {
@@ -335,9 +335,9 @@
         "daily-sync"
       ],
       "setup": "skills/reminders/setup.sh",
-      "what": "Reminders for a later session, notified on the desktop and the phone every morning.",
-      "why": "What you mean to do tomorrow, or on the other computer, doesn't get lost.",
-      "when": "\"Remind me tomorrow to…\".",
+      "what": "A one-line to-do with a date or a repeat, sent to the desktop and the phone and shown at the first session of that day, on any computer.",
+      "why": "What you mean to do tomorrow or every Friday doesn't get lost. It never runs anything: work for another computer or for your assistant is a handoff.",
+      "when": "\"Remind me tomorrow to…\", \"every Friday…\".",
       "who": "Sync engine users."
     },
     {
