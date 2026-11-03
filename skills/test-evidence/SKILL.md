@@ -78,6 +78,10 @@ Show the user the folder (list the files, show the report), say which files you'
 
 Uploads are visible to the whole team, so only after the user's yes, and only the files they approved.
 
+**A PR that doesn't exist yet**: capture the proof first, then open the PR **as a draft**, attach the proof and the acceptance criteria, and only then publish it. An automated reviewer on CI usually skips drafts and runs again on every push: published before its proof, the PR gets a first review that finds none (and often votes "waiting for author"). Azure DevOps: `az repos pr create --draft true …`, attach, then `az repos pr update --id <PR> --draft false`. GitHub: `gh pr create --draft …`, attach, then `gh pr ready <PR>`.
+
+**One proof per PR**: when a story spans several repositories, give every PR its own proof (its screenshots, or a text log of its part of the run and its tests). A reviewer often reads only the attachments of the PR under review, so "see the other PR" counts as no proof. After a push that changes the behaviour, refresh that PR's proof, then re-run its review (on Azure DevOps, re-queue the check from the PR page or `az repos pr policy queue --id <PR> --evaluation-id <id>`).
+
 **Jira**: needs `JIRA_BASE_URL` and either `JIRA_PAT` (Server/Data Center) or `JIRA_EMAIL` + `JIRA_API_TOKEN` (Cloud). If they are missing, ask the user to set them in their environment; never ask for the token in the chat.
 
 ```sh
