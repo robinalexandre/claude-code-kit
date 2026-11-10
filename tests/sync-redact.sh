@@ -30,7 +30,10 @@ printf '%s\n' \
   'client_secret: str = ""' \
   'token = get_token()' \
   'password = "hunter2"' \
-  'api_key: abcdef123456' > "$F"
+  'api_key: abcdef123456' \
+  '# Token exchange untested; Basic authentication only' \
+  'curl -H "X-Auth: Bearer abc.DEF123_xyz"' \
+  'open /connect?customToken=<firebase custom token> or ?oauth_token=...' > "$F"
 cp "$F" "$WORK/original.py"
 bash "$A/sync.sh" now > /dev/null 2>&1
 S="$A/claude/skills/demo/demo.py"
@@ -40,6 +43,9 @@ check "an annotation with a default is kept" 'grep -qxF "client_secret: str = \"
 check "a function call is kept" 'grep -qxF "token = get_token()" "$S"'
 check "a quoted value is masked" 'grep -qxF "password = \"__SECRET__\"" "$S" && ! grep -q hunter2 "$S"'
 check "a bare value is masked" 'grep -qxF "api_key: __SECRET__" "$S"'
+check "words after Token or Basic are kept" 'grep -qxF "# Token exchange untested; Basic authentication only" "$S"'
+check "a bearer token is masked" 'grep -qxF "curl -H \"X-Auth: Bearer __SECRET__\"" "$S"'
+check "placeholders are kept" 'grep -qxF "open /connect?customToken=<firebase custom token> or ?oauth_token=..." "$S"'
 check "the local file keeps its values" 'cmp -s "$F" "$WORK/original.py"'
 
 echo "$fails problem(s)"

@@ -244,13 +244,13 @@ def secret_name: test("key|token|secret|pass|pwd|auth|cred|cookie|session|privat
 # a shell default (${X_TOKEN:-}), or a YAML/HTTP keyword. The name may end an
 # identifier after `_` or a camelCase hump (db_password, accessToken), never
 # mid-word.
-def ref: "(?:\\$|<[^>\\s]+>|\\{\\{|%\\w+%)";
+def ref: "(?:\\$|<[^>\\n]{1,60}>|\\{\\{|%\\w+%|\\.\\.\\.)";
 def not_value: "(?!" + ref + ")(?!-?\\})(?![A-Za-z_][A-Za-z0-9_.]*[(\\[])(?![A-Za-z_][A-Za-z0-9_.]* +=(?!=))(?![A-Z][A-Z0-9]*_[A-Z0-9_]*(?![A-Za-z0-9]))(?!(?i:write|read|none|no-check|true|false|null|required|optional)(?![^\\s\"\\x27,;)]))";
 def redact_str:
   gsub("sk-ant-[A-Za-z0-9_-]{20,}|xkeysib-[A-Za-z0-9-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]+|(sk|pk|rk)_(live|test)_[A-Za-z0-9]{16,}|xox[abprs]-[A-Za-z0-9-]{10,}|AIza[A-Za-z0-9_-]{30,}"; "__SECRET__")
   | gsub("(?<p>[A-Za-z][A-Za-z0-9+.-]*://[^/\\s:@]+:)(?!\\$\\{?\\w+\\}?@|<[^>]+>@|\\{\\{)[^@\\s/]+@"; "\(.p)__SECRET__@")
   | gsub("(?<p>(?i:authorization) *: *(?:(?i:bearer|basic|token|digest) +)?)(?!" + ref + ")[A-Za-z0-9._~+/=-]{8,}"; "\(.p)__SECRET__")
-  | gsub("(?<p>(?<![A-Za-z0-9_])(Bearer|Basic|Token) +)(?!" + ref + ")[A-Za-z0-9._~+/=-]{8,}"; "\(.p)__SECRET__")
+  | gsub("(?<p>(?<![A-Za-z0-9_])(Bearer|Basic|Token) +)(?!" + ref + ")(?=[A-Za-z._~+/=-]*[0-9])[A-Za-z0-9._~+/=-]{8,}"; "\(.p)__SECRET__")
   | gsub("(?<p>sshpass +-p *[\"\\x27]?)(?!\\$)[^\\s\"\\x27]+"; "\(.p)__SECRET__")
   | gsub("(?<p>(?:(?<![A-Za-z0-9])|(?<=[a-z])(?=[A-Z]))(?i:password|passwd|pass|pwd|passphrase|token|secret|api[_-]?key|apikey|access[_-]?key|private[_-]?key|client[_-]?secret|credentials?)[\"\\x27]? *[=:] *[\"\\x27]?)" + not_value + "[^\\s&\"\\x27`),;]+"; "\(.p)__SECRET__");
 # Values of secret-looking keys, except references like $VAR, <placeholder>, {{x}}.
