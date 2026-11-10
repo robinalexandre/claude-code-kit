@@ -84,6 +84,10 @@ jobs:
           bash tests/sync-pingpong.sh
       - name: The sync's pr-watch conflicts
         run: bash tests/sync-prwatch-conflict.sh
+      # The template is a GitHub workflow: it runs on Linux runners, so it is tested where bash and jq match them.
+      - name: The ci-review workflow template
+        if: runner.os != 'Windows'
+        run: bash tests/ci-review-workflow.sh
       - name: Mods
         working-directory: mods
         run: for m in */; do claude plugin test "${m%/}" || exit 1; done

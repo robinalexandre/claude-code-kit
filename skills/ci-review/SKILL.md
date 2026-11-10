@@ -25,7 +25,7 @@ When a repo we work on has no AI review step on its CI and no line in that file,
 4. **Security review**, a separate pass whose findings block like any important one.
 5. **Risk-based approval**: the change sets the risk, not its author. Low (docs, copy, tests, additive behind a flag), medium (ordinary product changes), high (data other clients read, migrations, rules, auth, payments, triggers, CI and release workflows, the repo's sensitive paths). A bot's approval never counts as a person's.
 6. **Every finding is answered**: fixed (the next run marks it resolved) or its thread resolved by a person with a short reason. Branch protection can require it.
-7. **Convergence**: after a few rounds, only the new commits are reviewed (earlier findings are still checked); past the cap, the review asks the author to step back and rethink the approach instead of patching one finding at a time; a bug that is one instance of a pattern is flagged as a class, so it is fixed everywhere at once.
+7. **Convergence**: after a few rounds, a PR the bot approved has only its new commits reviewed, from the commit its standing approval names (earlier findings are still checked); one it didn't approve gets the whole review again, so it can still be approved; past the cap, the review asks the author to step back and rethink the approach instead of patching one finding at a time; a bug that is one instance of a pattern is flagged as a class, so it is fixed everywhere at once.
 8. **Learn from misses**: a review comment that comes back on several PRs moves into REVIEW.md; a bug that reached production becomes a line in REVIEW.md's "What failure looks like here".
 
 ## 3. Settings, per repo
@@ -34,7 +34,7 @@ Ask the user for each; recommend from the repo (what breaks there, how often it 
 
 | Setting | Where | Choices |
 |---|---|---|
-| Depth | `REVIEW_DEPTH` in the workflow | `quick` (one pass), `standard` (a finder, then a fresh verifier: about 2× quick), `deep` (finders per concern, 2 voters, then the verifier: about 4 to 5× quick). Deep where one missed bug costs more than the review. |
+| Depth | `REVIEW_DEPTH` in the workflow | `quick` (one pass), `standard` (a finder, the security finder when it's on, then a fresh verifier: 2 to 3× quick), `deep` (finders per concern, 2 voters, then the verifier: 5 to 6× quick). Each push is reviewed, so on a seat token (`CLAUDE_CODE_OAUTH_TOKEN`, shared 5-hour limit) start with `quick` and raise it where one missed bug costs more than the review. |
 | Security pass | `SECURITY_REVIEW` | `true` adds a security finder to standard and deep (quick checks security in its one pass). With an Anthropic Console key, the official `anthropics/claude-code-security-review` action is an alternative (`$SK/templates/github-security-action.yml`); it takes only an API key and is not hardened against prompt injection, so run it on trusted PRs only. |
 | Automatic approval | `APPROVE_UP_TO` | `none` (never), `low`, `medium`, `high`: the bot approves a "Works" up to that risk. Ask before turning it on. |
 | Always high risk | `HIGH_RISK_PATHS` | An extended regex on file paths (rules, migrations, workflows), kept in step with REVIEW.md. |

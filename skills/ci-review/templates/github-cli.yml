@@ -56,6 +56,11 @@ env:
   FULL_ROUNDS: "2"
   MAX_ROUNDS: "3"
   MODEL: "" # empty: the CLI's default model
+  # jq: the job's own PR comment, the bot comment that ends with its marker and round trailer (or with the
+  # marker alone, as earlier versions wrote it: that one counts as round 0, nothing approved).
+  OWN_COMMENT: >-
+    def own: select(.user.login == "github-actions[bot]" and (.body |
+    test("<!-- ai-review -->(\\r?\\n<!-- ai-review-round:[0-9]+:[0-9a-f]{40}(:[a-z_]+)? -->)?\\s*$")));
 
 # The runner's default is "bash -e" without pipefail: a failed gh call piped into another command would go unnoticed.
 defaults:
@@ -98,8 +103,8 @@ jobs:
           rm -rf .ai-review-input
           mkdir .ai-review-input "$RUNNER_TEMP/out"
           IN=.ai-review-input
-          gh pr view "$PR" --json title,body,comments > "$IN/pr.json"
-          gh pr diff "$PR" > "$IN/pr.diff"
+          gh pr view "$PR" -R "$REPO" --json title,body,comments > "$IN/pr.json"
+          gh pr diff "$PR" -R "$REPO" > "$IN/pr.diff"
           # The bot's line comments from earlier runs, so the agent reuses their keys instead of posting them again.
           gh api "repos/$REPO/pulls/$PR/comments" --paginate --slurp |
             jq '[.[][] | select(.user.login == "github-actions[bot]") | . as $c
@@ -139,22 +144,28 @@ jobs:
             echo low > "$RUNNER_TEMP/risk-floor"
           fi
           # The round, the commit and the bot's approval state after the last review (approved, changes or none),
-          # from the trailer the job writes last in its comment (the review's own text is stripped of such markers
-          # before posting, so the last one is ours).
+          # from the trailer that ends the job's comment. Other bot comments (CI evidence, say) can quote PR text,
+          # and the review's own text is stripped of markers, so only a comment that ends with it counts.
           read -r last_round last_sha last_state < <(gh api "repos/$REPO/issues/$PR/comments" --paginate --slurp |
-            jq -r '[.[][] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- ai-review -->")))][0].body // ""
-              | [scan("<!-- ai-review-round:([0-9]+):([0-9a-f]{40}):([a-z_]+) -->")] | last // ["0", "", ""]
+            jq -r "$OWN_COMMENT"'[.[][] | own][0].body // ""
+              | [scan("<!-- ai-review-round:([0-9]+):([0-9a-f]{40})(?::([a-z_]+))? -->")] | last // ["0", "", ""]
               | join(" ")') || true
           last_round=${last_round:-0}
           round=$((last_round + 1))
           [ "$last_sha" != "$HEAD_SHA" ] || round=$last_round
           [ "$round" -ge 1 ] || round=1
-          # From the round after FULL_ROUNDS, only what changed since the last review, in the PR's own files (a
-          # merge from the base branch brings in commits that aren't the PR's).
+          # Approved holds only while the bot's approval still stands (every round that doesn't approve withdraws
+          # it), and the commit it approved comes from that review, not from a comment that could be faked.
+          approved_sha=$(gh api "repos/$REPO/pulls/$PR/reviews" --paginate --slurp |
+            jq -r '[.[][] | select(.user.login == "github-actions[bot]" and .state == "APPROVED")] | last | .commit_id // empty')
+          [ "$last_state" = approved ] && [ -n "$approved_sha" ] || last_state=none
+          # From the round after FULL_ROUNDS, and while the bot's approval stands, only what changed since the
+          # commit it approved, in the PR's own files (a merge from the base branch brings in commits that aren't
+          # the PR's). A PR the bot didn't approve last time gets the whole review again, so it can still be approved.
           scope=full
-          if [ "$round" -gt "$FULL_ROUNDS" ] && [ -n "$last_sha" ] && [ "$last_sha" != "$HEAD_SHA" ] &&
-            [ "$(gh api "repos/$REPO/compare/$last_sha...$HEAD_SHA" --jq .status 2>/dev/null)" = "ahead" ]; then
-            gh api "repos/$REPO/compare/$last_sha...$HEAD_SHA" > "$RUNNER_TEMP/compare.json"
+          if [ "$round" -gt "$FULL_ROUNDS" ] && [ "$last_state" = approved ] && [ "$approved_sha" != "$HEAD_SHA" ] &&
+            [ "$(gh api "repos/$REPO/compare/$approved_sha...$HEAD_SHA" --jq .status 2>/dev/null)" = "ahead" ]; then
+            gh api "repos/$REPO/compare/$approved_sha...$HEAD_SHA" > "$RUNNER_TEMP/compare.json"
             # GitHub leaves out the patch of a large or binary file and lists 300 files at most: then the new
             # commits can't be seen whole, and the review covers the whole PR again.
             if jq -e --rawfile files "$RUNNER_TEMP/files.txt" '($files | split("\n")) as $pr
@@ -191,9 +202,10 @@ jobs:
 
           context="Pull request: read $IN/pr.json (title, description, comments) and $IN/pr.diff (the whole PR)."
           if [ "$scope" = new ]; then
-            context="$context This is review round $round: earlier rounds reviewed the rest, so look for new issues only in $IN/new.diff (the PR's changes since the last review); read $IN/pr.diff and the code around it for context."
+            context="$context This is review round $round: earlier rounds reviewed the rest, so look for new issues only in $IN/new.diff (the PR's changes since the commit the bot approved); read $IN/pr.diff and the code around it for context."
           fi
-          if [ "$round" -gt "$MAX_ROUNDS" ]; then
+          # Follow-up pushes on a PR the bot approved are no sign of trouble.
+          if [ "$round" -gt "$MAX_ROUNDS" ] && [ "$(cat "$RUNNER_TEMP/last-state")" != approved ]; then
             context="$context This PR has been reviewed $round times: say so in the comment's first bullet and ask the author to step back and reconsider the approach instead of fixing one finding at a time."
           fi
           rules=$(cat "$RUNNER_TEMP/review-prompt.md")
@@ -221,8 +233,10 @@ jobs:
                 > "$OUT/$1.json" 2> "$OUT/$1.log" || true
               jq -e '.structured_output' "$OUT/$1.json" > /dev/null 2>&1 && return 0
               # Why, without the prompt or the answer: the CLI's error kind and the last lines of its log.
-              echo "::warning::The review pass $1 failed (try $try): $(jq -r '[.subtype // empty, (.result // empty | tostring | .[:200])] | join(": ")' \
+              echo "::warning::The review pass $1 failed (try $try): $(jq -r '[.subtype // empty, (.result // empty | tostring | .[:200])] | join(": ") | gsub("[\\r\\n]+"; " ")' \
                 "$OUT/$1.json" 2>/dev/null) $(tail -n 3 "$OUT/$1.log" | tr '\n' ' ' | cut -c1-300)"
+              # A usage limit lasts hours: trying again a minute later only adds a call.
+              ! grep -qiE "hit your .*limit|usage limit" "$OUT/$1.json" "$OUT/$1.log" 2>/dev/null || break
               [ "$try" = 2 ] || sleep 60
             done
             # A pass that crashed may leave something that isn't JSON: it counts as no answer.
@@ -236,7 +250,10 @@ jobs:
           security="security only: injection, access control and security rules, secrets, authentication, one user's data another can read or write"
           case "$REVIEW_DEPTH" in
             quick)
-              pass final 30 "$final_schema" "Your part: find the issues yourself and give the final review. $final_part"
+              also=""
+              [ "$SECURITY_REVIEW" != "true" ] ||
+                also=" Check security as well, with the same care: ${security#security only: }."
+              pass final 30 "$final_schema" "Your part: find the issues yourself and give the final review.$also $final_part"
               ;;
             standard|deep)
               if [ "$REVIEW_DEPTH" = deep ]; then
@@ -291,7 +308,8 @@ jobs:
           fi
 
           # The review's own text can't carry the job's markers: the job reads them back on the next run.
-          strip='gsub("<!--\\s*ai-review[^>]*-->"; "")'
+          # Until nothing is left: one marker nested in another would otherwise rebuild it.
+          strip='(def strip: gsub("<!--\\s*ai-review[^>]*-->"; "") as $s | if $s == . then . else ($s | strip) end; strip)'
           jq -r ".structured_output.comment // \"\" | $strip" "$OUT/final.json" > "$OUT/review.md"
           risk=$(jq -r '.structured_output.risk // "high"' "$OUT/final.json")
           if [ "$(cat "$RUNNER_TEMP/risk-floor")" = high ] && [ "$risk" != high ]; then
@@ -304,7 +322,7 @@ jobs:
             | select((.key | test(\"^[a-z0-9-]{1,40}\$\")) and (.path | type == \"string\") and (.line | type == \"number\"))
             | .body |= $strip
             | if (.key | test(\"^cand-[0-9]+\$\")) then .key = (\"at-\" + (.path | ascii_downcase | gsub(\"[^a-z0-9]+\"; \"-\") | .[-24:]) + \"-\" + (.line | tostring)) else . end]
-            | unique_by([.key, .path])
+            | reduce .[] as \$f ([]; if any(.[]; .key == \$f.key and .path == \$f.path) then . else . + [\$f] end)
             | [.[] | select(.severity != \"nit\")][:10] + [.[] | select(.severity == \"nit\")][:3]" \
             "$OUT/final.json" > "$OUT/findings.json"
           jq '[.structured_output.fixed // [] | .[] | select(type == "string")]' "$OUT/final.json" > "$OUT/fixed.json"
@@ -347,15 +365,16 @@ jobs:
           scope=$(cat "$RUNNER_TEMP/scope")
           last_state=$(cat "$RUNNER_TEMP/last-state")
           # The review must speak for the commit that was reviewed: a later push gets its own run.
-          if [ "$(gh pr view "$PR" --json headRefOid --jq .headRefOid)" != "$HEAD_SHA" ]; then
+          # This step runs outside the checkout, so gh needs the repo; a failed lookup stops the job.
+          head=$(gh pr view "$PR" -R "$REPO" --json headRefOid --jq .headRefOid)
+          if [ "$head" != "$HEAD_SHA" ]; then
             echo "The PR moved on during the review; the run for the new commit decides." >&2
             exit 0
           fi
           bot='github-actions[bot]'
           marker='<!-- ai-review -->'
           comment_id=$(gh api "repos/$REPO/issues/$PR/comments" --paginate --slurp |
-            jq -r --arg bot "$bot" --arg marker "$marker" \
-              '[.[][] | select(.user.login == $bot and (.body | contains($marker)))][0].id // empty')
+            jq -r "$OWN_COMMENT"'[.[][] | own][0].id // empty')
           post_comment() {
             { cat review.md
               printf '\n\n_Review round %s of commit %s (%s, %s)._\n\n%s\n<!-- ai-review-round:%s:%s:%s -->\n' \
@@ -386,7 +405,7 @@ jobs:
             elif [ "$verdict" = "works" ] && [ "$(cat "$RUNNER_TEMP/approvable")" = "true" ]; then
               printf '\n\n_Not approved automatically: a %s-risk change needs a person (the bot approves up to %s risk here)._\n' \
                 "$risk" "$APPROVE_UP_TO" >> review.md
-            elif [ "$verdict" = "works" ]; then
+            elif [ "$verdict" = "works" ] && ! grep -q '^_Not approved automatically:' review.md; then
               printf '\n\n_Not approved automatically: this PR targets another branch than the default one, or changes the CI, the review rules or the agent settings, so a person approves it._\n' >> review.md
             elif [ "$verdict" = "doesnt_work" ]; then
               target=CHANGES_REQUESTED
@@ -486,7 +505,8 @@ jobs:
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          if [ "$(gh pr view "$PR" --json headRefOid --jq .headRefOid)" != "$HEAD_SHA" ]; then
+          head=$(gh pr view "$PR" -R "$REPO" --json headRefOid --jq .headRefOid)
+          if [ "$head" != "$HEAD_SHA" ]; then
             exit 0
           fi
           gh api "repos/$REPO/pulls/$PR/reviews" --paginate --slurp |
