@@ -414,7 +414,13 @@ const status = async ($: EngineInterface, mode: Mode) => {
     throw new StatusProblem((ran.stderr.trim() || `pr-watch exited with ${ran.exitCode}`).split('\n')[0])
   }
 
-  return JSON.parse(ran.stdout) as Omit<PrSnapshot, 'isLive' | 'at'>
+  const parsed = JSON.parse(ran.stdout) as Omit<PrSnapshot, 'isLive' | 'at'> | null
+
+  if (parsed === null || typeof parsed !== 'object' || !Array.isArray(parsed.prs)) {
+    throw new StatusProblem('pr-watch sent an unexpected answer')
+  }
+
+  return parsed
 }
 
 // pr-watch's cached status holds each PR as its last check recorded it, often older than the live
