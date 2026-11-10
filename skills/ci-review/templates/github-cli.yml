@@ -153,12 +153,18 @@ jobs:
           scope=full
           if [ "$round" -gt "$FULL_ROUNDS" ] && [ -n "$last_sha" ] && [ "$last_sha" != "$HEAD_SHA" ] &&
             [ "$(gh api "repos/$REPO/compare/$last_sha...$HEAD_SHA" --jq .status 2>/dev/null)" = "ahead" ]; then
-            gh api "repos/$REPO/compare/$last_sha...$HEAD_SHA" --jq '.files[] | {filename, patch: (.patch // "")}' |
-              jq -rs --rawfile files "$RUNNER_TEMP/files.txt" '($files | split("\n")) as $pr
-                | .[] | select(.filename as $f | $pr | index($f)) | select(.patch != "")
+            gh api "repos/$REPO/compare/$last_sha...$HEAD_SHA" > "$RUNNER_TEMP/compare.json"
+            # GitHub leaves out the patch of a large or binary file and lists 300 files at most: then the new
+            # commits can't be seen whole, and the review covers the whole PR again.
+            if jq -e --rawfile files "$RUNNER_TEMP/files.txt" '($files | split("\n")) as $pr
+              | (.files | length) < 300 and all(.files[] | select(.filename as $f | $pr | index($f)); .patch != null)' \
+              "$RUNNER_TEMP/compare.json" > /dev/null; then
+              jq -r --rawfile files "$RUNNER_TEMP/files.txt" '($files | split("\n")) as $pr
+                | .files[] | select(.filename as $f | $pr | index($f)) | select(.patch != "")
                 | "diff --git a/\(.filename) b/\(.filename)\n--- a/\(.filename)\n+++ b/\(.filename)\n\(.patch)"' \
-              > "$IN/new.diff" || : > "$IN/new.diff"
-            [ ! -s "$IN/new.diff" ] || scope=new
+                "$RUNNER_TEMP/compare.json" > "$IN/new.diff"
+              [ ! -s "$IN/new.diff" ] || scope=new
+            fi
           fi
           echo "$round" > "$RUNNER_TEMP/round"
           echo "$scope" > "$RUNNER_TEMP/scope"
