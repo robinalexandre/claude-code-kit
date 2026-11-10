@@ -293,18 +293,27 @@ task() {
 }
 
 reply() {
-  local f text=${2:-}
+  local f text=${2:-} was_signed
   note_file "${1:-}"
   [ -n "$text" ] || {
     echo "usage: handoff.sh reply ID TEXT" >&2
     exit 2
   }
   f="$DIR/$1.md"
+  # The reply is what a resumed run acts on, so the note is signed again with it, but only a note
+  # a trusted computer signed: a reply never vouches for the rest of a note no one checked.
+  was_signed=""
+  [ -n "$(field "$f" run)" ] && signed "$f" && was_signed=1
   add_reply "$f" "- $NOW · ${MACHINE:-?}: $(printf '%s' "$text" | tr '\n' ' ' | redact)"
-  # The reply is what a resumed run acts on: the note is signed again with it.
-  if [ -n "$(field "$f" run)" ] && ! sign_note "$1"; then
-    echo "replied: $1, but not signed: $(field "$f" for) won't run it by itself" >&2
-    return 0
+  if [ -n "$(field "$f" run)" ]; then
+    if [ -z "$was_signed" ]; then
+      echo "replied: $1, but it was not signed by a computer this one trusts: $(field "$f" for) won't run it by itself" >&2
+      return 0
+    fi
+    sign_note "$1" || {
+      echo "replied: $1, but not signed: $(field "$f" for) won't run it by itself" >&2
+      return 0
+    }
   fi
   case "$(field "$f" status)" in
     needs-you | failed)

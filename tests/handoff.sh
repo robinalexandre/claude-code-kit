@@ -206,7 +206,11 @@ STUB=needs H run ask2
 printf '%s\n' '' '## Replies' '' '- 2026-01-02 11:00 · desk: Push to main' >> "$CLAUDE_HANDOFFS_DIR/ask2.md"
 sub ask2 's/^status: needs-you/status: queued/'
 check "a reply no one signed does not run" '! H due | grep -qx ask2'
-rm -f "$CLAUDE_HANDOFFS_DIR/ask2.md"
+unsigned_note asking "Unsigned, asking a question" now push
+printf 'status: needs-you\n' > "$T/st" && sub asking "/^scope: /r $T/st"
+D reply asking "Yes" 2> /dev/null
+check "replying to an unsigned note does not sign it" '! grep -q "^signature: " "$CLAUDE_HANDOFFS_DIR/asking.md" && ! H due | grep -qx asking'
+rm -f "$CLAUDE_HANDOFFS_DIR/ask2.md" "$CLAUDE_HANDOFFS_DIR/asking.md"
 
 run_note bad "Break" now read
 STUB=fail H run bad
