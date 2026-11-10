@@ -138,9 +138,10 @@ jobs:
           else
             echo low > "$RUNNER_TEMP/risk-floor"
           fi
-          # The round, the commit and the verdict of the last review, from the trailer the job writes last in its
-          # comment (the review's own text is stripped of such markers before posting, so the last one is ours).
-          read -r last_round last_sha last_verdict < <(gh api "repos/$REPO/issues/$PR/comments" --paginate --slurp |
+          # The round, the commit and the bot's approval state after the last review (approved, changes or none),
+          # from the trailer the job writes last in its comment (the review's own text is stripped of such markers
+          # before posting, so the last one is ours).
+          read -r last_round last_sha last_state < <(gh api "repos/$REPO/issues/$PR/comments" --paginate --slurp |
             jq -r '[.[][] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- ai-review -->")))][0].body // ""
               | [scan("<!-- ai-review-round:([0-9]+):([0-9a-f]{40}):([a-z_]+) -->")] | last // ["0", "", ""]
               | join(" ")') || true
@@ -168,8 +169,8 @@ jobs:
           fi
           echo "$round" > "$RUNNER_TEMP/round"
           echo "$scope" > "$RUNNER_TEMP/scope"
-          echo "${last_verdict:-none}" > "$RUNNER_TEMP/last-verdict"
-          echo "Review round $round, scope $scope, depth $REVIEW_DEPTH, last verdict ${last_verdict:-none}."
+          echo "${last_state:-none}" > "$RUNNER_TEMP/last-state"
+          echo "Review round $round, scope $scope, depth $REVIEW_DEPTH, last state ${last_state:-none}."
       - name: Review
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -335,7 +336,7 @@ jobs:
           risk=$(cat risk.txt)
           round=$(cat "$RUNNER_TEMP/round")
           scope=$(cat "$RUNNER_TEMP/scope")
-          last_verdict=$(cat "$RUNNER_TEMP/last-verdict")
+          last_state=$(cat "$RUNNER_TEMP/last-state")
           # The review must speak for the commit that was reviewed: a later push gets its own run.
           if [ "$(gh pr view "$PR" --json headRefOid --jq .headRefOid)" != "$HEAD_SHA" ]; then
             echo "The PR moved on during the review; the run for the new commit decides." >&2
@@ -350,7 +351,7 @@ jobs:
             { cat review.md
               printf '\n\n_Review round %s of commit %s (%s, %s)._\n\n%s\n<!-- ai-review-round:%s:%s:%s -->\n' \
                 "$round" "${HEAD_SHA:0:7}" "$REVIEW_DEPTH" "$([ "$scope" = new ] && echo "new commits only" || echo "whole PR")" \
-                "$marker" "$round" "$HEAD_SHA" "$verdict"; } > comment.md
+                "$marker" "$round" "$HEAD_SHA" "$state"; } > comment.md
             if [ -n "$comment_id" ]; then
               comment_url=$(gh api -X PATCH "repos/$REPO/issues/comments/$comment_id" -F body=@comment.md --jq .html_url)
             else
@@ -362,11 +363,11 @@ jobs:
 
           # The review state the bot should hold on the PR after this run.
           rank() { case "$1" in none) echo 0 ;; low) echo 1 ;; medium) echo 2 ;; *) echo 3 ;; esac; }
-          # A review of the new commits only approves after a whole-PR or partial review that said Works: an
-          # earlier blocking issue could otherwise sit outside what this run looked at.
-          if [ "$scope" = new ] && [ "$last_verdict" != works ] && [ "$verdict" = works ]; then
+          # A review of the new commits only approves when the bot approved the round before: an earlier blocking
+          # issue, or a risk the bot doesn't approve, could otherwise sit outside what this run looked at.
+          if [ "$scope" = new ] && [ "$last_state" != approved ] && [ "$verdict" = works ]; then
             echo false > "$RUNNER_TEMP/approvable"
-            printf '\n\n_Not approved automatically: this round reviewed the new commits only, after a review that did not say Works; a person approves it, or a review of the whole PR._\n' >> review.md
+            printf '\n\n_Not approved automatically: this round reviewed the new commits only, and the round before was not approved; a person approves it._\n' >> review.md
           fi
           target=none
           if [ "$APPROVE_UP_TO" != "none" ]; then
@@ -382,6 +383,7 @@ jobs:
               target=CHANGES_REQUESTED
             fi
           fi
+          case "$target" in APPROVED) state=approved ;; CHANGES_REQUESTED) state=changes ;; *) state=none ;; esac
 
           # Resolving a thread is a nicety: when the token may not, the comment's own text still says it.
           threads=$(gh api graphql -f owner="${REPO%/*}" -f name="${REPO#*/}" -F number="$PR" -f query='
@@ -454,6 +456,7 @@ jobs:
               -f body="✅ Works ($risk risk): $comment_url" >/dev/null; then
               echo "::warning::GitHub refused the approval (Settings > Actions > General: allow GitHub Actions to create and approve pull requests)."
               printf '\n\n_Not approved automatically: GitHub refused the approval (this repo does not let GitHub Actions approve pull requests), so a person approves it._\n' >> review.md
+              state=none
               post_comment
             fi
           elif [ "$kept" = "false" ] && [ "$target" = "CHANGES_REQUESTED" ]; then
