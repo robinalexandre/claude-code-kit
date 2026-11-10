@@ -207,17 +207,26 @@ jobs:
 
           # One agent run: its name (its answer goes to $OUT/<name>.json), its turn limit, its schema, its part of
           # the work. The prompt comes first: --allowedTools and --disallowedTools take every argument after them.
+          # A pass that fails (a rate limit when several run at once) is tried again once, a minute later.
           pass() {
-            claude -p "$4 $context
+            local try
+            for try in 1 2; do
+              claude -p "$4 $context
 
           $rules" ${MODEL:+--model "$MODEL"} --permission-mode dontAsk --max-turns "$2" --output-format json \
-              --json-schema "$3" \
-              --allowedTools "Read(./**)" "Grep" "Glob" \
-              --disallowedTools "Read(//proc/**)" "Read(//sys/**)" "Read(//tmp/**)" "Read(/$RUNNER_TEMP/**)" \
-                "Read(~/.claude/**)" "Read(~/.config/**)" "Read(~/.local/**)" \
-              > "$OUT/$1.json" 2> "$OUT/$1.log" || echo "::warning::The review pass $1 failed."
+                --json-schema "$3" \
+                --allowedTools "Read(./**)" "Grep" "Glob" \
+                --disallowedTools "Read(//proc/**)" "Read(//sys/**)" "Read(//tmp/**)" "Read(/$RUNNER_TEMP/**)" \
+                  "Read(~/.claude/**)" "Read(~/.config/**)" "Read(~/.local/**)" \
+                > "$OUT/$1.json" 2> "$OUT/$1.log" || true
+              jq -e '.structured_output' "$OUT/$1.json" > /dev/null 2>&1 && return 0
+              # Why, without the prompt or the answer: the CLI's error kind and the last lines of its log.
+              echo "::warning::The review pass $1 failed (try $try): $(jq -r '[.subtype // empty, (.result // empty | tostring | .[:200])] | join(": ")' \
+                "$OUT/$1.json" 2>/dev/null) $(tail -n 3 "$OUT/$1.log" | tr '\n' ' ' | cut -c1-300)"
+              [ "$try" = 2 ] || sleep 60
+            done
             # A pass that crashed may leave something that isn't JSON: it counts as no answer.
-            jq -e '.structured_output' "$OUT/$1.json" > /dev/null 2>&1 || echo '{}' > "$OUT/$1.json"
+            echo '{}' > "$OUT/$1.json"
           }
           answered() { jq -e '.structured_output' "$OUT/$1.json" > /dev/null; }
           finder() {
