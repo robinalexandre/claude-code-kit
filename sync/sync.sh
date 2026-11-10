@@ -246,7 +246,7 @@ def secret_name: test("key|token|secret|pass|pwd|auth|cred|cookie|session|privat
 # mid-word.
 def ref_end: "(?=[\\s\"\\x27&),;`]|$)";
 def ref: "(?:\\$|<[^>\\n\"\\x27&|;]{1,60}>" + ref_end + "|\\{\\{|%\\w+%|\\.\\.\\." + ref_end + ")";
-def not_value: "(?!" + ref + ")(?!-?\\})(?![A-Za-z_][A-Za-z0-9_.]*[(\\[])(?![A-Za-z_][A-Za-z0-9_.]* +=(?!=))(?![A-Z][A-Z0-9]*_[A-Z0-9_]*(?![A-Za-z0-9]))(?!(?i:write|read|none|no-check|true|false|null|required|optional)(?![^\\s\"\\x27,;)]))";
+def not_value: "(?!" + ref + ")(?!-?\\})(?![A-Za-z_][A-Za-z0-9_.]*[(\\[])(?![A-Za-z_][A-Za-z0-9_.]* +=(?!=))(?![A-Z][A-Z0-9]*_[A-Z0-9_]*(?![A-Za-z0-9]))(?!(?i:write|read|none|no-check|true|false|null|required|optional)(?![^\\s\"\\x27`,;)]))";
 def redact_str:
   gsub("sk-ant-[A-Za-z0-9_-]{20,}|xkeysib-[A-Za-z0-9-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]+|(sk|pk|rk)_(live|test)_[A-Za-z0-9]{16,}|xox[abprs]-[A-Za-z0-9-]{10,}|AIza[A-Za-z0-9_-]{30,}"; "__SECRET__")
   | gsub("(?<p>[A-Za-z][A-Za-z0-9+.-]*://[^/\\s:@]+:)(?!\\$\\{?\\w+\\}?@|<[^>]+>@|\\{\\{)[^@\\s/]+@"; "\(.p)__SECRET__@")

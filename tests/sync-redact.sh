@@ -35,7 +35,8 @@ printf '%s\n' \
   'curl -H "X-Auth: Bearer abc.DEF123_xyz"' \
   'open /connect?customToken=<firebase custom token> or ?oauth_token=...' \
   'curl -H "Authorization2: Bearer abcdefghijklmnopqrstuvwxyzabcdef"' \
-  'token=<x>hunter3 and secret=...hunter4' > "$F"
+  'token=<x>hunter3 and secret=...hunter4' \
+  '# POST with `X-Atlassian-Token: no-check`, then stop' > "$F"
 cp "$F" "$WORK/original.py"
 bash "$A/sync.sh" now > /dev/null 2>&1
 S="$A/claude/skills/demo/demo.py"
@@ -50,6 +51,7 @@ check "a bearer token is masked" 'grep -qxF "curl -H \"X-Auth: Bearer __SECRET__
 check "placeholders are kept" 'grep -qxF "open /connect?customToken=<firebase custom token> or ?oauth_token=..." "$S"'
 check "a letters-only bearer token is masked" '! grep -q abcdefghijklmnopqrstuvwxyzabcdef "$S"'
 check "a placeholder glued to a value does not hide it" '! grep -qE "hunter3|hunter4" "$S"'
+check "a known word in inline code is kept" 'grep -qxF "# POST with \`X-Atlassian-Token: no-check\`, then stop" "$S"'
 check "the local file keeps its values" 'cmp -s "$F" "$WORK/original.py"'
 
 echo "$fails problem(s)"
