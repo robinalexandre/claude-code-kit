@@ -1,0 +1,34 @@
+# .github/workflows/security-review.yml
+# Anthropic's open-source security review action, as a separate check next to the AI review. Use it instead of the
+# CLI workflow's SECURITY_REVIEW pass when the repo has an Anthropic Console key: the action takes only an API key
+# (ANTHROPIC_API_KEY secret, enabled for the Claude API and Claude Code), not a seat token.
+# Its README says it is not hardened against prompt injection: run it only on trusted PRs (no forks; for a public
+# repo, "Require approval for all external contributors" in Settings > Actions).
+# Pinned to a commit (a tag or a branch can be moved); let Dependabot or Renovate bump it.
+name: Security review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  security:
+    if: ${{ !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: anthropics/claude-code-security-review@0c6a49f1fa56a1d472575da86a94dbc1edb78eda # main, 2026-11
+        with:
+          claude-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          comment-pr: true
+          # exclude-directories: "vendor,generated"
+          # custom-security-scan-instructions: .github/ai-review/security-instructions.txt

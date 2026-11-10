@@ -1,21 +1,37 @@
 # .github/workflows/ai-review.yml
-# Review through the CLI in headless mode and review-prompt.md, with an optional automatic approval.
+# Review through the CLI in headless mode, with review-prompt.md and the repository's REVIEW.md, and an optional
+# automatic approval up to a risk level.
 #
 # Auth, one secret: CLAUDE_CODE_OAUTH_TOKEN (a Claude Pro, Max, Team or Enterprise seat: `claude setup-token`,
 # valid a year, billed to that person's subscription, stops working if they lose the seat) or ANTHROPIC_API_KEY
 # (Console billing). The job's own GITHUB_TOKEN reads the PR and posts the review.
+#
+# How it reviews (REVIEW_DEPTH): "quick" is one pass. "standard" has a finder list candidate issues, then a fresh
+# reviewer check each one in the code and write the review: what it can't confirm with a file and line is dropped.
+# "deep" runs finders per concern in parallel and two voters on every candidate; only what both confirm reaches
+# the final reviewer. SECURITY_REVIEW adds a finder of its own for security (standard and deep), whose findings go
+# through the same checks and block like any important one.
+# Each finding is important (blocks: "Doesn't work"), nit (at most 3) or pre-existing (a bug the PR didn't
+# introduce; never blocks). The review rates the change's risk (low, medium, high); paths in HIGH_RISK_PATHS are
+# always high.
+# Re-reviews: after FULL_ROUNDS reviews, a push is reviewed on its new commits only (earlier findings are still
+# checked); past MAX_ROUNDS, the review asks the author to step back and rethink the approach.
+#
 # The review lives in one comment per PR, edited by every run instead of stacking a new one on each push. An issue
 # tied to specific lines also gets a line comment there; the next run edits it, or marks it resolved once fixed.
-# Automatic approval (AUTO_APPROVE "true"): the repo must allow it, Settings > Actions > General >
-# "Allow GitHub Actions to create and approve pull requests". The job approves on "Works", requests changes on
-# "Doesn't work", and withdraws its earlier review when the verdict changes; a review that still holds is kept, so a
-# new one (a short line linking to the comment) only appears when the state changes. It never merges. To keep a
-# human in the loop, make main's protection require one more approval than the bot gives (the bot and a person).
-# The review prompt is read from the default branch, only PRs into it can be approved, the approval is pinned to
-# the reviewed commit, and a PR that changes the workflows, the prompt or the agent's own settings (.github/,
-# CLAUDE.md, CLAUDE.local.md, .claude/, .mcp.json) is never approved by the bot: a PR could otherwise rewrite
-# the rules it is judged by.
-# Another agent CLI works the same way: replace the "Review" command, keep the prompt file.
+# Automatic approval (APPROVE_UP_TO low, medium or high; "none" never approves): the repo must allow it,
+# Settings > Actions > General > "Allow GitHub Actions to create and approve pull requests". The job approves a
+# "Works" whose risk is at most APPROVE_UP_TO, requests changes on "Doesn't work", and withdraws its earlier review
+# when that changes; a review that still holds is kept, so a new one (a short line linking to the comment) only
+# appears when the state changes. A run that fails or times out withdraws the bot's approval, so an earlier
+# commit's approval never covers code nobody reviewed. It never merges. A bot's approval is not a person's: to
+# keep a human on what the bot doesn't approve, make main's protection require one more approval than the bot
+# gives (the bot and a person).
+# The review prompt and REVIEW.md are read from the default branch, only PRs into it can be approved, the
+# approval is pinned to the reviewed commit, and a PR that changes the workflows, the prompt or the agent's own
+# settings (.github/, CLAUDE.md, CLAUDE.local.md, REVIEW.md, .claude/, .mcp.json) is never approved by the bot:
+# a PR could otherwise rewrite the rules it is judged by.
+# Another agent CLI works the same way: replace the command in pass(), keep the prompt files.
 #
 # The PR's text, diff and files can carry instructions aimed at the agent, so the agent never holds the GitHub
 # token, may only read the workspace, and its reply is checked for the secrets. --bare would also skip the PR
@@ -32,7 +48,14 @@ permissions:
   pull-requests: write
 
 env:
-  AUTO_APPROVE: "false"
+  REVIEW_DEPTH: standard # quick, standard or deep
+  SECURITY_REVIEW: "true"
+  APPROVE_UP_TO: none # none, low, medium or high
+  # Extended regex on file paths; a PR touching one is high risk whatever the review says. Keep REVIEW.md in step.
+  HIGH_RISK_PATHS: '^\.github/workflows/'
+  FULL_ROUNDS: "2"
+  MAX_ROUNDS: "3"
+  MODEL: "" # empty: the CLI's default model
 
 # The runner's default is "bash -e" without pipefail: a failed gh call piped into another command would go unnoticed.
 defaults:
@@ -50,7 +73,7 @@ jobs:
       group: ai-review-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -61,13 +84,14 @@ jobs:
         run: |
           curl -fsSL https://claude.ai/install.sh | bash
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: Fetch the PR and the review prompt
+      - name: Fetch the PR, the review rules and the earlier rounds
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
           BASE: ${{ github.event.pull_request.base.ref }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           gh pr view "$PR" --json title,body,comments > pr.json
           gh pr diff "$PR" > pr.diff
@@ -75,7 +99,8 @@ jobs:
           gh api "repos/$REPO/pulls/$PR/comments" --paginate --slurp |
             jq '[.[][] | select(.user.login == "github-actions[bot]") | . as $c
               | (.body | capture("<!-- ai-review-finding:(?<key>[a-z0-9-]+) -->"))
-              | {key, path: $c.path, line: ($c.line // $c.original_line), comment: $c.body}]' > ai-review-findings.json
+              | {key, path: $c.path, line: ($c.line // $c.original_line), open: ($c.body | startswith("✅ Resolved") | not),
+                 comment: $c.body}]' > ai-review-findings.json
           approvable=true
           # The rules come from the default branch: a PR could point at a base branch whose prompt its author wrote.
           if gh api "repos/$REPO/contents/.github/ai-review/review-prompt.md?ref=$DEFAULT_BRANCH" --jq .content |
@@ -86,14 +111,42 @@ jobs:
             cp .github/ai-review/review-prompt.md "$RUNNER_TEMP/review-prompt.md"
             approvable=false
           fi
+          if ! gh api "repos/$REPO/contents/REVIEW.md?ref=$DEFAULT_BRANCH" --jq .content 2>/dev/null |
+            base64 -d > "$RUNNER_TEMP/REVIEW.md" 2>/dev/null; then
+            : > "$RUNNER_TEMP/REVIEW.md"
+          fi
           [ "$BASE" = "$DEFAULT_BRANCH" ] || approvable=false
           # Old names too: a file renamed away from a sensitive path changes it as much as an edit.
           gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[] | .filename, (.previous_filename // empty)' \
             > "$RUNNER_TEMP/files.txt"
-          if grep -qiE '^(\.github/|\.claude/|\.mcp\.json$)|(^|/)claude(\.local)?\.md$' "$RUNNER_TEMP/files.txt"; then
+          if grep -qiE '^(\.github/|\.claude/|\.mcp\.json$)|(^|/)(claude(\.local)?|review)\.md$' "$RUNNER_TEMP/files.txt"; then
             approvable=false
           fi
           echo "$approvable" > "$RUNNER_TEMP/approvable"
+          if [ -n "$HIGH_RISK_PATHS" ] && grep -qE -- "$HIGH_RISK_PATHS" "$RUNNER_TEMP/files.txt"; then
+            echo high > "$RUNNER_TEMP/risk-floor"
+          else
+            echo low > "$RUNNER_TEMP/risk-floor"
+          fi
+          # The round, counted in the review comment; a rerun on the same commit is the same round.
+          read -r last_round last_sha < <(gh api "repos/$REPO/issues/$PR/comments" --paginate --slurp |
+            jq -r '[.[][] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- ai-review -->")))][0].body // ""
+              | capture("<!-- ai-review-round:(?<n>[0-9]+):(?<sha>[0-9a-f]{7,40}) -->") // {n: "0", sha: ""}
+              | "\(.n) \(.sha)"') || true
+          last_round=${last_round:-0}
+          round=$((last_round + 1))
+          [ "$last_sha" != "$HEAD_SHA" ] || round=$last_round
+          [ "$round" -ge 1 ] || round=1
+          scope=full
+          if [ "$round" -gt "$FULL_ROUNDS" ] && [ -n "$last_sha" ] && [ "$last_sha" != "$HEAD_SHA" ] &&
+            [ "$(gh api "repos/$REPO/compare/$last_sha...$HEAD_SHA" --jq .status 2>/dev/null)" = "ahead" ] &&
+            gh api "repos/$REPO/compare/$last_sha...$HEAD_SHA" -H "Accept: application/vnd.github.diff" > new.diff &&
+            [ -s new.diff ]; then
+            scope=new
+          fi
+          echo "$round" > "$RUNNER_TEMP/round"
+          echo "$scope" > "$RUNNER_TEMP/scope"
+          echo "Review round $round, scope $scope, depth $REVIEW_DEPTH."
       - name: Review
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -102,22 +155,105 @@ jobs:
           # A secret that isn't set arrives as an empty variable; leave only the one that is.
           [ -n "$ANTHROPIC_API_KEY" ] || unset ANTHROPIC_API_KEY
           [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] || unset CLAUDE_CODE_OAUTH_TOKEN
-          schema='{"type":"object","properties":{"verdict":{"type":"string","enum":["works","doesnt_work","cant_tell"]},"comment":{"type":"string"},"findings":{"type":"array","maxItems":10,"items":{"type":"object","properties":{"key":{"type":"string","pattern":"^[a-z0-9-]{1,40}$"},"path":{"type":"string"},"line":{"type":"integer","minimum":1},"body":{"type":"string"}},"required":["key","path","line","body"]}}},"required":["verdict","comment"]}'
-          prompt="Pull request: read pr.json (title, description, comments) and pr.diff. Answer with the verdict, the comment (its first line is the verdict line) and the findings: one per issue that sits on specific lines, posted as a line comment on 'line' of 'path' in the PR's version of the file, a line inside the diff. ai-review-findings.json holds your line comments from earlier runs: for the same issue, even if its line moved, reuse its key so that comment is edited instead of posted again; leave out an issue that is fixed and its comment is marked resolved. A new issue gets a new short key (lowercase words and dashes). $(cat "$RUNNER_TEMP/review-prompt.md")"
-          # The prompt comes first: --allowedTools and --disallowedTools take every argument after them.
-          claude -p "$prompt" --permission-mode dontAsk --max-turns 30 --output-format json --json-schema "$schema" \
-            --allowedTools "Read(./**)" "Grep" "Glob" \
-            --disallowedTools "Read(//proc/**)" "Read(//sys/**)" "Read(//tmp/**)" "Read(/$RUNNER_TEMP/**)" \
-              "Read(~/.claude/**)" "Read(~/.config/**)" "Read(~/.local/**)" \
-            > result.json
-          jq -r '.structured_output.comment // empty' result.json > review.md
-          jq -r '.structured_output.verdict // "cant_tell"' result.json > verdict.txt
-          jq '[.structured_output.findings // [] | .[:10][]
+          round=$(cat "$RUNNER_TEMP/round")
+          scope=$(cat "$RUNNER_TEMP/scope")
+          finding='{"type":"object","properties":{"key":{"type":"string","pattern":"^[a-z0-9-]{1,40}$"},"path":{"type":"string"},"line":{"type":"integer","minimum":1},"severity":{"type":"string","enum":["important","nit","pre_existing"]},"body":{"type":"string"}},"required":["key","path","line","severity","body"]}'
+          candidates_schema='{"type":"object","properties":{"findings":{"type":"array","maxItems":15,"items":'"$finding"'}},"required":["findings"]}'
+          votes_schema='{"type":"object","properties":{"confirmed":{"type":"array","items":{"type":"string"}}},"required":["confirmed"]}'
+          final_schema='{"type":"object","properties":{"verdict":{"type":"string","enum":["works","doesnt_work","cant_tell"]},"risk":{"type":"string","enum":["low","medium","high"]},"comment":{"type":"string"},"findings":{"type":"array","maxItems":10,"items":'"$finding"'}},"required":["verdict","risk","comment"]}'
+
+          context="Pull request: read pr.json (title, description, comments) and pr.diff (the whole PR)."
+          if [ "$scope" = new ]; then
+            context="$context This is review round $round: earlier rounds reviewed the rest, so look for new issues only in new.diff (the commits since the last review); read pr.diff and the code around it for context."
+          fi
+          if [ "$round" -gt "$MAX_ROUNDS" ]; then
+            context="$context This PR has been reviewed $round times: say so in the comment's first bullet and ask the author to step back and reconsider the approach instead of fixing one finding at a time."
+          fi
+          rules=$(cat "$RUNNER_TEMP/review-prompt.md")
+          if [ -s "$RUNNER_TEMP/REVIEW.md" ]; then
+            rules="$rules
+
+          The repository's REVIEW.md, from its default branch:
+          $(cat "$RUNNER_TEMP/REVIEW.md")"
+          fi
+          final_part="ai-review-findings.json holds your line comments from earlier runs: an open one that still holds keeps its key, even if its line moved; leave out one that is fixed. A new issue gets a new short key (lowercase words and dashes). Answer with the verdict, the risk, the comment (its first line is the verdict line) and the findings, each on 'line' of 'path' in the PR's version of the file, a line inside the diff."
+
+          # One agent run: the output file, its turn limit, its schema, its part of the work. The prompt comes
+          # first: --allowedTools and --disallowedTools take every argument after them.
+          pass() {
+            claude -p "$4 $context
+
+          $rules" ${MODEL:+--model "$MODEL"} --permission-mode dontAsk --max-turns "$2" --output-format json \
+              --json-schema "$3" \
+              --allowedTools "Read(./**)" "Grep" "Glob" \
+              --disallowedTools "Read(//proc/**)" "Read(//sys/**)" "Read(//tmp/**)" "Read(/$RUNNER_TEMP/**)" \
+                "Read(~/.claude/**)" "Read(~/.config/**)" "Read(~/.local/**)" \
+              > "$1" 2> "$1.log" || echo "::warning::The review pass $1 failed."
+            # A pass that crashed may leave something that isn't JSON: it counts as no answer.
+            jq -e . "$1" > /dev/null 2>&1 || : > "$1"
+          }
+          finder() {
+            pass "$1" 25 "$candidates_schema" "Your part: list candidate issues about $2. Don't write the comment; a fresh reviewer checks each candidate in the code. Give each one its evidence (file and line) in its body. An empty list is a fine answer."
+          }
+
+          security="security only: injection, access control and security rules, secrets, authentication, one user's data another can read or write"
+          case "$REVIEW_DEPTH" in
+            quick)
+              pass final.json 30 "$final_schema" "Your part: find the issues yourself and give the final review. $final_part"
+              ;;
+            standard|deep)
+              if [ "$REVIEW_DEPTH" = deep ]; then
+                finder finder-correctness.json "correctness: does the change do what it states, on every path, and fix the root cause of a bug" &
+                finder finder-production.json "production and data risk: shapes other clients or app versions read, migrations, triggers, cost, concurrency; and tests that would still pass with the change reverted" &
+              else
+                finder finder-main.json "bugs and production risk: correctness on every path, the root cause of a fix, data shapes other clients read, migrations, triggers, cost, tests that don't test the change" &
+              fi
+              [ "$SECURITY_REVIEW" != "true" ] || finder finder-security.json "$security" &
+              wait
+              # Each candidate gets an id; the final reviewer gives the kept ones their own keys.
+              jq -s '[.[] | .structured_output.findings // [] | .[]] | to_entries | map(.value + {key: "c\(.key + 1)"})' \
+                finder-*.json > candidates.json
+              if ! jq -se 'any(.[]; .structured_output)' finder-*.json > /dev/null; then
+                echo "No finder answered." >&2
+                exit 1
+              fi
+              if [ "$REVIEW_DEPTH" = deep ] && [ "$(jq length candidates.json)" -gt 0 ]; then
+                for voter in 1 2; do
+                  pass "vote-$voter.json" 15 "$votes_schema" "Your part: candidates.json lists issues other reviewers think they found. For each, read the code it points to: is it real, and is its severity right? Answer the keys of the candidates you confirm; leave out any you can't confirm with the code." &
+                done
+                wait
+                # Kept when every voter that answered confirms it.
+                jq -s '(.[0]) as $all | [.[1:][] | .structured_output.confirmed // empty] as $votes
+                  | if ($votes | length) == 0 then $all
+                    else [$all[] | select(.key as $k | all($votes[]; index($k) != null))] end' \
+                  candidates.json vote-*.json > confirmed.json
+                mv confirmed.json candidates.json
+              fi
+              pass final.json 30 "$final_schema" "Your part: give the final review. candidates.json lists issues other reviewers found: check each one in the code yourself and keep only those you confirm with a file and line (correct a severity that is wrong, merge duplicates); add an issue they missed only when you are sure. $final_part"
+              ;;
+            *)
+              echo "REVIEW_DEPTH must be quick, standard or deep." >&2
+              exit 1
+              ;;
+          esac
+
+          jq -r '.structured_output.comment // empty' final.json > review.md
+          jq -r '.structured_output.risk // "high"' final.json > risk.txt
+          [ "$(cat "$RUNNER_TEMP/risk-floor")" != high ] || echo high > risk.txt
+          # At most 3 nits; findings without a valid place are dropped.
+          jq '[.structured_output.findings // [] | .[]
             | select((.key | test("^[a-z0-9-]{1,40}$")) and (.path | type == "string") and (.line | type == "number"))]
-            | unique_by([.key, .path])' result.json > findings.json
+            | unique_by([.key, .path])
+            | [.[] | select(.severity != "nit")][:10] + [.[] | select(.severity == "nit")][:3]' final.json > findings.json
+          verdict=$(jq -r '.structured_output.verdict // "cant_tell"' final.json)
+          # An open important finding blocks, whatever the verdict line says.
+          if [ "$verdict" = works ] && jq -e 'any(.[]; .severity == "important")' findings.json > /dev/null; then
+            verdict=doesnt_work
+          fi
+          echo "$verdict" > verdict.txt
           if [ ! -s review.md ]; then
             echo "The review produced no comment." >&2
-            jq -r '.result // empty' result.json >&2
+            jq -r '.result // empty' final.json >&2
             exit 1
           fi
           for secret in "${ANTHROPIC_API_KEY:-}" "${CLAUDE_CODE_OAUTH_TOKEN:-}"; do
@@ -134,6 +270,8 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           verdict=$(cat verdict.txt)
+          risk=$(cat risk.txt)
+          round=$(cat "$RUNNER_TEMP/round")
           # The review must speak for the commit that was reviewed: a later push gets its own run.
           if [ "$(gh pr view "$PR" --json headRefOid --jq .headRefOid)" != "$HEAD_SHA" ]; then
             echo "The PR moved on during the review; the run for the new commit decides." >&2
@@ -145,7 +283,9 @@ jobs:
             jq -r --arg bot "$bot" --arg marker "$marker" \
               '[.[][] | select(.user.login == $bot and (.body | contains($marker)))][0].id // empty')
           post_comment() {
-            { cat review.md; printf '\n\n_Reviewed commit %s._\n\n%s\n' "${HEAD_SHA:0:7}" "$marker"; } > comment.md
+            { cat review.md
+              printf '\n\n_Review round %s of commit %s (%s)._\n\n%s\n<!-- ai-review-round:%s:%s -->\n' \
+                "$round" "${HEAD_SHA:0:7}" "$REVIEW_DEPTH" "$marker" "$round" "$HEAD_SHA"; } > comment.md
             if [ -n "$comment_id" ]; then
               comment_url=$(gh api -X PATCH "repos/$REPO/issues/comments/$comment_id" -F body=@comment.md --jq .html_url)
             else
@@ -156,12 +296,17 @@ jobs:
           }
 
           # The review state the bot should hold on the PR after this run.
+          rank() { case "$1" in low) echo 1 ;; medium) echo 2 ;; high) echo 3 ;; *) echo 0 ;; esac; }
           target=none
-          if [ "$AUTO_APPROVE" = "true" ]; then
-            if [ "$verdict" = "works" ] && [ "$(cat "$RUNNER_TEMP/approvable")" = "true" ]; then
+          if [ "$APPROVE_UP_TO" != "none" ]; then
+            if [ "$verdict" = "works" ] && [ "$(cat "$RUNNER_TEMP/approvable")" = "true" ] &&
+              [ "$(rank "$risk")" -le "$(rank "$APPROVE_UP_TO")" ]; then
               target=APPROVED
+            elif [ "$verdict" = "works" ] && [ "$(cat "$RUNNER_TEMP/approvable")" = "true" ]; then
+              printf '\n\n_Not approved automatically: a %s-risk change needs a person (the bot approves up to %s risk here)._\n' \
+                "$risk" "$APPROVE_UP_TO" >> review.md
             elif [ "$verdict" = "works" ]; then
-              printf '\n\n_Not approved automatically: this PR targets another branch than the default one, or changes the CI, the review prompt or the agent settings, so a person approves it._\n' >> review.md
+              printf '\n\n_Not approved automatically: this PR targets another branch than the default one, or changes the CI, the review rules or the agent settings, so a person approves it._\n' >> review.md
             elif [ "$verdict" = "doesnt_work" ]; then
               target=CHANGES_REQUESTED
             fi
@@ -181,6 +326,7 @@ jobs:
             [ -z "$thread" ] || gh api graphql -f id="$thread" \
               -f query="mutation(\$id: ID!) { ${1}ReviewThread(input: {threadId: \$id}) { thread { id } } }" >/dev/null 2>&1 || true
           }
+          label() { case "$1" in important) echo "**Important**" ;; nit) echo "**Nit**" ;; *) echo "**Pre-existing** (not introduced by this PR)" ;; esac; }
 
           # Line comments: one per finding, found again by its key on the next run and edited, never posted twice.
           existing=$(gh api "repos/$REPO/pulls/$PR/comments" --paginate --slurp |
@@ -192,7 +338,8 @@ jobs:
             key=$(jq -r .key <<< "$finding")
             path=$(jq -r .path <<< "$finding")
             line=$(jq -r .line <<< "$finding")
-            { jq -r .body <<< "$finding"; printf '\n<!-- ai-review-finding:%s -->\n' "$key"; } > finding.md
+            tag=$(label "$(jq -r .severity <<< "$finding")")
+            { printf '%s · ' "$tag"; jq -r .body <<< "$finding"; printf '\n<!-- ai-review-finding:%s -->\n' "$key"; } > finding.md
             id=$(jq -r --arg key "$key" --arg path "$path" \
               '[.[] | select(.key == $key and .path == $path)][0].id // empty' <<< "$existing")
             if [ -n "$id" ]; then
@@ -201,7 +348,7 @@ jobs:
             elif ! gh api "repos/$REPO/pulls/$PR/comments" -f commit_id="$HEAD_SHA" -f path="$path" -F line="$line" \
               -f side=RIGHT -F body=@finding.md >/dev/null 2>&1; then
               # GitHub takes line comments only on lines of the diff: the others go in the review comment.
-              { printf '\n**`%s:%s`**\n\n' "$path" "$line"; jq -r .body <<< "$finding"; } >> off-diff.md
+              { printf '\n**`%s:%s`** %s\n\n' "$path" "$line" "$tag"; jq -r .body <<< "$finding"; } >> off-diff.md
             fi
           done < <(jq -c '.[]' findings.json)
           # A finding this run left out is fixed: its comment says so and its thread is resolved.
@@ -230,7 +377,7 @@ jobs:
           # The new review goes first: if posting it fails, the earlier one still stands.
           if [ "$kept" = "false" ] && [ "$target" = "APPROVED" ]; then
             if ! gh api "repos/$REPO/pulls/$PR/reviews" -f commit_id="$HEAD_SHA" -f event=APPROVE \
-              -f body="✅ Works: $comment_url" >/dev/null; then
+              -f body="✅ Works ($risk risk): $comment_url" >/dev/null; then
               echo "::warning::GitHub refused the approval (Settings > Actions > General: allow GitHub Actions to create and approve pull requests)."
               printf '\n\n_Not approved automatically: GitHub refused the approval (this repo does not let GitHub Actions approve pull requests), so a person approves it._\n' >> review.md
               post_comment
@@ -244,3 +391,22 @@ jobs:
             gh api -X PUT "repos/$REPO/pulls/$PR/reviews/$id/dismissals" \
               -f message="Withdrawn: the AI review of the latest push says otherwise ($comment_url)." -f event=DISMISS >/dev/null
           done <<< "$reviews"
+      # A timeout counts as a cancellation, hence !success(). A run cancelled by a newer push leaves it to that run.
+      - name: Withdraw the approval when the review did not finish
+        if: ${{ !success() && env.APPROVE_UP_TO != 'none' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$(gh pr view "$PR" --json headRefOid --jq .headRefOid)" != "$HEAD_SHA" ]; then
+            exit 0
+          fi
+          gh api "repos/$REPO/pulls/$PR/reviews" --paginate --slurp |
+            jq -r '.[][] | select(.user.login == "github-actions[bot]" and .state == "APPROVED") | .id' |
+            while read -r id; do
+              gh api -X PUT "repos/$REPO/pulls/$PR/reviews/$id/dismissals" -f event=DISMISS \
+                -f message="Withdrawn: the AI review of commit ${HEAD_SHA:0:7} did not finish; rerun it to review again." >/dev/null ||
+                echo "::warning::Could not withdraw approval $id."
+            done
