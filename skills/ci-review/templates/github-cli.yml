@@ -93,14 +93,19 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          gh pr view "$PR" --json title,body,comments > pr.json
-          gh pr diff "$PR" > pr.diff
+          # What the agent reads goes in a folder made fresh here, and what the passes write stays outside the
+          # checkout: a PR can't slip in files of its own under those names.
+          rm -rf .ai-review-input
+          mkdir .ai-review-input "$RUNNER_TEMP/out"
+          IN=.ai-review-input
+          gh pr view "$PR" --json title,body,comments > "$IN/pr.json"
+          gh pr diff "$PR" > "$IN/pr.diff"
           # The bot's line comments from earlier runs, so the agent reuses their keys instead of posting them again.
           gh api "repos/$REPO/pulls/$PR/comments" --paginate --slurp |
             jq '[.[][] | select(.user.login == "github-actions[bot]") | . as $c
               | (.body | capture("<!-- ai-review-finding:(?<key>[a-z0-9-]+) -->"))
               | {key, path: $c.path, line: ($c.line // $c.original_line), open: ($c.body | startswith("✅ Resolved") | not),
-                 comment: $c.body}]' > ai-review-findings.json
+                 comment: $c.body}]' > "$IN/earlier-findings.json"
           approvable=true
           # The rules come from the default branch: a PR could point at a base branch whose prompt its author wrote.
           if gh api "repos/$REPO/contents/.github/ai-review/review-prompt.md?ref=$DEFAULT_BRANCH" --jq .content |
@@ -111,15 +116,20 @@ jobs:
             cp .github/ai-review/review-prompt.md "$RUNNER_TEMP/review-prompt.md"
             approvable=false
           fi
-          if ! gh api "repos/$REPO/contents/REVIEW.md?ref=$DEFAULT_BRANCH" --jq .content 2>/dev/null |
-            base64 -d > "$RUNNER_TEMP/REVIEW.md" 2>/dev/null; then
+          # No REVIEW.md is fine; failing to read one that exists is not.
+          if review_md=$(gh api "repos/$REPO/contents/REVIEW.md?ref=$DEFAULT_BRANCH" --jq .content 2>&1); then
+            base64 -d <<< "$review_md" > "$RUNNER_TEMP/REVIEW.md"
+          elif grep -q "HTTP 404" <<< "$review_md"; then
             : > "$RUNNER_TEMP/REVIEW.md"
+          else
+            echo "Could not read REVIEW.md: $review_md" >&2
+            exit 1
           fi
           [ "$BASE" = "$DEFAULT_BRANCH" ] || approvable=false
           # Old names too: a file renamed away from a sensitive path changes it as much as an edit.
           gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[] | .filename, (.previous_filename // empty)' \
             > "$RUNNER_TEMP/files.txt"
-          if grep -qiE '^(\.github/|\.claude/|\.mcp\.json$)|(^|/)(claude(\.local)?|review)\.md$' "$RUNNER_TEMP/files.txt"; then
+          if grep -qiE '^(\.github/|\.claude/|\.mcp\.json$|review\.md$)|(^|/)claude(\.local)?\.md$' "$RUNNER_TEMP/files.txt"; then
             approvable=false
           fi
           echo "$approvable" > "$RUNNER_TEMP/approvable"
@@ -128,25 +138,32 @@ jobs:
           else
             echo low > "$RUNNER_TEMP/risk-floor"
           fi
-          # The round, counted in the review comment; a rerun on the same commit is the same round.
-          read -r last_round last_sha < <(gh api "repos/$REPO/issues/$PR/comments" --paginate --slurp |
+          # The round, the commit and the verdict of the last review, from the trailer the job writes last in its
+          # comment (the review's own text is stripped of such markers before posting, so the last one is ours).
+          read -r last_round last_sha last_verdict < <(gh api "repos/$REPO/issues/$PR/comments" --paginate --slurp |
             jq -r '[.[][] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- ai-review -->")))][0].body // ""
-              | capture("<!-- ai-review-round:(?<n>[0-9]+):(?<sha>[0-9a-f]{7,40}) -->") // {n: "0", sha: ""}
-              | "\(.n) \(.sha)"') || true
+              | [scan("<!-- ai-review-round:([0-9]+):([0-9a-f]{40}):([a-z_]+) -->")] | last // ["0", "", ""]
+              | join(" ")') || true
           last_round=${last_round:-0}
           round=$((last_round + 1))
           [ "$last_sha" != "$HEAD_SHA" ] || round=$last_round
           [ "$round" -ge 1 ] || round=1
+          # From the round after FULL_ROUNDS, only what changed since the last review, in the PR's own files (a
+          # merge from the base branch brings in commits that aren't the PR's).
           scope=full
           if [ "$round" -gt "$FULL_ROUNDS" ] && [ -n "$last_sha" ] && [ "$last_sha" != "$HEAD_SHA" ] &&
-            [ "$(gh api "repos/$REPO/compare/$last_sha...$HEAD_SHA" --jq .status 2>/dev/null)" = "ahead" ] &&
-            gh api "repos/$REPO/compare/$last_sha...$HEAD_SHA" -H "Accept: application/vnd.github.diff" > new.diff &&
-            [ -s new.diff ]; then
-            scope=new
+            [ "$(gh api "repos/$REPO/compare/$last_sha...$HEAD_SHA" --jq .status 2>/dev/null)" = "ahead" ]; then
+            gh api "repos/$REPO/compare/$last_sha...$HEAD_SHA" --jq '.files[] | {filename, patch: (.patch // "")}' |
+              jq -rs --rawfile files "$RUNNER_TEMP/files.txt" '($files | split("\n")) as $pr
+                | .[] | select(.filename as $f | $pr | index($f)) | select(.patch != "")
+                | "diff --git a/\(.filename) b/\(.filename)\n--- a/\(.filename)\n+++ b/\(.filename)\n\(.patch)"' \
+              > "$IN/new.diff" || : > "$IN/new.diff"
+            [ ! -s "$IN/new.diff" ] || scope=new
           fi
           echo "$round" > "$RUNNER_TEMP/round"
           echo "$scope" > "$RUNNER_TEMP/scope"
-          echo "Review round $round, scope $scope, depth $REVIEW_DEPTH."
+          echo "${last_verdict:-none}" > "$RUNNER_TEMP/last-verdict"
+          echo "Review round $round, scope $scope, depth $REVIEW_DEPTH, last verdict ${last_verdict:-none}."
       - name: Review
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -160,11 +177,14 @@ jobs:
           finding='{"type":"object","properties":{"key":{"type":"string","pattern":"^[a-z0-9-]{1,40}$"},"path":{"type":"string"},"line":{"type":"integer","minimum":1},"severity":{"type":"string","enum":["important","nit","pre_existing"]},"body":{"type":"string"}},"required":["key","path","line","severity","body"]}'
           candidates_schema='{"type":"object","properties":{"findings":{"type":"array","maxItems":15,"items":'"$finding"'}},"required":["findings"]}'
           votes_schema='{"type":"object","properties":{"confirmed":{"type":"array","items":{"type":"string"}}},"required":["confirmed"]}'
-          final_schema='{"type":"object","properties":{"verdict":{"type":"string","enum":["works","doesnt_work","cant_tell"]},"risk":{"type":"string","enum":["low","medium","high"]},"comment":{"type":"string"},"findings":{"type":"array","maxItems":10,"items":'"$finding"'}},"required":["verdict","risk","comment"]}'
+          final_schema='{"type":"object","properties":{"verdict":{"type":"string","enum":["works","doesnt_work","cant_tell"]},"risk":{"type":"string","enum":["low","medium","high"]},"comment":{"type":"string"},"findings":{"type":"array","maxItems":10,"items":'"$finding"'},"fixed":{"type":"array","items":{"type":"string"}}},"required":["verdict","risk","comment","fixed"]}'
+          IN=.ai-review-input
+          OUT=$RUNNER_TEMP/out
+          missing=""
 
-          context="Pull request: read pr.json (title, description, comments) and pr.diff (the whole PR)."
+          context="Pull request: read $IN/pr.json (title, description, comments) and $IN/pr.diff (the whole PR)."
           if [ "$scope" = new ]; then
-            context="$context This is review round $round: earlier rounds reviewed the rest, so look for new issues only in new.diff (the commits since the last review); read pr.diff and the code around it for context."
+            context="$context This is review round $round: earlier rounds reviewed the rest, so look for new issues only in $IN/new.diff (the PR's changes since the last review); read $IN/pr.diff and the code around it for context."
           fi
           if [ "$round" -gt "$MAX_ROUNDS" ]; then
             context="$context This PR has been reviewed $round times: say so in the comment's first bullet and ask the author to step back and reconsider the approach instead of fixing one finding at a time."
@@ -176,10 +196,10 @@ jobs:
           The repository's REVIEW.md, from its default branch:
           $(cat "$RUNNER_TEMP/REVIEW.md")"
           fi
-          final_part="ai-review-findings.json holds your line comments from earlier runs: an open one that still holds keeps its key, even if its line moved; leave out one that is fixed. A new issue gets a new short key (lowercase words and dashes). Answer with the verdict, the risk, the comment (its first line is the verdict line) and the findings, each on 'line' of 'path' in the PR's version of the file, a line inside the diff."
+          final_part="$IN/earlier-findings.json holds your line comments from earlier runs. Check every open one against the code as it is now: one that still holds goes in your findings again with its key, even if its line moved; the key of one that is fixed goes in 'fixed'. A new issue gets a new short key (lowercase words and dashes), never a candidate's id (cand-…). Answer with the verdict, the risk, the comment (its first line is the verdict line), the findings, each on 'line' of 'path' in the PR's version of the file, a line inside the diff, and 'fixed'."
 
-          # One agent run: the output file, its turn limit, its schema, its part of the work. The prompt comes
-          # first: --allowedTools and --disallowedTools take every argument after them.
+          # One agent run: its name (its answer goes to $OUT/<name>.json), its turn limit, its schema, its part of
+          # the work. The prompt comes first: --allowedTools and --disallowedTools take every argument after them.
           pass() {
             claude -p "$4 $context
 
@@ -188,10 +208,11 @@ jobs:
               --allowedTools "Read(./**)" "Grep" "Glob" \
               --disallowedTools "Read(//proc/**)" "Read(//sys/**)" "Read(//tmp/**)" "Read(/$RUNNER_TEMP/**)" \
                 "Read(~/.claude/**)" "Read(~/.config/**)" "Read(~/.local/**)" \
-              > "$1" 2> "$1.log" || echo "::warning::The review pass $1 failed."
+              > "$OUT/$1.json" 2> "$OUT/$1.log" || echo "::warning::The review pass $1 failed."
             # A pass that crashed may leave something that isn't JSON: it counts as no answer.
-            jq -e . "$1" > /dev/null 2>&1 || : > "$1"
+            jq -e '.structured_output' "$OUT/$1.json" > /dev/null 2>&1 || echo '{}' > "$OUT/$1.json"
           }
+          answered() { jq -e '.structured_output' "$OUT/$1.json" > /dev/null; }
           finder() {
             pass "$1" 25 "$candidates_schema" "Your part: list candidate issues about $2. Don't write the comment; a fresh reviewer checks each candidate in the code. Give each one its evidence (file and line) in its body. An empty list is a fine answer."
           }
@@ -199,65 +220,98 @@ jobs:
           security="security only: injection, access control and security rules, secrets, authentication, one user's data another can read or write"
           case "$REVIEW_DEPTH" in
             quick)
-              pass final.json 30 "$final_schema" "Your part: find the issues yourself and give the final review. $final_part"
+              pass final 30 "$final_schema" "Your part: find the issues yourself and give the final review. $final_part"
               ;;
             standard|deep)
               if [ "$REVIEW_DEPTH" = deep ]; then
-                finder finder-correctness.json "correctness: does the change do what it states, on every path, and fix the root cause of a bug" &
-                finder finder-production.json "production and data risk: shapes other clients or app versions read, migrations, triggers, cost, concurrency; and tests that would still pass with the change reverted" &
+                finders="correctness production"
+                finder correctness "correctness: does the change do what it states, on every path, and fix the root cause of a bug" &
+                finder production "production and data risk: shapes other clients or app versions read, migrations, triggers, cost, concurrency; and tests that would still pass with the change reverted" &
               else
-                finder finder-main.json "bugs and production risk: correctness on every path, the root cause of a fix, data shapes other clients read, migrations, triggers, cost, tests that don't test the change" &
+                finders="main"
+                finder main "bugs and production risk: correctness on every path, the root cause of a fix, data shapes other clients read, migrations, triggers, cost, tests that don't test the change" &
               fi
-              [ "$SECURITY_REVIEW" != "true" ] || finder finder-security.json "$security" &
+              if [ "$SECURITY_REVIEW" = "true" ]; then
+                finders="$finders security"
+                finder security "$security" &
+              fi
               wait
               # Each candidate gets an id; the final reviewer gives the kept ones their own keys.
-              jq -s '[.[] | .structured_output.findings // [] | .[]] | to_entries | map(.value + {key: "c\(.key + 1)"})' \
-                finder-*.json > candidates.json
-              if ! jq -se 'any(.[]; .structured_output)' finder-*.json > /dev/null; then
+              files=()
+              for name in $finders; do
+                answered "$name" || missing="$missing $name"
+                files+=("$OUT/$name.json")
+              done
+              jq -s '[.[] | .structured_output.findings // [] | .[]] | to_entries | map(.value + {key: "cand-\(.key + 1)"})' \
+                "${files[@]}" > "$IN/candidates.json"
+              if [ "$missing" = "$(printf ' %s' $finders)" ]; then
                 echo "No finder answered." >&2
                 exit 1
               fi
-              if [ "$REVIEW_DEPTH" = deep ] && [ "$(jq length candidates.json)" -gt 0 ]; then
+              if [ "$REVIEW_DEPTH" = deep ] && [ "$(jq length "$IN/candidates.json")" -gt 0 ]; then
                 for voter in 1 2; do
-                  pass "vote-$voter.json" 15 "$votes_schema" "Your part: candidates.json lists issues other reviewers think they found. For each, read the code it points to: is it real, and is its severity right? Answer the keys of the candidates you confirm; leave out any you can't confirm with the code." &
+                  pass "vote-$voter" 15 "$votes_schema" "Your part: $IN/candidates.json lists issues other reviewers think they found. For each, read the code it points to: is it real, and is its severity right? Answer the ids (key) of the candidates you confirm; leave out any you can't confirm with the code." &
                 done
                 wait
+                for voter in 1 2; do answered "vote-$voter" || missing="$missing vote-$voter"; done
                 # Kept when every voter that answered confirms it.
                 jq -s '(.[0]) as $all | [.[1:][] | .structured_output.confirmed // empty] as $votes
                   | if ($votes | length) == 0 then $all
                     else [$all[] | select(.key as $k | all($votes[]; index($k) != null))] end' \
-                  candidates.json vote-*.json > confirmed.json
-                mv confirmed.json candidates.json
+                  "$IN/candidates.json" "$OUT/vote-1.json" "$OUT/vote-2.json" > "$OUT/confirmed.json"
+                cp "$OUT/confirmed.json" "$IN/candidates.json"
               fi
-              pass final.json 30 "$final_schema" "Your part: give the final review. candidates.json lists issues other reviewers found: check each one in the code yourself and keep only those you confirm with a file and line (correct a severity that is wrong, merge duplicates); add an issue they missed only when you are sure. $final_part"
+              pass final 30 "$final_schema" "Your part: give the final review. $IN/candidates.json lists issues other reviewers found: check each one in the code yourself and keep only those you confirm with a file and line (correct a severity that is wrong, merge duplicates); add an issue they missed only when you are sure. $final_part"
               ;;
             *)
               echo "REVIEW_DEPTH must be quick, standard or deep." >&2
               exit 1
               ;;
           esac
-
-          jq -r '.structured_output.comment // empty' final.json > review.md
-          jq -r '.structured_output.risk // "high"' final.json > risk.txt
-          [ "$(cat "$RUNNER_TEMP/risk-floor")" != high ] || echo high > risk.txt
-          # At most 3 nits; findings without a valid place are dropped.
-          jq '[.structured_output.findings // [] | .[]
-            | select((.key | test("^[a-z0-9-]{1,40}$")) and (.path | type == "string") and (.line | type == "number"))]
-            | unique_by([.key, .path])
-            | [.[] | select(.severity != "nit")][:10] + [.[] | select(.severity == "nit")][:3]' final.json > findings.json
-          verdict=$(jq -r '.structured_output.verdict // "cant_tell"' final.json)
-          # An open important finding blocks, whatever the verdict line says.
-          if [ "$verdict" = works ] && jq -e 'any(.[]; .severity == "important")' findings.json > /dev/null; then
-            verdict=doesnt_work
+          if ! answered final; then
+            echo "The final review didn't answer." >&2
+            jq -r '.result // empty' "$OUT/final.json" >&2
+            exit 1
           fi
-          echo "$verdict" > verdict.txt
-          if [ ! -s review.md ]; then
+
+          # The review's own text can't carry the job's markers: the job reads them back on the next run.
+          strip='gsub("<!--\\s*ai-review[^>]*-->"; "")'
+          jq -r ".structured_output.comment // \"\" | $strip" "$OUT/final.json" > "$OUT/review.md"
+          risk=$(jq -r '.structured_output.risk // "high"' "$OUT/final.json")
+          if [ "$(cat "$RUNNER_TEMP/risk-floor")" = high ] && [ "$risk" != high ]; then
+            risk=high
+            printf '\n\n_Risk raised to high: this PR touches paths this repository always treats as high risk._\n' >> "$OUT/review.md"
+          fi
+          echo "$risk" > "$OUT/risk.txt"
+          # At most 3 nits; findings without a valid place are dropped; a candidate id kept as a key gets a real one.
+          jq "[.structured_output.findings // [] | .[]
+            | select((.key | test(\"^[a-z0-9-]{1,40}\$\")) and (.path | type == \"string\") and (.line | type == \"number\"))
+            | .body |= $strip
+            | if (.key | test(\"^cand-[0-9]+\$\")) then .key = (\"at-\" + (.path | ascii_downcase | gsub(\"[^a-z0-9]+\"; \"-\") | .[-24:]) + \"-\" + (.line | tostring)) else . end]
+            | unique_by([.key, .path])
+            | [.[] | select(.severity != \"nit\")][:10] + [.[] | select(.severity == \"nit\")][:3]" \
+            "$OUT/final.json" > "$OUT/findings.json"
+          jq '[.structured_output.fixed // [] | .[] | select(type == "string")]' "$OUT/final.json" > "$OUT/fixed.json"
+          verdict=$(jq -r '.structured_output.verdict // "cant_tell"' "$OUT/final.json")
+          # An open important finding blocks, whatever the verdict line says, and the comment says so too.
+          if [ "$verdict" = works ] && jq -e 'any(.[]; .severity == "important")' "$OUT/findings.json" > /dev/null; then
+            verdict=doesnt_work
+            { echo "❌ Doesn't work"; echo; echo "_The review's verdict line said Works, but an important finding is still open._"
+              tail -n +2 "$OUT/review.md"; } > "$OUT/review.fixed.md"
+            mv "$OUT/review.fixed.md" "$OUT/review.md"
+          fi
+          echo "$verdict" > "$OUT/verdict.txt"
+          # Approval needs every pass this repo asks for to have answered.
+          if [ -n "$missing" ]; then
+            echo false > "$RUNNER_TEMP/approvable"
+            printf '\n\n_Not approved automatically: these review passes did not answer:%s._\n' "$missing" >> "$OUT/review.md"
+          fi
+          if [ ! -s "$OUT/review.md" ]; then
             echo "The review produced no comment." >&2
-            jq -r '.result // empty' final.json >&2
             exit 1
           fi
           for secret in "${ANTHROPIC_API_KEY:-}" "${CLAUDE_CODE_OAUTH_TOKEN:-}"; do
-            if [ -n "$secret" ] && grep -qF -- "$secret" review.md findings.json; then
+            if [ -n "$secret" ] && grep -qF -- "$secret" "$OUT/review.md" "$OUT/findings.json"; then
               echo "The review quotes a secret; not posted." >&2
               exit 1
             fi
@@ -269,9 +323,13 @@ jobs:
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
+          OUT=$RUNNER_TEMP/out
+          cd "$OUT"
           verdict=$(cat verdict.txt)
           risk=$(cat risk.txt)
           round=$(cat "$RUNNER_TEMP/round")
+          scope=$(cat "$RUNNER_TEMP/scope")
+          last_verdict=$(cat "$RUNNER_TEMP/last-verdict")
           # The review must speak for the commit that was reviewed: a later push gets its own run.
           if [ "$(gh pr view "$PR" --json headRefOid --jq .headRefOid)" != "$HEAD_SHA" ]; then
             echo "The PR moved on during the review; the run for the new commit decides." >&2
@@ -284,8 +342,9 @@ jobs:
               '[.[][] | select(.user.login == $bot and (.body | contains($marker)))][0].id // empty')
           post_comment() {
             { cat review.md
-              printf '\n\n_Review round %s of commit %s (%s)._\n\n%s\n<!-- ai-review-round:%s:%s -->\n' \
-                "$round" "${HEAD_SHA:0:7}" "$REVIEW_DEPTH" "$marker" "$round" "$HEAD_SHA"; } > comment.md
+              printf '\n\n_Review round %s of commit %s (%s, %s)._\n\n%s\n<!-- ai-review-round:%s:%s:%s -->\n' \
+                "$round" "${HEAD_SHA:0:7}" "$REVIEW_DEPTH" "$([ "$scope" = new ] && echo "new commits only" || echo "whole PR")" \
+                "$marker" "$round" "$HEAD_SHA" "$verdict"; } > comment.md
             if [ -n "$comment_id" ]; then
               comment_url=$(gh api -X PATCH "repos/$REPO/issues/comments/$comment_id" -F body=@comment.md --jq .html_url)
             else
@@ -296,7 +355,13 @@ jobs:
           }
 
           # The review state the bot should hold on the PR after this run.
-          rank() { case "$1" in low) echo 1 ;; medium) echo 2 ;; high) echo 3 ;; *) echo 0 ;; esac; }
+          rank() { case "$1" in none) echo 0 ;; low) echo 1 ;; medium) echo 2 ;; *) echo 3 ;; esac; }
+          # A review of the new commits only approves after a whole-PR or partial review that said Works: an
+          # earlier blocking issue could otherwise sit outside what this run looked at.
+          if [ "$scope" = new ] && [ "$last_verdict" != works ] && [ "$verdict" = works ]; then
+            echo false > "$RUNNER_TEMP/approvable"
+            printf '\n\n_Not approved automatically: this round reviewed the new commits only, after a review that did not say Works; a person approves it, or a review of the whole PR._\n' >> review.md
+          fi
           target=none
           if [ "$APPROVE_UP_TO" != "none" ]; then
             if [ "$verdict" = "works" ] && [ "$(cat "$RUNNER_TEMP/approvable")" = "true" ] &&
@@ -339,7 +404,8 @@ jobs:
             path=$(jq -r .path <<< "$finding")
             line=$(jq -r .line <<< "$finding")
             tag=$(label "$(jq -r .severity <<< "$finding")")
-            { printf '%s · ' "$tag"; jq -r .body <<< "$finding"; printf '\n<!-- ai-review-finding:%s -->\n' "$key"; } > finding.md
+            # The label on a line of its own: a body that starts with a suggestion block must keep its fence first.
+            { printf '%s\n\n' "$tag"; jq -r .body <<< "$finding"; printf '\n<!-- ai-review-finding:%s -->\n' "$key"; } > finding.md
             id=$(jq -r --arg key "$key" --arg path "$path" \
               '[.[] | select(.key == $key and .path == $path)][0].id // empty' <<< "$existing")
             if [ -n "$id" ]; then
@@ -351,8 +417,10 @@ jobs:
               { printf '\n**`%s:%s`** %s\n\n' "$path" "$line" "$tag"; jq -r .body <<< "$finding"; } >> off-diff.md
             fi
           done < <(jq -c '.[]' findings.json)
-          # A finding this run left out is fixed: its comment says so and its thread is resolved.
-          jq -r --slurpfile now findings.json '.[] | select(.resolved | not) | . as $old
+          # A finding the review names as fixed: its comment says so and its thread is resolved. One merely left out
+          # (cut by the nit cap, or outside a review of the new commits only) stays as it is.
+          jq -r --slurpfile now findings.json --slurpfile fixed fixed.json '.[] | select(.resolved | not) | . as $old
+            | select(($fixed[0] | index($old.key)) != null)
             | select([$now[0][] | select(.key == $old.key and .path == $old.path)] | length == 0) | .id' <<< "$existing" |
             while read -r id; do
               body=$(gh api "repos/$REPO/pulls/comments/$id" --jq .body)
