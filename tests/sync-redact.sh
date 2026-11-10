@@ -33,7 +33,9 @@ printf '%s\n' \
   'api_key: abcdef123456' \
   '# Token exchange untested; Basic authentication only' \
   'curl -H "X-Auth: Bearer abc.DEF123_xyz"' \
-  'open /connect?customToken=<firebase custom token> or ?oauth_token=...' > "$F"
+  'open /connect?customToken=<firebase custom token> or ?oauth_token=...' \
+  'curl -H "Authorization2: Bearer abcdefghijklmnopqrstuvwxyzabcdef"' \
+  'token=<x>hunter3 and secret=...hunter4' > "$F"
 cp "$F" "$WORK/original.py"
 bash "$A/sync.sh" now > /dev/null 2>&1
 S="$A/claude/skills/demo/demo.py"
@@ -46,6 +48,8 @@ check "a bare value is masked" 'grep -qxF "api_key: __SECRET__" "$S"'
 check "words after Token or Basic are kept" 'grep -qxF "# Token exchange untested; Basic authentication only" "$S"'
 check "a bearer token is masked" 'grep -qxF "curl -H \"X-Auth: Bearer __SECRET__\"" "$S"'
 check "placeholders are kept" 'grep -qxF "open /connect?customToken=<firebase custom token> or ?oauth_token=..." "$S"'
+check "a letters-only bearer token is masked" '! grep -q abcdefghijklmnopqrstuvwxyzabcdef "$S"'
+check "a placeholder glued to a value does not hide it" '! grep -qE "hunter3|hunter4" "$S"'
 check "the local file keeps its values" 'cmp -s "$F" "$WORK/original.py"'
 
 echo "$fails problem(s)"
