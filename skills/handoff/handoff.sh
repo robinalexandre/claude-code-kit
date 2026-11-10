@@ -18,6 +18,11 @@
 #   handoff.sh on-sync         after each sync: starts the runs due on this computer, and tells
 #                              the sender when one of its notes changed status
 #   handoff.sh run ID          runs a note for this computer now, in a worktree, with no one watching
+#   handoff.sh sign ID         signs a note with this computer's key, so the computer it is for runs it
+#   handoff.sh key             this computer's name and key fingerprint (the key is made the first time)
+#   handoff.sh trust [MACHINE FINGERPRINT]
+#                              lists the computers' published keys and whether this one trusts them;
+#                              with MACHINE and the fingerprint read on it, trusts its key
 # A note moved to done/ gets a `closed:` line; done/ keeps a note DONE_DAYS days.
 set -u
 SK=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -46,11 +51,14 @@ elif command -v cygpath > /dev/null 2>&1; then
 fi
 
 machine() {
-  local m=""
-  [ -f "$SYNC/.machine" ] && read -r m < "$SYNC/.machine"
+  local m=${HANDOFF_MACHINE:-}
+  [ -z "$m" ] && [ -f "$SYNC/.machine" ] && read -r m < "$SYNC/.machine"
   printf '%s' "${m//[[:space:]]/}"
 }
 MACHINE=$(machine)
+KEY="$RUNS/key-$MACHINE"
+TRUSTED="$RUNS/trusted"
+SIG_NS=handoff
 NOW=${HANDOFF_NOW:-$(date '+%Y-%m-%d %H:%M')}
 ROOT=$(dirname "$DIR")
 DEFAULT_AT=${REMINDERS_AT:-09:00}
@@ -293,6 +301,11 @@ reply() {
   }
   f="$DIR/$1.md"
   add_reply "$f" "- $NOW · ${MACHINE:-?}: $(printf '%s' "$text" | tr '\n' ' ' | redact)"
+  # The reply is what a resumed run acts on: the note is signed again with it.
+  if [ -n "$(field "$f" run)" ] && ! sign_note "$1"; then
+    echo "replied: $1, but not signed: $(field "$f" for) won't run it by itself" >&2
+    return 0
+  fi
   case "$(field "$f" status)" in
     needs-you | failed)
       if [ -n "$(field "$f" run)" ]; then
@@ -314,6 +327,135 @@ machines() {
   done
 }
 
+# A note runs by itself only when one of the user's computers signed it, with a key that never
+# leaves that computer (~/.claude/handoff-runs is never synced), and this computer trusts that key.
+# Whatever can push to the sync repo (an assistant reading mail or the web) can write a note, its
+# `from:` and a public key under machines/, but not a signature from a key the user checked here.
+# ssh-keygen -Y (OpenSSH 8.0+) signs and checks, on macOS, Linux and Git Bash.
+
+valid_name() { [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]]; }
+
+fingerprint() { ssh-keygen -lf "$1" 2> /dev/null | awk '{ print $2 }'; }
+
+trust_line() { printf '%s namespaces="%s" %s' "$1" "$SIG_NS" "$(cut -d' ' -f1,2 "$2")"; }
+
+pinned() { [ -f "$TRUSTED" ] && grep -qxF "$(trust_line "$1" "$2")" "$TRUSTED"; }
+
+# pin MACHINE PUBFILE: trusts PUBFILE as MACHINE's key, in place of the one trusted before.
+pin() {
+  local line
+  line=$(trust_line "$1" "$2")
+  grep -qxF "$line" "$TRUSTED" 2> /dev/null && return 0
+  { [ -f "$TRUSTED" ] && awk -v m="$1" '$1 != m' "$TRUSTED"; printf '%s\n' "$line"; } > "$TRUSTED.tmp" && mv "$TRUSTED.tmp" "$TRUSTED"
+}
+
+# ensure_key: this computer's key, made the first time, its public half published in machines/.
+ensure_key() {
+  command -v ssh-keygen > /dev/null 2>&1 || {
+    echo "handoff: ssh-keygen is missing (OpenSSH 8.0 or later signs the notes)" >&2
+    return 1
+  }
+  valid_name "$MACHINE" || {
+    echo "handoff: this computer has no usable name in ~/.claude-sync/.machine" >&2
+    return 1
+  }
+  mkdir -p "$RUNS" "$SYNC/machines"
+  if [ ! -f "$KEY" ]; then
+    ssh-keygen -q -t ed25519 -N '' -C "handoff $MACHINE" -f "$KEY" > /dev/null 2>&1 || return 1
+    chmod 600 "$KEY"
+  fi
+  cmp -s "$KEY.pub" "$SYNC/machines/$MACHINE.pub" || cp "$KEY.pub" "$SYNC/machines/$MACHINE.pub"
+  pin "$MACHINE" "$KEY.pub"
+}
+
+# signed_body FILE: the body without the runner's own reports (## Run on <computer>, <date>…),
+# written after the signature. It is what a signature covers and all a run reads of the body: a
+# report section someone else adds is never signed, so it must never reach the run either.
+signed_body() { body "$1" | awk '/^## Run on [^ ,]+, [0-9][0-9][0-9][0-9]-/ { skip = 1; next } $0 == "## Replies" { skip = 0 } !skip'; }
+
+# canonical FILE: what a signature covers: the fields that say what runs where and how, and the
+# signed body's non-blank lines.
+canonical() {
+  local k
+  for k in for from run scope repo branch title; do printf '%s: %s\n' "$k" "$(field "$1" "$k")"; done
+  echo ---
+  signed_body "$1" | awk NF
+}
+
+sign_note() {
+  local f="$DIR/$1.md" tmp="$RUNS/sign.$$" sig
+  ensure_key || return 1
+  canonical "$f" > "$tmp"
+  rm -f "$tmp.sig"
+  ssh-keygen -Y sign -f "$KEY" -n "$SIG_NS" "$tmp" > /dev/null 2>&1 || {
+    rm -f "$tmp" "$tmp.sig"
+    echo "handoff: could not sign $1" >&2
+    return 1
+  }
+  sig=$(grep -v '^-----' "$tmp.sig" | tr -d '\r\n')
+  rm -f "$tmp" "$tmp.sig"
+  set_field "$f" signed_by "$MACHINE"
+  set_field "$f" signature "$sig"
+}
+
+# signed FILE: whether FILE carries a valid signature from a computer this one trusts, under the
+# name it was trusted as.
+signed() {
+  local by sig tmp="$RUNS/verify.$$" rc
+  by=$(field "$1" signed_by)
+  sig=$(field "$1" signature)
+  [ -n "$sig" ] && valid_name "$by" && [ -f "$TRUSTED" ] || return 1
+  command -v ssh-keygen > /dev/null 2>&1 || return 1
+  { echo '-----BEGIN SSH SIGNATURE-----'; printf '%s\n' "$sig" | fold -w 70; echo '-----END SSH SIGNATURE-----'; } > "$tmp.sig"
+  canonical "$1" | ssh-keygen -Y verify -f "$TRUSTED" -I "$by" -n "$SIG_NS" -s "$tmp.sig" > /dev/null 2>&1
+  rc=$?
+  rm -f "$tmp.sig"
+  return $rc
+}
+
+# trust [MACHINE FINGERPRINT]: the published keys and whether this computer trusts them; with
+# MACHINE, trusts its key when FINGERPRINT, read on that computer (handoff.sh key), matches.
+trust() {
+  local m f fp
+  if [ $# -eq 0 ]; then
+    for f in "$SYNC"/machines/*.pub; do
+      [ -f "$f" ] || continue
+      m=${f##*/}
+      m=${m%.pub}
+      if pinned "$m" "$f"; then fp=trusted; else fp="not trusted"; fi
+      printf '%s\t%s\t%s\n' "$m" "$(fingerprint "$f")" "$fp"
+    done
+    return 0
+  fi
+  m=$1
+  valid_name "$m" && [ -f "$SYNC/machines/$m.pub" ] || {
+    echo "no published key for $m: run handoff.sh key on that computer, then sync" >&2
+    exit 1
+  }
+  # Checked and pinned from one copy: a sync may replace the published key in between.
+  mkdir -p "$RUNS"
+  f="$RUNS/trust.$$.pub"
+  cp "$SYNC/machines/$m.pub" "$f"
+  fp=$(fingerprint "$f")
+  [ -n "$fp" ] && [ "$fp" = "${2:-}" ] || {
+    rm -f "$f"
+    echo "the key published for $m has the fingerprint ${fp:-?}, not ${2:-(none given)}: not trusted" >&2
+    exit 1
+  }
+  pin "$m" "$f"
+  rm -f "$f"
+  echo "trusted: $m $fp"
+}
+
+# refused ID: tells the user, once per attempt, that a note for this computer did not run.
+refused() {
+  local n
+  n=$(attempt "$DIR/$1.md")
+  [ -f "$RUNS/$1/refused" ] && grep -qx "$n" "$RUNS/$1/refused" && return 0
+  mkdir -p "$RUNS/$1" && echo "$n" >> "$RUNS/$1/refused"
+  notify "Handoff not run" "$(field "$DIR/$1.md" title) · not signed by a computer this one trusts (handoff.sh trust)"
+}
+
 # due: the ids of the open notes this computer runs now: for it, with a run time that has come,
 # not started yet or queued again after a reply.
 due() {
@@ -328,6 +470,10 @@ due() {
       *) [[ "$run" > "$NOW" ]] && continue ;;
     esac
     ran "$id" "$(attempt "$DIR/$id.md")" && continue
+    signed "$DIR/$id.md" || {
+      refused "$id"
+      continue
+    }
     printf '%s\n' "$id"
   done < <(index)
 }
@@ -487,10 +633,15 @@ workspace() {
     mkdir -p "$work" && printf '%s\n' "$work"
     return 0
   fi
+  case "$repo" in -*)
+    echo "not a repo: $repo" >&2
+    return 1
+    ;;
+  esac
   if ! src=$(local_repo "$repo"); then
     src="$RUNS/clones/$(printf '%s' "$repo" | tr '/:@' '___')"
     case "$repo" in *://* | *@*) url=$repo ;; *) url="https://github.com/$repo.git" ;; esac
-    [ -d "$src/.git" ] || git clone -q "$url" "$src" > /dev/null 2>&1 || {
+    [ -d "$src/.git" ] || git clone -q -- "$url" "$src" > /dev/null 2>&1 || {
       echo "could not find or clone $repo" >&2
       return 1
     }
@@ -505,6 +656,22 @@ workspace() {
     return 1
   }
   printf '%s\n' "$work"
+}
+
+# The commands an edit or push run may use: git in its worktree, package managers, build tools and
+# test runners. $RUNS/allowed-bash (one Bash(...) rule a line, on this computer only, so no note can
+# widen it) adds more. A guardrail, not a sandbox: a build script the run edits still runs.
+EDIT_BASH='Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git add:*),Bash(git commit:*),Bash(git switch:*),Bash(git checkout:*),Bash(git branch:*),Bash(git restore:*),Bash(git stash:*),Bash(git rm:*),Bash(git mv:*),Bash(git rev-parse:*),Bash(git grep:*),Bash(ls:*),Bash(npm test:*),Bash(npm run:*),Bash(npm ci:*),Bash(npm install:*),Bash(pnpm test:*),Bash(pnpm run:*),Bash(pnpm install:*),Bash(yarn test:*),Bash(yarn run:*),Bash(yarn install:*),Bash(npx tsc:*),Bash(npx vitest:*),Bash(npx jest:*),Bash(npx eslint:*),Bash(npx prettier:*),Bash(pytest:*),Bash(python -m pytest:*),Bash(python3 -m pytest:*),Bash(go test:*),Bash(go build:*),Bash(go vet:*),Bash(cargo test:*),Bash(cargo build:*),Bash(cargo check:*),Bash(make:*),Bash(mvn:*),Bash(./mvnw:*),Bash(gradle:*),Bash(./gradlew:*),Bash(dotnet build:*),Bash(dotnet test:*)'
+
+edit_bash() {
+  local r out=$EDIT_BASH
+  if [ -f "$RUNS/allowed-bash" ]; then
+    while IFS= read -r r || [ -n "$r" ]; do
+      r=${r%$'\r'}
+      case "$r" in *,*) ;; Bash\(*\)) out="$out,$r" ;; esac
+    done < "$RUNS/allowed-bash"
+  fi
+  printf '%s' "$out"
 }
 
 scope_text() {
@@ -530,7 +697,7 @@ Working folder: $work$( [ -n "$branch" ] && [ "$branch" != none ] && printf ' (a
 - End with a short report: what you did, the commits, what is left. Its very last line is exactly one of: STATUS: done, STATUS: needs-you, STATUS: failed.
 
 --- The note: $(field "$f" title)
-$(body "$f")
+$(signed_body "$f")
 EOF
 }
 
@@ -538,7 +705,7 @@ EOF
 # sees it), runs Claude headless in the workspace with the note's scope, then writes the report,
 # the status and the commits into the note, pushes them when the scope allows it, and syncs.
 run_note() {
-  local id=${1:-} f scope repo branch session work prompt out rc st text log commits pushed="" br def ask="" n
+  local id=${1:-} f snap scope repo branch session work prompt out rc st text log commits pushed="" br def ask="" n
   note_file "$id"
   f="$DIR/$id.md"
   [ "$(field "$f" for)" = "$MACHINE" ] || {
@@ -560,12 +727,19 @@ run_note() {
     echo "handoff $id: attempt $n already ran on this computer; a reply starts a new one" >&2
     exit 0
   fi
+  # The run reads only this copy, checked once: a sync may change the note while it runs.
+  snap="$RUNS/$id/signed.md"
+  cp "$f" "$snap"
+  signed "$snap" && [ "$(field "$snap" for)" = "$MACHINE" ] || {
+    echo "handoff $id is not signed by a computer this one trusts (handoff.sh trust): it is picked up in a session, never run by itself" >&2
+    exit 1
+  }
   echo "$n" >> "$RUNS/$id/attempts"
-  scope=$(field "$f" scope)
+  scope=$(field "$snap" scope)
   case "$scope" in read | edit | push) ;; *) scope=edit ;; esac
-  repo=$(field "$f" repo)
-  branch=$(field "$f" branch)
-  session=$(field "$f" session)
+  repo=$(field "$snap" repo)
+  branch=$(field "$snap" branch)
+  session=$(cat "$RUNS/$id/session" 2> /dev/null)
   set_field "$f" status running
   set_field "$f" run_by "$MACHINE"
   set_field "$f" started "$NOW"
@@ -577,19 +751,19 @@ run_note() {
     return 0
   fi
   if [ -n "$session" ]; then
-    prompt="The user answered on \"$(field "$f" from)\". Their latest reply, at the end of the note's Replies:
+    prompt="The user answered on \"$(field "$snap" from)\". Their latest reply, at the end of the note's Replies:
 
-$(awk '$0 == "## Replies" { on = 1; next } on && /^## / { on = 0 } on && NF' "$f" | tail -1)
+$(signed_body "$snap" | awk '$0 == "## Replies" { on = 1; next } on && /^## / { on = 0 } on && NF' | tail -1)
 
 Carry on with the same scope and rules, and end with the same kind of report and STATUS line."
   else
-    prompt=$(prompt_for "$f" "$work" "$scope" "$branch")
+    prompt=$(prompt_for "$snap" "$work" "$scope" "$branch")
   fi
   local -a args=(-p "$prompt" --output-format json --permission-mode dontAsk)
   [ -n "$session" ] && args+=(--resume "$session")
   case "$scope" in
     read) args+=(--allowedTools 'Read,Grep,Glob,WebSearch,WebFetch,Bash(git status:*),Bash(git log:*),Bash(git diff:*),Bash(git show:*),Bash(ls:*)') ;;
-    *) args+=(--allowedTools 'Read,Grep,Glob,Edit,Write,NotebookEdit,Bash,WebSearch,WebFetch'
+    *) args+=(--allowedTools "Read,Grep,Glob,Edit,Write,NotebookEdit,WebSearch,WebFetch,$(edit_bash)"
       --disallowedTools 'Bash(git push:*),Bash(gh pr:*),Bash(gh api:*),Bash(az repos:*),Bash(git remote:*),Bash(ssh:*),Bash(scp:*)') ;;
   esac
   (cd "$work" && "$CLAUDE_BIN" "${args[@]}" > "$log" 2>&1 < /dev/null) &
@@ -602,7 +776,10 @@ Carry on with the same scope and rules, and end with the same kind of report and
   wait "$watcher" 2> /dev/null
   text=$(jq -r '.result // empty' "$log" 2> /dev/null)
   session=$(jq -r '.session_id // empty' "$log" 2> /dev/null)
-  [ -n "$session" ] && set_field "$f" session "$session"
+  if [ -n "$session" ]; then
+    printf '%s\n' "$session" > "$RUNS/$id/session"
+    set_field "$f" session "$session"
+  fi
   st=$(printf '%s\n' "$text" | awk '/^STATUS: *(done|needs-you|failed) *$/ { s = $2 } END { print s }')
   text=$(printf '%s\n' "$text" | grep -vE '^STATUS: *(done|needs-you|failed) *$')
   if [ "$rc" -ne 0 ] || [ "$(jq -r '.is_error // false' "$log" 2> /dev/null)" = true ]; then
@@ -673,8 +850,11 @@ case "${1:-}" in
   due) due ;;
   on-sync) on_sync ;;
   run) run_note "${2:-}" ;;
+  sign) note_file "${2:-}" && sign_note "$2" && echo "signed: $2" || exit 1 ;;
+  key) ensure_key && printf '%s %s\n' "$MACHINE" "$(fingerprint "$KEY.pub")" || exit 1 ;;
+  trust) shift && trust "$@" ;;
   *)
-    echo "usage: handoff.sh json|done ID|cancel ID|delete ID|restore ID|reply ID TEXT|agents|machines|due|on-sync|run ID" >&2
+    echo "usage: handoff.sh json|done ID|cancel ID|delete ID|restore ID|reply ID TEXT|agents|machines|due|on-sync|run ID|sign ID|key|trust [MACHINE FINGERPRINT]" >&2
     exit 2
     ;;
 esac
