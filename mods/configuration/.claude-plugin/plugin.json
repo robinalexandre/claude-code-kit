@@ -1,6 +1,6 @@
 {
   "name": "configuration",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "The Configuration pane of the kit's panes (a button on the band, /configuration): every mod's settings, for all computers or this one, with the value the other computers use, and a low power mode for everything that fetches by itself; the Do not disturb pane opens from it when dnd is installed.",
   "types": "./types/index.d.ts",
   "author": {
@@ -21,6 +21,12 @@
       "description": "Which plan usage limit the kit's status line shows, with its reset: ⏳ the 5-hour window (reset time), 📅 the weekly one (reset day). \"5-hour, else weekly\" shows the weekly limit only while Claude Code sends no 5-hour one.",
       "options": ["5-hour, else weekly", "5-hour", "weekly", "both", "off"],
       "default": "5-hour, else weekly"
+    },
+    "bandOrder": {
+      "type": "string",
+      "title": "Order of the rows above the prompt",
+      "description": "Top to bottom, separated by commas: history, dev activity, reminders, configuration. A row left out keeps its place after the ones named. Claude Code 2.1.325 and later draw each mod's buttons on a row of its own.",
+      "default": "history, dev activity, reminders, configuration"
     }
   }
 }

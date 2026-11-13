@@ -68,6 +68,13 @@ report() {
   fi
   echo
   echo "== Checks"
+  if [ -d "$home/.claude/mods/configuration" ]; then
+    if jq -e '.pluginConfigs["configuration@inline"].options.bandOrder | strings | length > 0' "$home/.claude/settings.json" > /dev/null; then
+      echo "ok   the order of the band's rows is kept as the configuration setting"
+    else
+      echo "!!   configuration is installed but the band's order was not asked or not kept"; problems=$((problems + 1))
+    fi
+  fi
   while read -r path; do
     [ -z "$path" ] && continue
     if [ -e "$path" ]; then echo "ok   hook script $path"; else echo "!!   a hook runs $path, which is missing"; problems=$((problems + 1)); fi
