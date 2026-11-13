@@ -137,6 +137,19 @@
       "who": "Anyone using Ghostty, iTerm, Terminal.app, WezTerm, kitty, Windows Terminal or GNOME Terminal (others get the commands to paste)."
     },
     {
+      "name": "spinner-themes",
+      "kind": "skill",
+      "group": "base",
+      "setup": "skills/spinner-themes/setup.sh",
+      "tools": [
+        "jq"
+      ],
+      "what": "Replaces the words Claude Code shows while it works (\"Thinking…\") with words from themes you pick: wingfoil, surf, motorsport, skiing, cycling, or any theme Claude writes for you.",
+      "why": "A long wait reads better in your own world's words, and only those: the default words are left out.",
+      "when": "At setup, then \"change my spinner words\" or \"add a <topic> theme\".",
+      "who": "Anyone."
+    },
+    {
       "name": "drift-check",
       "kind": "mod",
       "group": "base",

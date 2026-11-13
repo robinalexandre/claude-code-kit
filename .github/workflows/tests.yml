@@ -46,6 +46,7 @@ jobs:
           bash tests/reminders-encrypted.sh
           bash tests/handoff.sh
           bash tests/claude-reopen.sh
+          bash tests/spinner-themes.sh
           bash tests/tab-status.sh
           bash tests/inventory.sh
           bash tests/sync-install.sh

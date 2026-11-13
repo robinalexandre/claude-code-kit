@@ -38,6 +38,7 @@ case "$part" in
   recent-activity) setup=hooks/setup/recent-activity.sh ;;
   pr-watch) setup=skills/pr-watch/setup.sh ;;
   kb) setup=skills/kb/setup.sh ;;
+  spinner-themes) setup=skills/spinner-themes/setup.sh ;;
   test-evidence) setup=skills/test-evidence/setup.sh ;;
   daily-sync) setup=skills/daily-sync/setup.sh required=1 ;;
   reminders) setup=skills/reminders/setup.sh ;;

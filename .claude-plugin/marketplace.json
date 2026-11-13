@@ -42,7 +42,7 @@
     {
       "name": "statusline",
       "description": "A status line with folder, branch, model, context used, effort and rate limit, and a sign when the config sync is paused (asks once to set it in your settings).",
-      "version": "1.5.0",
+      "version": "1.5.1",
       "category": "productivity",
       "source": ".",
       "strict": false,
@@ -118,7 +118,7 @@
     {
       "name": "recent-activity",
       "description": "A digest of your recent sessions across your dev folder at each session start, so Claude knows what you did lately in your other repos.",
-      "version": "1.1.4",
+      "version": "1.1.5",
       "category": "productivity",
       "source": ".",
       "strict": false,
@@ -301,9 +301,20 @@
       ]
     },
     {
+      "name": "spinner-themes",
+      "description": "Replaces the words Claude Code shows while it works with words from themes you pick (wingfoil, surf, motorsport, skiing, cycling, or one Claude writes for you).",
+      "version": "1.0.0",
+      "category": "productivity",
+      "source": ".",
+      "strict": false,
+      "skills": [
+        "./skills/spinner-themes"
+      ]
+    },
+    {
       "name": "session-registry",
       "description": "Offers to resume the sessions left open in a terminal tab, by title and brief, with a checkbox picker (zsh, JetBrains or Ghostty terminals).",
-      "version": "1.2.3",
+      "version": "1.2.4",
       "category": "productivity",
       "source": ".",
       "strict": false,
@@ -504,7 +515,7 @@
     {
       "name": "git-identity-guard",
       "description": "Refuses a commit or push whose email isn't the one you chose for that host, or the one you used most in that repo; can check commits made outside Claude too.",
-      "version": "1.1.5",
+      "version": "1.1.6",
       "category": "development",
       "source": ".",
       "strict": false,
@@ -540,7 +551,7 @@
     {
       "name": "pr-watch",
       "description": "Tracks your PRs until merged: new comments, votes, CI results, merges, review requests, your pipeline runs (GitHub, Azure DevOps) and the GitHub issues you follow.",
-      "version": "1.13.2",
+      "version": "1.13.3",
       "category": "development",
       "source": ".",
       "strict": false,
@@ -598,7 +609,7 @@
     {
       "name": "test-evidence",
       "description": "Screenshots, a short video and network proof of a ticket tested locally, attached to Jira or the PR, with the ticket's acceptance criteria in the PR description (needs the chrome-devtools MCP).",
-      "version": "1.2.1",
+      "version": "1.2.2",
       "category": "development",
       "source": ".",
       "strict": false,
@@ -672,7 +683,7 @@
     {
       "name": "config-sync",
       "description": "Keeps your Claude Code config the same on all your computers through a private git repo of your own (any host); sets it up at the first session and keeps the engine current. Each computer also records what it runs (system, Claude Code, plugins, kits) for the others to see.",
-      "version": "1.9.2",
+      "version": "1.9.3",
       "category": "productivity",
       "source": ".",
       "strict": false,
@@ -710,7 +721,7 @@
     {
       "name": "daily-sync",
       "description": "Syncs your config before the first session of the day, every morning at a time you pick and when you log in, even with no session open.",
-      "version": "1.2.0",
+      "version": "1.2.1",
       "category": "productivity",
       "source": ".",
       "strict": false,
@@ -737,7 +748,7 @@
     {
       "name": "reminders",
       "description": "One-line to-dos with a date or a repeat, sent to the desktop and the phone and shown at the first session of that day on any computer; filed by group. Never runs anything: to hand over work, to another computer or to your assistant, see handoff.",
-      "version": "1.8.0",
+      "version": "1.8.1",
       "category": "productivity",
       "source": ".",
       "strict": false,
@@ -802,7 +813,7 @@
     {
       "name": "kb",
       "description": "A personal knowledge base: Markdown notes with links, curated every morning from your Claude Code sessions, recalled at session start and on each prompt; text, semantic and graph search; notes that read alike linked by themselves; a local page with the graph, hubs and health; a server for your other agents.",
-      "version": "1.6.4",
+      "version": "1.6.5",
       "category": "productivity",
       "source": ".",
       "strict": false,
