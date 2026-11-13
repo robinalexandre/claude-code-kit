@@ -1382,9 +1382,21 @@ crypt_recommit() {
   commit
 }
 
+# mkdir_lock DIR: makes DIR unless it exists or another run is making it. A noclobber file decides
+# between two runs, not mkdir alone: Ubuntu 26.04's mkdir (uutils) lets two concurrent calls succeed.
+mkdir_lock() {
+  local made
+  [ -z "$(find "$1.claim" -maxdepth 0 -mmin +1 2> /dev/null)" ] || rm -f "$1.claim"
+  (set -C; : > "$1.claim") 2> /dev/null || return 1
+  mkdir "$1" 2> /dev/null
+  made=$?
+  rm -f "$1.claim"
+  return "$made"
+}
+
 lock() {
   local tries=${1:-0} pid
-  while ! mkdir "$STATE/lock" 2> /dev/null; do
+  while ! mkdir_lock "$STATE/lock"; do
     if lock_stale; then
       pid=$(cat "$STATE/lock/pid" 2> /dev/null)
       # Moved aside first, so of the runs that found it stale only one takes it over, and never a

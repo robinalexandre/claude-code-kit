@@ -517,6 +517,18 @@ index() {
 # the web) can be talked into one, and a run has no one watching.
 from_computer() { [ -n "$1" ] && [ "$1" != - ] && [ -f "$SYNC/machines/$1.json" ]; }
 
+# mkdir_lock DIR: makes DIR unless it exists or another run is making it. A noclobber file decides
+# between two runs, not mkdir alone: Ubuntu 26.04's mkdir (uutils) lets two concurrent calls succeed.
+mkdir_lock() {
+  local made
+  [ -z "$(find "$1.claim" -maxdepth 0 -mmin +1 2> /dev/null)" ] || rm -f "$1.claim"
+  (set -C; : > "$1.claim") 2> /dev/null || return 1
+  mkdir "$1" 2> /dev/null
+  made=$?
+  rm -f "$1.claim"
+  return "$made"
+}
+
 running() { [ -d "$RUNS/$1/lock" ] && kill -0 "$(cat "$RUNS/$1/lock/pid" 2> /dev/null)" 2> /dev/null; }
 
 # take_lock ID: the note's lock, for this process. It stays with a live run, and with one that
@@ -524,7 +536,7 @@ running() { [ -d "$RUNS/$1/lock" ] && kill -0 "$(cat "$RUNS/$1/lock/pid" 2> /dev
 # stale whatever its pid says (the system may have given that pid to another process).
 take_lock() {
   local lock="$RUNS/$1/lock" pid
-  mkdir "$lock" 2> /dev/null && return 0
+  mkdir_lock "$lock" && return 0
   if [ -z "$(find "$lock" -maxdepth 0 -mmin +$((RUN_MIN + 10)) 2> /dev/null)" ]; then
     pid=$(cat "$lock/pid" 2> /dev/null)
     if [ -n "$pid" ]; then
@@ -536,7 +548,7 @@ take_lock() {
   # Moved aside first, so of two runs that found it stale only one takes it.
   mv "$lock" "$lock.$$" 2> /dev/null || return 1
   rm -rf "$lock.$$"
-  mkdir "$lock" 2> /dev/null
+  mkdir_lock "$lock"
 }
 
 # attempt FILE: which attempt of the note this is: the number of replies under it. Only a reply

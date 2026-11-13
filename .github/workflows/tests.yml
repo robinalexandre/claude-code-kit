@@ -85,6 +85,8 @@ jobs:
           bash tests/sync-pingpong.sh
       - name: The sync's pr-watch conflicts
         run: bash tests/sync-prwatch-conflict.sh
+      - name: The lock folders, even where mkdir is not atomic
+        run: bash tests/locks.sh
       # The template is a GitHub workflow: it runs on Linux runners, so it is tested where bash and jq match them.
       - name: The ci-review workflow template
         if: runner.os != 'Windows'
