@@ -44,7 +44,8 @@ case "$prompt" in
     out '{"findings":[{"key":"y","path":"b.ts","line":7,"severity":"important","body":"null deref b.ts:7"},{"key":"z","path":"c.ts","line":1,"severity":"nit","body":"naming"}]}' ;;
   *"lists issues other reviewers think they found"*)
     # Voter 1 confirms cand-1 and cand-2, voter 2 cand-1 and cand-3: only cand-1 has every vote.
-    if mkdir "$WORK/voted" 2>/dev/null; then out '{"confirmed":["cand-1","cand-2"]}'; else out '{"confirmed":["cand-1","cand-3"]}'; fi ;;
+    # A noclobber file, not mkdir: Ubuntu 26.04's mkdir (uutils) lets two concurrent calls both succeed.
+    if (set -C; : > "$WORK/voted") 2>/dev/null; then out '{"confirmed":["cand-1","cand-2"]}'; else out '{"confirmed":["cand-1","cand-3"]}'; fi ;;
   *"give the final review"*)
     n=$(jq length .ai-review-input/candidates.json 2>/dev/null || echo 0)
     echo "final sees $n candidates" >> "$CALLS"
