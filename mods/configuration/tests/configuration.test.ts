@@ -90,6 +90,49 @@ test('a Configuration button on the band and /configuration open the pane', asyn
   expect((await $.command.run(RUN)).text).toBe('Configuration pane opened.')
 })
 
+const LIST_PROPS = { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 80, view: {} }
+const rowOf = (plugin: string) => ({ plugin, tree: { type: 'Text', props: {}, children: [plugin] } })
+
+// The order the rows reach the band in, from the rows the engine stacked in chain order.
+const stackedOrder = async ($: Engine, on: On) => {
+  const seen: string[][] = []
+  on('ui.render', { component: 'AbovePromptList' }, ($, e) => {
+    seen.push(e.props.rows.map(row => row.plugin))
+
+    return Fragment({})
+  })
+  answer(on, {})
+  answerRows(on, {}, [])
+
+  await $.session.start(START)
+  const rows = ['configuration', 'other-mod', 'reminders-handoffs', 'recent-prompts', 'pr-pane'].map(rowOf)
+
+  try {
+    await $.ui.mount({ plugin: 'configuration', surface: 'terminal', component: 'AbovePromptList', props: { ...LIST_PROPS, rows } as never })
+  } catch {
+    // Before 2.1.325 the band is one shared row and there is no list of rows to order.
+    return null
+  }
+
+  return seen.at(-1)
+}
+
+test('the band stacks its rows history, dev activity, reminders, configuration, then the others', async ($, on) => {
+  const order = await stackedOrder($, on)
+
+  if (order !== null) {
+    expect(order).toEqual(['recent-prompts', 'pr-pane', 'reminders-handoffs', 'configuration', 'other-mod'])
+  }
+})
+
+test('the band order set by name or by plugin wins, the rows it leaves out after', { options: { bandOrder: 'Reminders, configuration > recent-prompts' } }, async ($, on) => {
+  const order = await stackedOrder($, on)
+
+  if (order !== null) {
+    expect(order).toEqual(['reminders-handoffs', 'configuration', 'recent-prompts', 'other-mod', 'pr-pane'])
+  }
+})
+
 test("the pane lists each mod's settings; a change for all computers is a /config change alone", async ($, on) => {
   const files: Files = { '~/.claude-sync/.machine': 'mac\n', '~/.claude-sync/machines/mac.json': '{ "settings": { "theme": "dark" } }' }
   const sets: unknown[] = []

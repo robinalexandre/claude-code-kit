@@ -69,6 +69,42 @@ const takeBandRow = (tree: unknown): { rest: unknown; buttons: unknown[] } => {
   return taken.buttons.length > 0 ? { rest: { ...node, children: taken.rest }, buttons: taken.buttons } : { rest: tree, buttons: [] }
 }
 
+// From Claude Code 2.1.325 each mod draws its own row of the band, stacked in the order the
+// bandOrder setting names them: by its plugin's name or by its button's name.
+const BAND_NAMES: Record<string, string[]> = {
+  'recent-prompts': ['history'],
+  'pr-pane': ['dev activity', 'prs'],
+  'reminders-handoffs': ['reminders', 'handoffs', 'reminders/handoffs'],
+  configuration: [],
+}
+
+const DEFAULT_BAND_ORDER = 'history, dev activity, reminders, configuration'
+
+const bandRanks = (order: string): Map<string, number> => {
+  const ranks = new Map<string, number>()
+  const names = order.split(/[,>\n]/).map(name => name.trim().toLowerCase()).filter(name => name !== '')
+
+  names.forEach((name, rank) => {
+    const plugin = Object.keys(BAND_NAMES).find(key => key === name || (BAND_NAMES[key] ?? []).includes(name)) ?? name
+
+    if (!ranks.has(plugin)) {
+      ranks.set(plugin, rank)
+    }
+  })
+
+  return ranks
+}
+
+// The rows the order names come first, in its order; the others keep theirs, after them.
+const orderRows = <Row extends { plugin: string }>(rows: readonly Row[], order: string): Row[] => {
+  const ranks = bandRanks(order)
+  const rankOf = (row: Row) => ranks.get(row.plugin) ?? ranks.size
+
+  return [...rows].sort((one, other) => rankOf(one) - rankOf(other))
+}
+
+let bandOrder = DEFAULT_BAND_ORDER
+
 const slashed = (path: string) => path.replace(/\\/g, '/')
 
 const home = async ($: EngineInterface) => slashed((await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE')) ?? '~')
@@ -395,6 +431,7 @@ let loadAsked = false
 
 export const register: Register = (on, options) => {
   powerSetting = typeof options.lowPower === 'string' ? options.lowPower : 'on battery'
+  bandOrder = typeof options.bandOrder === 'string' && options.bandOrder.trim() !== '' ? options.bandOrder : DEFAULT_BAND_ORDER
 
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: COMMAND, description: "Open the Configuration pane: every mod's settings" }).catch(() => undefined)
@@ -439,6 +476,8 @@ export const register: Register = (on, options) => {
       </Box>
     )
   })
+
+  on('ui.render', { component: 'AbovePromptList' }, ($, e, next) => next({ ...e, props: { ...e.props, rows: orderRows(e.props.rows, bandOrder) } }))
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Button, Input, Text } = $.ui.resolve(e)

@@ -431,6 +431,7 @@ frag() {
 fragments=()
 mods=()
 marker_wanted=""
+band_wanted=""
 zsh_resume=""
 sync_wanted=""
 echo
@@ -482,9 +483,19 @@ for p in $picked; do
       fi
       ;;
   esac
-  case "$p" in drift-check | drift-check-hook) marker_wanted=1 ;; esac
+  case "$p" in
+    drift-check | drift-check-hook) marker_wanted=1 ;;
+    configuration) band_wanted=1 ;;
+  esac
   echo "Installed $p"
 done
+
+# Claude Code 2.1.325 and later draw each pane mod's button on a row of its own above the prompt,
+# stacked in the order kept as the configuration mod's setting (the Configuration pane changes it).
+band_order=""
+if [ -n "${band_wanted:-}" ] && ! jq -e '[.pluginConfigs // {} | to_entries[] | select(.key | test("^configuration(@|$)")) | .value.options.bandOrder | strings | select(. != "")] | length > 0' "$SETTINGS" > /dev/null 2>&1; then
+  band_order=$(reply band.order "Order of the rows above the prompt, top to bottom, separated by commas:" "history, dev activity, reminders, configuration")
+fi
 # The setup scripts and every hook read these. The update check comes with every install.
 current=kit-update-check
 put hooks/lib hooks/lib
@@ -509,7 +520,7 @@ fi
 
 # A file rather than <(...): native jq.exe on Windows can't open /proc/self/fd paths.
 cat /dev/null ${fragments[@]+"${fragments[@]}"} > "$SETTINGS.fragments"
-jq --arg h "$home" --arg sep "$sep" --arg marker "$marker" --argjson mods "$(jq -n '$ARGS.positional' --args ${mods[@]+"${mods[@]}"})" \
+jq --arg h "$home" --arg sep "$sep" --arg marker "$marker" --arg band "$band_order" --argjson mods "$(jq -n '$ARGS.positional' --args ${mods[@]+"${mods[@]}"})" \
   --slurpfile frags "$SETTINGS.fragments" '
   def merge($o):
     if type == "object" and ($o | type) == "object" then
@@ -522,7 +533,8 @@ jq --arg h "$home" --arg sep "$sep" --arg marker "$marker" --argjson mods "$(jq 
   | if ($mods | length) > 0 then
       .env.CLAUDE_CODE_PLUGIN_DIRS = ((.env.CLAUDE_CODE_PLUGIN_DIRS // "" | split($sep) | map(select(. != ""))) + $mods | uniq | join($sep))
     else . end
-  | if $marker != "" then .pluginConfigs["drift-check@inline"].options.marker //= $marker else . end' \
+  | if $marker != "" then .pluginConfigs["drift-check@inline"].options.marker //= $marker else . end
+  | if $band != "" then .pluginConfigs["configuration@inline"].options.bandOrder //= $band else . end' \
   "$BACKUP/settings.json" > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
 rm -f "$SETTINGS.fragments"
 
