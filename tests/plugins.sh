@@ -85,6 +85,13 @@ line=$(echo '{"session_id":"s1","workspace":{"current_dir":"/tmp"}}' | bash "$(d
 check "statusline: says the do-not-disturb profile on, where and until when" '[[ "$line" == *"🔕"*"work · session (15:00)"* ]]'
 line=$(echo '{"session_id":"s2","workspace":{"current_dir":"/tmp"}}' | bash "$(data_of statusline)/statusline-command.sh" 2> /dev/null)
 check "statusline: quiet while no profile is on" '[[ "$line" != *"🔕"* ]]'
+limits='"rate_limits":{"five_hour":{"used_percentage":42},"seven_day":{"used_percentage":29}}'
+line=$(echo "{\"workspace\":{\"current_dir\":\"/tmp\"},$limits}" | bash "$(data_of statusline)/statusline-command.sh" 2> /dev/null)
+check "statusline: shows the 5-hour limit, not the weekly one, when both come" '[[ "$line" == *"⏳"*"42%"* && "$line" != *"📅"* ]]'
+line=$(echo '{"workspace":{"current_dir":"/tmp"},"rate_limits":{"seven_day":{"used_percentage":29}}}' | bash "$(data_of statusline)/statusline-command.sh" 2> /dev/null)
+check "statusline: falls back to the weekly limit without a 5-hour one" '[[ "$line" == *"📅"*"29%"* && "$line" != *"⏳"* ]]'
+line=$(echo "{\"workspace\":{\"current_dir\":\"/tmp\"},$limits}" | KIT_STATUSLINE_RATE_LIMIT=both bash "$(data_of statusline)/statusline-command.sh" 2> /dev/null)
+check "statusline: shows both limits when asked" '[[ "$line" == *"⏳"*"📅"* ]]'
 out=$(run_event statusline SessionStart)
 check "statusline: quiet once set up" '[ -z "$out" ]'
 

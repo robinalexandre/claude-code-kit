@@ -12,7 +12,12 @@ learn_file="$HOME/.claude/learn-levels.json"
 dnd_file="$HOME/.claude/.dnd/active.json"
 # The kit's low power mode, as the configuration mod last wrote it
 power_file="$claude_dir/.low-power.json"
+# Which rate limit to show, set in the Configuration pane (or KIT_STATUSLINE_RATE_LIMIT without it):
+# "5-hour, else weekly" (default), "5-hour", "weekly", "both" or "off"
+settings_file="$claude_dir/settings.json"
+command -v cygpath > /dev/null 2>&1 && settings_file=$(cygpath -u "$settings_file")
 files=()
+[ -f "$settings_file" ] && files+=(--rawfile settings "$settings_file")
 [ -f "$learn_file" ] && files+=(--rawfile learn "$learn_file")
 [ -f "$dnd_file" ] && files+=(--rawfile dnd "$dnd_file")
 [ -f "$power_file" ] && files+=(--rawfile power "$power_file")
@@ -30,11 +35,20 @@ files=()
   def paint($code; $s): "\u001b[\($code)m\($s)\u001b[0m";
   def ramp: if . >= 80 then "31" elif . >= 50 then "33" else "32" end;
   def file($k): ($ARGS.named[$k] // "" | try fromjson catch null) // {};
+  def limit($w; $fmt):
+    (.rate_limits[$w] // {}) as $l
+    | ($l.used_percentage | numbers | round)
+    | paint(ramp; "\(.)%" + ((($l.resets_at | tonumber? | strflocaltime($fmt)) // null) as $r
+        | if $r then " (\($r))" else "" end));
   (.session_id // "") as $sid
   | ((.context_window.used_percentage | numbers | round) // null) as $ctx
-  | (.rate_limits.five_hour // {}) as $five
-  | (($five.used_percentage | numbers | round) // null) as $rate
-  | (($five.resets_at | tonumber? | strflocaltime("%H:%M")) // null) as $reset
+  | ([file("settings").pluginConfigs // {} | to_entries[] | select(.key | test("^configuration(@|$)"))
+      | .value.options.rateLimit | strings | select(. != "")][0]
+     // ($ENV.KIT_STATUSLINE_RATE_LIMIT // "" | select(. != "")) // "5-hour, else weekly") as $show
+  | ((limit("five_hour"; "%H:%M") | "⏳ " + .) // null) as $five
+  | ((limit("seven_day"; "%a") | "📅 " + .) // null) as $week
+  | ({"5-hour": [$five], "weekly": [$week], "both": [$five, $week], "off": []}[$show] // [$five // $week]
+     | map(strings) | join(" ")) as $rate
   | (.effort.level // "" | strings) as $effort
   | ((if $sid == "" then null else file("learn")[$sid] end | strings) // "") as $learn
   | (if $sid == "" then null else file("dnd")[$sid] end) as $dnd
@@ -43,7 +57,7 @@ files=()
     ([ (.model.display_name // empty | "🤖 " + paint("35"; .)),
        ($ctx // empty | "🧠 " + paint(ramp; "\(.)%")),
        (if $effort == "" then empty else "⚡ " + paint({low: "34", medium: "32", high: "33", xhigh: "35", max: "31"}[$effort] // "37"; $effort) end),
-       ($rate // empty | "⏳ " + paint(ramp; "\(.)%" + (if $reset then " (\($reset))" else "" end))),
+       ($rate | select(. != "")),
        ({off: paint("2"; "off"), brief: paint("34"; "brief"), normal: paint("32"; "normal"), deep: paint("33"; "deep")}[$learn] // empty | "💡 " + .),
        ($dnd // empty | objects | select((.profile // "") != "" and .profile != "none")
          | "🔕 " + paint("35"; .profile + (if (.scope // "") != "" then " · " + .scope else "" end)
