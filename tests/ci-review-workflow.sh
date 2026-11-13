@@ -132,7 +132,7 @@ for depth in quick standard deep; do
       standard) check "standard/$floor: main and security finders, then the final review sees 3 candidates" \
         'grep -q "final sees 3 candidates" "$CALLS"' ;;
       deep) check "deep/$floor: only the candidate both voters confirm reaches the final review" \
-        'grep -q "final sees 1 candidates" "$CALLS"' ;;
+        'grep -q "final sees 1 candidates" "$CALLS" || { grep -E "final sees|slept" "$CALLS"; tail -n 5 "$O"/vote-*.json "$O"/vote-*.log "$R/log"; false; }' ;;
     esac
   done
 done
