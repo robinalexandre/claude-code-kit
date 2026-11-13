@@ -579,12 +579,25 @@ test('the band button joins the shared row of the mods beneath, in key order', a
   await $.command.run(command('reminders-pane'))
   const band = await mountBand($)
   const rows = await band.findAll({ key: 'band-buttons' })
+  expect(await band.find({ text: '❯ last message' })).toBeDefined()
+
+  // From 2.1.325 each plugin draws its own row of the band and next(e) hands back an engine
+  // reference, not the tree beneath: there is no shared row to join, each mod keeps its buttons.
+  if (rows.length > 1) {
+    const mine = rows.find(row => JSON.stringify(row).includes('band-3-reminders'))
+    const theirs = rows.find(row => JSON.stringify(row).includes('band-1-history'))
+
+    expect(mine).toBeDefined()
+    expect(JSON.stringify(mine)).not.toContain('band-2-prs')
+    expect(JSON.stringify(theirs)).toContain('band-2-prs')
+    return
+  }
+
   const drawn = JSON.stringify(rows[0] ?? {})
   const order = ['band-1-history', 'band-2-prs', 'band-3-reminders'].map(key => drawn.indexOf(key))
 
   expect(rows).toHaveLength(1)
   expect(order.every((at, index) => at >= 0 && (index === 0 || at > (order[index - 1] ?? 0)))).toBe(true)
-  expect(await band.find({ text: '❯ last message' })).toBeDefined()
 })
 
 test('a command name already taken does not stop the session start', async ($, on) => {
