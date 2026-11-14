@@ -30,10 +30,22 @@ start() {
   (nohup bash "$SK/session.sh" run > /dev/null 2>&1 < /dev/null &)
 }
 
+# mkdir_lock DIR: makes DIR unless it exists or another run is making it. A noclobber file decides
+# between two runs, not mkdir alone: Ubuntu 26.04's mkdir (uutils) lets two concurrent calls succeed.
+mkdir_lock() {
+  local made
+  [ -z "$(find "$1.claim" -maxdepth 0 -mmin +1 2> /dev/null)" ] || rm -f "$1.claim"
+  (set -C; : > "$1.claim") 2> /dev/null || return 1
+  mkdir "$1" 2> /dev/null
+  made=$?
+  rm -f "$1.claim"
+  return "$made"
+}
+
 run() {
-  if ! mkdir "$STATE/lock" 2> /dev/null; then
+  if ! mkdir_lock "$STATE/lock"; then
     [ -n "$(find "$STATE" -maxdepth 1 -name lock -mmin +10 2> /dev/null)" ] || return 0
-    rm -rf "$STATE/lock" && mkdir "$STATE/lock" 2> /dev/null || return 0
+    rm -rf "$STATE/lock" && mkdir_lock "$STATE/lock" || return 0
   fi
   bash "$SK/pr-watch.sh" check --quiet > /dev/null 2>&1
   rm -rf "$STATE/lock"

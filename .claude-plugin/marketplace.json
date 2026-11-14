@@ -551,7 +551,7 @@
     {
       "name": "pr-watch",
       "description": "Tracks your PRs until merged: new comments, votes, CI results, merges, review requests, your pipeline runs (GitHub, Azure DevOps) and the GitHub issues you follow.",
-      "version": "1.13.3",
+      "version": "1.13.4",
       "category": "development",
       "source": ".",
       "strict": false,
@@ -683,7 +683,7 @@
     {
       "name": "config-sync",
       "description": "Keeps your Claude Code config the same on all your computers through a private git repo of your own (any host); sets it up at the first session and keeps the engine current. Each computer also records what it runs (system, Claude Code, plugins, kits) for the others to see.",
-      "version": "1.9.3",
+      "version": "1.9.4",
       "category": "productivity",
       "source": ".",
       "strict": false,
@@ -707,7 +707,7 @@
     {
       "name": "handoff",
       "description": "Hands work over to another computer: where it stands (branch, what's done, decisions, next steps) for a session there to resume, or a task that computer runs by itself at its next sync, in a worktree and within the scope you set, sending its status and report back to you; and tasks your own assistant runs by itself at a set time. For to-dos with a date, see reminders.",
-      "version": "1.4.1",
+      "version": "1.4.2",
       "category": "productivity",
       "source": ".",
       "strict": false,
