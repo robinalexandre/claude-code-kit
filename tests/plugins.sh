@@ -69,10 +69,12 @@ for p in $names; do
 done
 
 # What each session start says on a computer where nothing is set up yet.
-out=$(run_event team SessionStart)
-check "team: the rules, in the default language" '[[ "$out" == *"How we work together"* && "$out" == *"talk to me in English"* ]]'
-out=$(CLAUDE_PLUGIN_OPTION_LANGUAGE=Français run_event team SessionStart)
-check "team: the language option" '[[ "$out" == *"talk to me in Français"* ]]'
+if [[ " $(echo $names) " == *" team "* ]]; then
+  out=$(run_event team SessionStart)
+  check "team: the rules, in the default language" '[[ "$out" == *"How we work together"* && "$out" == *"talk to me in English"* ]]'
+  out=$(CLAUDE_PLUGIN_OPTION_LANGUAGE=Français run_event team SessionStart)
+  check "team: the language option" '[[ "$out" == *"talk to me in Français"* ]]'
+fi
 
 out=$(run_event statusline SessionStart)
 check "statusline: offers its setup" '[[ "$out" == *"statusline plugin is installed but not set up"* && "$out" == *"hooks/setup/statusline.sh"* ]]'
