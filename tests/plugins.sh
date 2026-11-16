@@ -20,17 +20,18 @@ check() { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
 
 claude plugin marketplace add "$KIT" > /dev/null 2>&1 || bad "marketplace add"
 names=$(jq -r '.plugins[].name' "$MARKET")
+MARKET_NAME=$(jq -r '.name' "$MARKET")
 for p in $names; do
-  claude plugin install "$p@claude-code-kit" > "$SB/install.log" 2>&1 || bad "install $p" "$(tail -1 "$SB/install.log")"
+  claude plugin install "$p@$MARKET_NAME" > "$SB/install.log" 2>&1 || bad "install $p" "$(tail -1 "$SB/install.log")"
 done
 LIST="$CLAUDE_CONFIG_DIR/plugins/installed_plugins.json"
 root_of() {
   local r
-  r=$(jq -r --arg id "$1@claude-code-kit" '.plugins[$id][0].installPath // empty' "$LIST")
+  r=$(jq -r --arg id "$1@$MARKET_NAME" '.plugins[$id][0].installPath // empty' "$LIST")
   command -v cygpath > /dev/null 2>&1 && [ -n "$r" ] && r=$(cygpath -u "$r")
   printf '%s' "$r"
 }
-data_of() { printf '%s' "$CLAUDE_CONFIG_DIR/plugins/data/$1-claude-code-kit"; }
+data_of() { printf '%s' "$CLAUDE_CONFIG_DIR/plugins/data/$1-$MARKET_NAME"; }
 
 # run_event PLUGIN EVENT: runs PLUGIN's hooks for EVENT as Claude Code would, prints what they print.
 run_event() {
@@ -51,7 +52,7 @@ for p in $names; do
   version=$(jq -r --arg p "$p" '.plugins[] | select(.name == $p) | .version // empty' "$MARKET")
   source=$(jq -r --arg p "$p" '.plugins[] | select(.name == $p) | .source' "$MARKET")
   [ -z "$version" ] && version=$(jq -r '.version // empty' "$KIT/$source/.claude-plugin/plugin.json")
-  installed=$(jq -r --arg id "$p@claude-code-kit" '.plugins[$id][0].version' "$LIST")
+  installed=$(jq -r --arg id "$p@$MARKET_NAME" '.plugins[$id][0].version' "$LIST")
   check "$p installed at its version $version" '[ "$installed" = "$version" ]'
   want=0
   for s in $(jq -r --arg p "$p" '.plugins[] | select(.name == $p) | .skills // [] | .[] | select(. != "./hooks")' "$MARKET"); do
@@ -59,7 +60,7 @@ for p in $names; do
     want=$((want + 1))
   done
   # A plugin rooted at the kit loads every skill in skills/ unless its entry lists its own.
-  loaded=$(claude plugin details "$p@claude-code-kit" 2> /dev/null | awk '$1 == "Skills" { gsub(/[()]/, "", $2); print $2 }')
+  loaded=$(claude plugin details "$p@$MARKET_NAME" 2> /dev/null | awk '$1 == "Skills" { gsub(/[()]/, "", $2); print $2 }')
   check "$p loads $want skill(s), not ${loaded:-?}" '[ "${loaded:-x}" = "$want" ]'
   for f in $(jq -r --arg p "$p" '.plugins[] | select(.name == $p) | .hooks // {} | .[][].hooks[].command' "$MARKET" |
     grep -o 'CLAUDE_PLUGIN_ROOT}/[^"]*' | sed 's|CLAUDE_PLUGIN_ROOT}/||' | sort -u); do
