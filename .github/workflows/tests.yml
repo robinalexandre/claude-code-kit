@@ -3,8 +3,16 @@ name: tests
 on:
   push:
     branches: [main]
+    # Files no test, plugin or install reads. Not on pull_request: its checks are required.
+    paths-ignore: [CONTRIBUTING.md, AGENTS.md, LICENSE]
   pull_request:
   workflow_dispatch:
+
+# A new push to a pull request cancels its older run; every push to main still runs to the end,
+# since its plugin-versions check only compares with the commit before it.
+concurrency:
+  group: tests-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   tests:
@@ -13,10 +21,17 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     defaults:
       run:
         shell: bash
     steps:
+      # Real-time scanning of every file and process Git Bash starts slows the Windows job down.
+      - name: Windows Defender real-time scanning off
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: Set-MpPreference -DisableRealtimeMonitoring $true
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -99,6 +114,7 @@ jobs:
   # a fallback (CONTRIBUTING.md, Rules for mods). Raise this only on purpose.
   mods-oldest:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       OLDEST_CLAUDE: 2.1.300
     steps:
