@@ -87,6 +87,100 @@ def test_search_related_and_notes(server):
     assert get(base, "/notes/nobody")[0] == 404
 
 
+def raw(base: str, path: str, headers: dict[str, str] | None = None) -> tuple[int, dict, bytes]:
+    request = urllib.request.Request(base + path)
+    request.add_header("Authorization", f"Bearer {TOKEN}")
+    for key, value in (headers or {}).items():
+        request.add_header(key, value)
+    try:
+        with urllib.request.urlopen(request, timeout=5) as resp:  # noqa: S310 - local test server
+            return resp.status, dict(resp.headers), resp.read()
+    except urllib.error.HTTPError as err:
+        return err.code, dict(err.headers), err.read()
+
+
+def test_the_graph_has_a_strong_etag_and_answers_304(server, tmp_path: Path):
+    base, knowledge = server
+    status, headers, body = raw(base, "/graph")
+    graph = json.loads(body)
+    assert status == 200 and headers["ETag"] == f'"{graph["rev"]}"'
+    assert {n["name"] for n in graph["nodes"]} == {"acme", "northbank", "rumor"}
+    assert graph["links"] and graph["layout"]["status"] == "ready"
+    assert str(tmp_path) not in body.decode()
+    for tag in (headers["ETag"], f"W/{headers['ETag']}", f'"other", {headers["ETag"]}', "*"):
+        status, again, body = raw(base, "/graph", {"If-None-Match": tag})
+        assert status == 304 and body == b"" and again["ETag"] == headers["ETag"]
+    assert raw(base, "/graph", {"If-None-Match": '"other"'})[0] == 200
+    assert (tmp_path / "graph.json").exists() and (tmp_path / "layout.json").exists()
+    assert get(base, "/stats")[1]["graph_rev"] == graph["rev"]
+
+
+def test_the_graph_changes_only_when_the_notes_do(server, notes: Path):
+    base, knowledge = server
+    rev = json.loads(raw(base, "/graph")[2])["rev"]
+    assert knowledge.refresh_graph() is False
+    (notes / "surf.md").write_text("---\nname: surf\ntitle: Surf spots\n---\nWaves.\n")
+    knowledge.refresh()
+    graph = json.loads(raw(base, "/graph")[2])
+    assert graph["rev"] != rev and "surf" in {n["name"] for n in graph["nodes"]}
+
+
+def test_a_restart_serves_the_stored_graph_before_any_refresh(tmp_path: Path, notes: Path):
+    first = Knowledge(tmp_path / "idx.sqlite", HashEmbedder(), [notes])
+    first.refresh()
+    assert first.graph_served is not None
+    again = Knowledge(tmp_path / "idx.sqlite", HashEmbedder(), [notes])
+    assert again.graph_served == first.graph_served
+
+
+def test_the_graph_is_503_until_it_is_built(tmp_path: Path, notes: Path):
+    knowledge = Knowledge(tmp_path / "idx.sqlite", None, [notes])
+    httpd = make_server(knowledge, TOKEN, "127.0.0.1", 0)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        assert raw(f"http://127.0.0.1:{httpd.server_address[1]}", "/graph")[0] == 503
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_notes_hits_and_related_carry_root_extra_and_dates(server, notes: Path):
+    base, knowledge = server
+    (notes / "spare.md").write_text(
+        "---\nname: spare\ntitle: Spare parts [ ] list\nspace: perso\nowner: [a, b]\n"
+        "valid_until: 2020-01-01\ntopics: [compta]\n---\n- [ ] array[0] of spare parts\n"
+    )
+    knowledge.refresh()
+    status, note = get(base, "/notes/spare")
+    assert status == 200 and note["root"] == "knowledge" and note["rel_path"] == "spare.md"
+    assert note["extra"] == {"space": "perso"} and len(note["rev"]) == 12
+    assert "hash" not in note and "rank" not in note
+
+    hits = get(base, "/search?q=spare&mode=text&all=1")[1]["hits"]
+    hit = next(h for h in hits if h["name"] == "spare")
+    assert hit["root"] == "knowledge" and hit["extra"] == {"space": "perso"}
+    assert hit["marks"] and all(hit["snippet"][a] == "[" for a, _ in hit["marks"])
+    assert [hit["snippet"][a:b] for a, b in hit["marks"]] == ["[spare]"]
+    assert "[ ]" in hit["snippet"] and "array[0]" in hit["snippet"]
+
+    nodes = get(base, "/related?name=acme&depth=1")[1]["nodes"]
+    spare = next(n for n in nodes if n["name"] == "spare")
+    assert spare["valid_until"] == "2020-01-01" and spare["extra"] == {"space": "perso"}
+    assert spare["root"] == "knowledge" and spare["via"] == "topic compta"
+
+
+def test_a_shared_name_is_settled_by_root_order(tmp_path: Path):
+    roots = [tmp_path / "zz-first", tmp_path / "aa-second"]
+    for root, title in zip(roots, ("First root", "Second root"), strict=True):
+        root.mkdir()
+        (root / "same.md").write_text(f"---\nname: same\ntitle: {title}\n---\nBody.\n")
+    knowledge = Knowledge(tmp_path / "idx.sqlite", None, roots)
+    knowledge.refresh()
+    note = knowledge.note("same")
+    assert note is not None and note["title"] == "First root" and note["root"] == "zz-first"
+
+
 def test_bad_requests_are_400_and_limits_are_clamped(server):
     base, _ = server
     assert get(base, "/search")[0] == 400

@@ -124,6 +124,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--open", action="store_true", help="open it in the browser")
     p.set_defaults(func=cmd_site)
 
+    p = sub.add_parser(
+        "graph", help="every note's place on a 3D map, its links and groups (as kb serve's /graph)"
+    )
+    p.set_defaults(func=cmd_graph)
+
     p = sub.add_parser("stats", help="what the index holds")
     p.set_defaults(func=cmd_stats)
 
@@ -430,6 +435,36 @@ def cmd_site(args: argparse.Namespace) -> int:
         f"{len(data['nodes'])} notes, {len(data['links'])} links,"
         f" {len(data['similar'])} similar pairs, {len(data['findings'])} to tidy: {out}",
     )
+    return 0
+
+
+def cmd_graph(args: argparse.Namespace) -> int:
+    """The map from the index as it is (run ``kb index`` first), computed again only when
+    the notes changed, and kept next to the index so the next run starts from it."""
+    from kb.graph import GraphUnavailable, collect, refresh_map
+
+    db = args.db or Path(os.environ.get("KB_DB") or DEFAULT_DB)
+    index = open_index(args, with_embedder=False)
+    try:
+        graph, _, changed = refresh_map(collect(index), db.parent)
+    except GraphUnavailable as exc:
+        print(f"kb graph: {exc}", file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps(graph, ensure_ascii=False, indent=2))
+        return 0
+    layout = graph["layout"]
+    lines = [
+        f"{len(graph['nodes'])} notes, {len(graph['links'])} links, {len(graph['similar'])}"
+        f" similar pairs, {graph['dangling']} dangling; {len(graph['clusters'])} groups",
+        f"layout {layout['method']} v{layout['version']}, rev {graph['rev']},"
+        f" {'computed now' if changed else 'unchanged'} (last full layout {layout['full_at']})",
+    ]
+    lines += [f"  {c['id']:>4}  {c['size']:>4}  {c['label']}" for c in graph["clusters"]]
+    alone = sum(1 for n in graph["nodes"] if n["cluster"] is None)
+    if alone:
+        lines.append(f"  {alone} note(s) in no group")
+    print("\n".join(lines))
     return 0
 
 

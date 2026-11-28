@@ -77,6 +77,7 @@ kb lint                                    # what to tidy: orphans, stale projec
 kb link                                    # the links worth adding between notes that read alike
 kb link --apply                            # write them, with a report
 kb site --open                             # the whole base as one page: graph, hubs, health
+kb graph                                   # every note's place on a 3D map, its groups (--json: all)
 kb stats
 kb extract                                 # yesterday's Claude Code transcripts, reduced to Markdown
 kb extract --day 2026-10-22 --out ./transcripts
@@ -144,6 +145,34 @@ next to the index, on this computer, never in a synced folder.
 
 The morning job runs `kb link --apply` and `kb site` after the curation.
 
+## The 3D map
+
+`kb graph` (and `GET /graph` on `kb serve`) gives every note a place in 3D where distance
+follows meaning, and the groups the notes form, for a client that draws the base as a map.
+It needs `numpy` only (the `graph` extra; `embed` brings it too) and has no random number in
+it: the same notes give the same bytes.
+
+- Each note's vector is the mean of its chunks'. Its 8 nearest notes by cosine and its
+  explicit links make the neighbour graph.
+- The first layout starts from the projection on the three main axes, then runs a force
+  layout (springs along the neighbour graph, links stronger and shorter, repulsion between
+  all pairs, linear cooling), then is centred and scaled so 95% of the notes sit within
+  radius 1, none beyond 1.5.
+- Later runs place only what changed: a note already placed starts where it was, tied there,
+  and moves 0.02 at most; a new note starts among its neighbours. More than 25% new notes
+  since the last full layout, another embedder or a layout version bump lays the map out
+  again.
+- A note with no vector sits by the notes it links to, else on a shell of radius 1.3. With no
+  vector at all, the links alone place the notes (`links-force-3d`).
+- Groups: a k-means on the positions (`clamp(round(sqrt(n / 2)), 3, 16)` groups, seeded
+  from the most linked note), labelled by their most specific topics, else their folder. A
+  group keeps its id across runs by member overlap; one under 3 notes is dissolved.
+
+Each node carries its `root` (the notes folder's name), `rel_path` inside it, `extra` (the
+front-matter keys kb does not know that hold one plain value), `hash`, `degree` and `weight`;
+no absolute path and no body. The map is computed again only when a note was added,
+removed, edited or embedded, and kept as `graph.json` and `layout.json` next to the index.
+
 ## Serve
 
 ```sh
@@ -152,8 +181,12 @@ KB_TOKEN=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))") kb ser
 
 The same index over HTTP, standard library only, for an agent of yours or another computer:
 `GET /search?q=…&n=8&type=…&topic=…&trust=…&mode=auto|text|hybrid`, `GET /related?name=…&depth=2`,
-`GET /notes/<name>`, `GET /stats`, every one with `Authorization: Bearer $KB_TOKEN`
-(`/health` needs none). The embedding model loads once, so every search is fast. With
+`GET /notes/<name>`, `GET /stats`, `GET /graph` (the 3D map, with its `rev` as a strong
+`ETag`; `If-None-Match` answers 304), every one with `Authorization: Bearer $KB_TOKEN`
+(`/health` needs none). A note, a search hit and a related note carry their `root` and
+`extra`; a search hit's `marks` say where its full-text matches are in `snippet`, so the
+note's own brackets are never taken for one. A name two notes share goes to the first
+notes folder. The embedding model loads once, so every search is fast. With
 `--repo-dir DIR` the notes come from a git clone, pulled before each refresh (every
 `--pull-every` seconds, `KB_PULL_SECONDS`, default 300) and cloned first from `KB_REPO`
 (`owner/repo` or a URL) with `KB_GITHUB_TOKEN`, sent as a header and never written to disk.

@@ -143,6 +143,31 @@ def test_precise_text_mode_matches_most_words_of_a_sentence(tmp_path: Path, note
     assert index.search("Sam", mode="text")[0].name == "acme-accountant"
 
 
+def test_an_older_index_gains_root_and_extra_without_embedding_again(tmp_path: Path, notes: Path):
+    db = tmp_path / "old.sqlite"
+    index = Index(db, HashEmbedder())
+    index.update(load_notes([notes]), [notes])
+    for column in ("root", "rel_path", "rank", "extra"):
+        index.conn.execute(f"ALTER TABLE notes DROP COLUMN {column}")
+    index.conn.commit()
+    index.close()
+    again = Index(db, HashEmbedder())
+    stats = again.update(load_notes([notes]), [notes])
+    assert stats.chunks_embedded == 0 and stats.added == stats.changed == 0
+    assert stats.unchanged == len(load_notes([notes]))
+    row = again.get("acme-accountant")
+    assert row["root"] == "knowledge" and row["rel_path"] == "acme-accountant.md"
+    assert row["extra"] == "{}"
+
+
+def test_marks_tell_a_match_from_the_notes_own_brackets():
+    from kb.index import MARK_CLOSE, MARK_OPEN, marked
+
+    text, marks = marked(f"- [ ] see\n {MARK_OPEN}deploy{MARK_CLOSE} in [[acme-{MARK_OPEN}x")
+    assert text == "- [ ] see [deploy] in [[acme-[x]"
+    assert [text[a:b] for a, b in marks] == ["[deploy]", "[x]"]
+
+
 def test_chunking_keeps_title_and_splits_long_text():
     chunks = chunk("Title", "para one\n\npara two", size=12)
     assert chunks == ["Title\n\npara one", "Title\n\npara two"]

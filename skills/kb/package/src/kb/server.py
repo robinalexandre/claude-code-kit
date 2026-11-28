@@ -11,6 +11,9 @@ Routes, all GET and JSON:
 - ``/related?name=…&depth=2``
 - ``/notes/<name>``: one note, front matter and body
 - ``/stats``
+- ``/graph``: every note with its place on a 3D map, its links, look-alikes and group
+  (``kb graph --json``), with its ``rev`` as a strong ``ETag``; ``If-None-Match`` gives 304.
+  Computed again by the refresh only when the notes changed, and kept next to the index.
 
 With ``--repo-dir``, ``KB_CRYPT_KEY`` (the git-crypt key the sync exported, base64) opens the
 folders the repository encrypts.
@@ -34,8 +37,8 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from kb.embed import Embedder
-from kb.graph import related
-from kb.index import Index
+from kb.graph import GraphUnavailable, collect, refresh_map, related, stored_map
+from kb.index import Index, row_extra
 from kb.notes import load_notes
 
 log = logging.getLogger("kb.serve")
@@ -58,9 +61,16 @@ class Knowledge:
         self.index = Index(db_path, embedder, shared=True)
         self.roots = roots
         self.repo_dir = repo_dir
+        self.data_dir = Path(db_path).parent
         self.lock = threading.Lock()
         self.refreshed_at: float | None = None
         self.last_error = ""
+        # The graph's JSON and its rev, replaced together.
+        self.graph_served: tuple[bytes, str] | None = None
+        self.graph_error = ""
+        self._stored_map = stored_map(self.data_dir)
+        if self._stored_map[0] is not None:
+            self._set_graph(self._stored_map[0])
 
     def refresh(self) -> dict[str, Any]:
         if self.repo_dir is not None:
@@ -70,7 +80,31 @@ class Knowledge:
         with self.lock:
             stats = self.index.update(notes, roots)
         self.refreshed_at = time.time()
+        self.refresh_graph()
         return {"notes": len(notes), **stats.__dict__}
+
+    def refresh_graph(self) -> bool:
+        """The map computed again when the notes changed; the last one kept on a failure."""
+        try:
+            with self.lock:
+                data = collect(self.index)
+            graph, state, changed = refresh_map(data, self.data_dir, stored=self._stored_map)
+        except GraphUnavailable as exc:
+            self.graph_error = str(exc)
+            return False
+        except Exception as exc:  # noqa: BLE001 - the server must outlive one bad layout
+            self.graph_error = f"graph: {type(exc).__name__}: {exc}"
+            log.exception("graph failed")
+            return False
+        self.graph_error = ""
+        self._stored_map = (graph, state)
+        if changed or self.graph_served is None:
+            self._set_graph(graph)
+        return changed
+
+    def _set_graph(self, graph: dict[str, Any]) -> None:
+        body = json.dumps(graph, ensure_ascii=False, separators=(",", ":")).encode()
+        self.graph_served = (body, str(graph.get("rev") or ""))
 
     def refresh_forever(self, every: float) -> None:
         while True:
@@ -119,15 +153,20 @@ class Knowledge:
             row = self.index.get(name.strip().lower())
         if row is None:
             return None
-        data = {k: row[k] for k in row.keys() if k not in ("id", "hash")}
+        data = {k: row[k] for k in row.keys() if k not in ("id", "hash", "rank")}
         data["topics"] = json.loads(data["topics"])
+        data["extra"] = row_extra(row)
+        # The graph's node carries the whole hash: a reader can tell it is the same file.
+        data["rev"] = row["hash"][:12]
         return data
 
     def stats(self) -> dict[str, Any]:
         with self.lock:
             stats = self.index.stats()
         stats["refreshed_at"] = self.refreshed_at
-        stats["last_error"] = self.last_error
+        stats["last_error"] = self.last_error or self.graph_error
+        served = self.graph_served
+        stats["graph_rev"] = served[1] if served else None
         return stats
 
 
@@ -257,6 +296,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.reply(HTTPStatus.OK, note)
             elif url.path == "/stats":
                 self.reply(HTTPStatus.OK, self.knowledge.stats())
+            elif url.path == "/graph":
+                self.reply_graph()
             else:
                 self.reply(HTTPStatus.NOT_FOUND, {"error": "no such route"})
         except ValueError as exc:
@@ -270,14 +311,44 @@ class Handler(BaseHTTPRequestHandler):
         scheme, _, value = header.partition(" ")
         return scheme.lower() == "bearer" and hmac.compare_digest(value.strip(), self.token)
 
-    def reply(self, status: HTTPStatus, data: Any) -> None:
-        body = json.dumps(data, ensure_ascii=False, default=str).encode()
+    def reply_graph(self) -> None:
+        served = self.knowledge.graph_served
+        if served is None:
+            error = self.knowledge.graph_error or "the graph is not built yet"
+            self.reply(HTTPStatus.SERVICE_UNAVAILABLE, {"error": error})
+            return
+        body, rev = served
+        etag = f'"{rev}"'
+        if etag_matches(self.headers.get("If-None-Match", ""), rev):
+            self.send_response(HTTPStatus.NOT_MODIFIED)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
+        self.reply(HTTPStatus.OK, body, {"ETag": etag})
+
+    def reply(self, status: HTTPStatus, data: Any, headers: dict[str, str] | None = None) -> None:
+        if isinstance(data, bytes):
+            body = data
+        else:
+            body = json.dumps(data, ensure_ascii=False, default=str).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        for key, value in (headers or {}).items():
+            self.send_header(key, value)
         self.end_headers()
         self.wfile.write(body)
+
+
+def etag_matches(header: str, rev: str) -> bool:
+    """``If-None-Match`` names ``rev`` (quoted, weak or not), or is ``*``."""
+    for tag in header.split(","):
+        tag = tag.strip()
+        if tag == "*" or (rev and tag.removeprefix("W/") == f'"{rev}"'):
+            return True
+    return False
 
 
 def make_server(knowledge: Knowledge, token: str, host: str, port: int) -> ThreadingHTTPServer:

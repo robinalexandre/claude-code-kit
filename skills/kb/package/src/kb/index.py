@@ -41,7 +41,11 @@ CREATE TABLE IF NOT EXISTS notes (
     valid_from TEXT,
     valid_until TEXT,
     body TEXT NOT NULL,
-    hash TEXT NOT NULL
+    hash TEXT NOT NULL,
+    root TEXT NOT NULL DEFAULT '',
+    rel_path TEXT NOT NULL DEFAULT '',
+    rank INTEGER NOT NULL DEFAULT 0,
+    extra TEXT
 );
 CREATE INDEX IF NOT EXISTS notes_name ON notes(name);
 CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
@@ -67,6 +71,16 @@ VEC_SCHEMA = (
     "CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0("
     "chunk_id INTEGER PRIMARY KEY, embedding float[DIM])"
 )
+# Columns added after the first release: an older index gains them in place, and its
+# unchanged notes get their values at the next update without being embedded again.
+ADDED_COLUMNS = {
+    "root": "TEXT NOT NULL DEFAULT ''",
+    "rel_path": "TEXT NOT NULL DEFAULT ''",
+    "rank": "INTEGER NOT NULL DEFAULT 0",
+    "extra": "TEXT",
+}
+# kb's full-text hit marks inside a snippet, characters a note does not hold.
+MARK_OPEN, MARK_CLOSE = "\x02", "\x03"
 
 
 @dataclass
@@ -81,9 +95,50 @@ class Hit:
     topics: list[str] = field(default_factory=list)
     valid_until: str | None = None
     source: str = ""
+    root: str = ""
+    extra: dict[str, Any] = field(default_factory=dict)
+    # [start, end) of each full-text match in ``snippet``, its brackets included.
+    marks: list[list[int]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return self.__dict__.copy()
+
+
+@dataclass
+class Place:
+    """Where a note sits: the root folder's name, the path inside it, the root's rank in
+    the order the roots were given (the first root wins a shared name)."""
+
+    root: str
+    rel_path: str
+    rank: int
+
+
+def place_of(path: Path, roots: list[Path] | None) -> Place:
+    resolved = path.resolve()
+    for rank, root in enumerate(roots or []):
+        base = root.resolve()
+        if resolved == base:
+            return Place(base.parent.name, resolved.name, rank)
+        try:
+            relative = resolved.relative_to(base)
+        except ValueError:
+            continue
+        return Place(base.name, relative.as_posix(), rank)
+    return Place("", resolved.name, len(roots or []))
+
+
+def scalar_extra(extra: dict[str, Any]) -> dict[str, str]:
+    """The front-matter keys kb does not know that hold one plain value."""
+    return {str(k): v for k, v in sorted(extra.items()) if isinstance(v, str) and v}
+
+
+def row_extra(row: sqlite3.Row) -> dict[str, Any]:
+    try:
+        value = json.loads(row["extra"] or "{}")
+    except (IndexError, KeyError, TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 @dataclass
@@ -108,6 +163,11 @@ class Index:
         self.embedder = embedder
         self.vec = self._load_vec()
         self.conn.executescript(SCHEMA)
+        have = {row["name"] for row in self.conn.execute("PRAGMA table_info(notes)")}
+        for column, kind in ADDED_COLUMNS.items():
+            if column not in have:
+                self.conn.execute(f"ALTER TABLE notes ADD COLUMN {column} {kind}")
+        self.conn.commit()
         self._vectors_ready = False
 
     def close(self) -> None:
@@ -152,18 +212,31 @@ class Index:
             path = str(note.path.resolve())
             seen.add(path)
             digest = hashlib.sha256(note.raw.encode("utf-8", "replace")).hexdigest()
+            where = place_of(note.path, roots)
+            extra = json.dumps(scalar_extra(note.extra), ensure_ascii=False)
             row = self.conn.execute(
-                "SELECT id, hash, name FROM notes WHERE path = ?", (path,)
+                "SELECT id, hash, name, root, rel_path, rank, extra FROM notes WHERE path = ?",
+                (path,),
             ).fetchone()
             if row and row["hash"] == digest and row["name"] == note.name:
                 stats.unchanged += 1
+                if (row["root"], row["rel_path"], row["rank"], row["extra"]) != (
+                    where.root,
+                    where.rel_path,
+                    where.rank,
+                    extra,
+                ):
+                    self.conn.execute(
+                        "UPDATE notes SET root = ?, rel_path = ?, rank = ?, extra = ? WHERE id = ?",
+                        (where.root, where.rel_path, where.rank, extra, row["id"]),
+                    )
                 continue
             if row:
                 stats.changed += 1
                 self._remove(row["id"])
             else:
                 stats.added += 1
-            note_id = self._insert(note, path, digest)
+            note_id = self._insert(note, path, digest, where, extra)
             for ord_, text in enumerate(chunk(note.title, note.body)):
                 cur = self.conn.execute(
                     "INSERT INTO chunks(note_id, ord, text) VALUES (?, ?, ?)", (note_id, ord_, text)
@@ -187,10 +260,11 @@ class Index:
         self.conn.commit()
         return stats
 
-    def _insert(self, note: Note, path: str, digest: str) -> int:
+    def _insert(self, note: Note, path: str, digest: str, where: Place, extra: str) -> int:
         cur = self.conn.execute(
             "INSERT INTO notes(path, name, title, type, trust, source, topics, created,"
-            " valid_from, valid_until, body, hash) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            " valid_from, valid_until, body, hash, root, rel_path, rank, extra)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 path,
                 note.name,
@@ -204,13 +278,18 @@ class Index:
                 note.valid_until,
                 note.body,
                 digest,
+                where.root,
+                where.rel_path,
+                where.rank,
+                extra,
             ),
         )
         note_id = cur.lastrowid
         assert note_id is not None
+        searchable = note.body.replace(MARK_OPEN, "").replace(MARK_CLOSE, "")
         self.conn.execute(
             "INSERT INTO notes_fts(rowid, title, body, topics, name) VALUES (?,?,?,?,?)",
-            (note_id, note.title, note.body, " ".join(note.topics), note.name.replace("-", " ")),
+            (note_id, note.title, searchable, " ".join(note.topics), note.name.replace("-", " ")),
         )
         self.conn.executemany(
             "INSERT OR IGNORE INTO links(from_id, to_name) VALUES (?, ?)",
@@ -304,10 +383,15 @@ class Index:
         joiner = " AND " if require_all and needed == len(tokens) else " OR "
         match = joiner.join('"' + t.replace('"', "") + '"' for t in tokens)
         rows = self.conn.execute(
-            "SELECT rowid, snippet(notes_fts, 1, '[', ']', '…', 32) AS snip, title, body, topics"
+            "SELECT rowid, snippet(notes_fts, 1, ?, ?, '…', 32) AS snip, title, body, topics"
             " FROM notes_fts WHERE notes_fts MATCH ? ORDER BY bm25(notes_fts, 4.0, 1.0, 2.0, 3.0)"
             " LIMIT ?",
-            (match, CANDIDATES if joiner == " OR " and not require_all else CANDIDATES * 4),
+            (
+                MARK_OPEN,
+                MARK_CLOSE,
+                match,
+                CANDIDATES if joiner == " OR " and not require_all else CANDIDATES * 4,
+            ),
         ).fetchall()
         if require_all and needed < len(tokens):
             kept = []
@@ -380,7 +464,8 @@ class Index:
         row = self.conn.execute("SELECT * FROM notes WHERE path = ?", (name_or_path,)).fetchone()
         if row is None:
             row = self.conn.execute(
-                "SELECT * FROM notes WHERE name = ? ORDER BY path LIMIT 1", (name_or_path.lower(),)
+                "SELECT * FROM notes WHERE name = ? ORDER BY rank, path LIMIT 1",
+                (name_or_path.lower(),),
             ).fetchone()
         return row
 
@@ -395,24 +480,16 @@ class Index:
         if root is not None:
             for topic in json.loads(root["topics"]):
                 rows = self.conn.execute(
-                    "SELECT name, title, type, path FROM notes WHERE name != ? AND EXISTS"
-                    " (SELECT 1 FROM json_each(notes.topics) WHERE value = ?) ORDER BY name",
+                    f"SELECT {NODE_COLUMNS} FROM notes WHERE name != ? AND EXISTS"  # noqa: S608
+                    " (SELECT 1 FROM json_each(notes.topics) WHERE value = ?)"
+                    " ORDER BY name, rank, path",
                     (name, topic),
                 ).fetchall()
                 for row in rows:
                     if row["name"] in reached:
                         continue
                     reached.add(row["name"])
-                    nodes.append(
-                        {
-                            "name": row["name"],
-                            "depth": 1,
-                            "title": row["title"],
-                            "type": row["type"],
-                            "path": row["path"],
-                            "via": f"topic {topic}",
-                        }
-                    )
+                    nodes.append({**node_fields(row), "depth": 1, "via": f"topic {topic}"})
         return nodes, edges
 
     def _linked(self, name: str, depth: int) -> tuple[list[dict[str, Any]], list[tuple]]:
@@ -437,19 +514,12 @@ class Index:
         nodes = []
         for r in rows:
             note = self.conn.execute(
-                "SELECT title, type, path FROM notes WHERE name = ? ORDER BY path LIMIT 1",
+                f"SELECT {NODE_COLUMNS} FROM notes"  # noqa: S608 - fixed columns
+                " WHERE name = ? ORDER BY rank, path LIMIT 1",
                 (r["name"],),
             ).fetchone()
-            nodes.append(
-                {
-                    "name": r["name"],
-                    "depth": r["depth"],
-                    "title": note["title"] if note else "",
-                    "type": note["type"] if note else "missing",
-                    "path": note["path"] if note else "",
-                    "via": "link",
-                }
-            )
+            fields = node_fields(note) if note else {**MISSING_NODE, "name": r["name"]}
+            nodes.append({**fields, "depth": r["depth"], "via": "link"})
         if not names:
             return nodes, []
         marks = ",".join("?" * len(names))
@@ -544,7 +614,60 @@ def _under(path: str, root: Path) -> bool:
         return False
 
 
+NODE_COLUMNS = "name, title, type, path, valid_until, root, extra"
+MISSING_NODE = {
+    "title": "",
+    "type": "missing",
+    "path": "",
+    "valid_until": None,
+    "root": "",
+    "extra": {},
+}
+
+
+def node_fields(row: sqlite3.Row) -> dict[str, Any]:
+    """A note as ``related`` lists it, from a row of ``NODE_COLUMNS``."""
+    return {
+        "name": row["name"],
+        "title": row["title"],
+        "type": row["type"],
+        "path": row["path"],
+        "valid_until": row["valid_until"],
+        "root": row["root"],
+        "extra": row_extra(row),
+    }
+
+
+def marked(snippet: str) -> tuple[str, list[list[int]]]:
+    """The snippet on one line with each match shown as ``[word]``, and where each mark
+    is, so a reader can tell kb's marks from the brackets of the note itself."""
+    text: list[str] = []
+    marks: list[list[int]] = []
+    start: int | None = None
+    size = 0
+    for part in " ".join(snippet.split()):
+        if part == MARK_OPEN:
+            if start is None:
+                start = size
+                text.append("[")
+                size += 1
+        elif part == MARK_CLOSE:
+            if start is not None:
+                text.append("]")
+                size += 1
+                marks.append([start, size])
+                start = None
+        else:
+            text.append(part)
+            size += 1
+    if start is not None:
+        text.append("]")
+        marks.append([start, size + 1])
+    return "".join(text), marks
+
+
 def _hit(row: sqlite3.Row, score: float, snippet: str) -> Hit:
+    text, marks = marked(snippet or row["body"][:160])
     return Hit(
         path=row["path"],
         name=row["name"],
@@ -552,8 +675,11 @@ def _hit(row: sqlite3.Row, score: float, snippet: str) -> Hit:
         type=row["type"],
         trust=row["trust"],
         score=round(score, 5),
-        snippet=" ".join((snippet or row["body"][:160]).split()),
+        snippet=text,
         topics=json.loads(row["topics"]),
         valid_until=row["valid_until"],
         source=row["source"],
+        root=row["root"],
+        extra=row_extra(row),
+        marks=marks,
     )

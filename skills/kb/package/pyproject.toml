@@ -9,8 +9,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-embed = ["fastembed>=0.7"]
-dev = ["pytest>=8", "ruff>=0.6"]
+embed = ["fastembed>=0.7", "numpy>=1.26"]
+# The 3D map (kb graph, GET /graph) needs numpy only; fastembed brings it already.
+graph = ["numpy>=1.26"]
+dev = ["pytest>=8", "ruff>=0.6", "numpy>=1.26"]
 
 [project.scripts]
 kb = "kb.cli:main"
